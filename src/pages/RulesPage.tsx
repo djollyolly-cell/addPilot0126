@@ -10,6 +10,7 @@ import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
 import { TargetTreeSelector, TargetSelection } from '../components/TargetTreeSelector';
 import { ActionRadio, ActionMode, actionModeToFlags } from '../components/ActionRadio';
+import { UpgradeModal } from '../components/UpgradeModal';
 
 type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads';
 
@@ -48,6 +49,12 @@ export function RulesPage() {
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
+
+  const limits = useQuery(
+    api.users.getLimits,
+    user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
+  );
 
   const rules = useQuery(
     api.rules.list,
@@ -148,10 +155,29 @@ export function RulesPage() {
               setSuccess('Правило создано!');
               setTimeout(() => setSuccess(null), 3000);
             } catch (err) {
-              setError(err instanceof Error ? err.message : 'Ошибка создания');
+              const msg = err instanceof Error ? err.message : 'Ошибка создания';
+              if (msg.includes('Лимит правил')) {
+                setShowUpgradeModal(true);
+              }
+              setError(msg);
             }
           }}
           onCancel={() => setShowForm(false)}
+        />
+      )}
+
+      {/* Upgrade modal */}
+      {showUpgradeModal && limits && (
+        <UpgradeModal
+          currentTier={limits.tier as 'freemium' | 'start' | 'pro'}
+          limitType="rules"
+          currentUsage={limits.usage.rules}
+          limit={limits.limits.rules}
+          onClose={() => setShowUpgradeModal(false)}
+          onUpgrade={() => {
+            setShowUpgradeModal(false);
+            // TODO: navigate to billing page
+          }}
         />
       )}
 

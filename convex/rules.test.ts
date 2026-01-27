@@ -313,7 +313,7 @@ describe("rules", () => {
     expect(rule).toBeNull();
   });
 
-  test("freemium disables stopAd even if requested", async () => {
+  test("freemium rejects stopAd=true with FEATURE_UNAVAILABLE", async () => {
     const t = convexTest(schema);
 
     const userId = await t.mutation(api.users.create, {
@@ -329,18 +329,16 @@ describe("rules", () => {
       accessToken: "token_fr",
     });
 
-    const ruleId = await t.mutation(api.rules.create, {
-      userId,
-      name: "Freemium Rule",
-      type: "cpl_limit",
-      value: 500,
-      actions: { stopAd: true, notify: true },
-      targetAccountIds: [accountId],
-    });
-
-    const rule = await t.query(api.rules.get, { ruleId });
-    // Freemium cannot use stopAd — should be forced to false
-    expect(rule?.actions.stopAd).toBe(false);
+    await expect(
+      t.mutation(api.rules.create, {
+        userId,
+        name: "Freemium Rule",
+        type: "cpl_limit",
+        value: 500,
+        actions: { stopAd: true, notify: true },
+        targetAccountIds: [accountId],
+      })
+    ).rejects.toThrow("FEATURE_UNAVAILABLE");
   });
 
   // ── Sprint 5 DoD: Targets and actions ──
@@ -686,5 +684,146 @@ describe("rules", () => {
         targetAccountIds: [accountId],
       })
     ).rejects.toThrow("больше 0");
+  });
+
+  // ── Sprint 6 DoD: Tier limits for rules ──
+
+  test("S6-DoD#1: freemium can create 2 rules", async () => {
+    const t = convexTest(schema);
+
+    const userId = await t.mutation(api.users.create, {
+      email: "s6_free@example.com",
+      vkId: "s6_free",
+    });
+    // Stay on freemium
+
+    const accountId = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "S6F001",
+      name: "S6 Freemium Cabinet",
+      accessToken: "token_s6f",
+    });
+
+    const ruleId1 = await t.mutation(api.rules.create, {
+      userId,
+      name: "Free Rule 1",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+    expect(ruleId1).toBeDefined();
+
+    const ruleId2 = await t.mutation(api.rules.create, {
+      userId,
+      name: "Free Rule 2",
+      type: "min_ctr",
+      value: 2,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+    expect(ruleId2).toBeDefined();
+
+    const rules = await t.query(api.rules.list, { userId });
+    expect(rules).toHaveLength(2);
+  });
+
+  test("S6-DoD#2: freemium rejects 3rd rule with RULE_LIMIT", async () => {
+    const t = convexTest(schema);
+
+    const userId = await t.mutation(api.users.create, {
+      email: "s6_free3@example.com",
+      vkId: "s6_free3",
+    });
+
+    const accountId = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "S6F002",
+      name: "S6 Freemium Cabinet 2",
+      accessToken: "token_s6f2",
+    });
+
+    await t.mutation(api.rules.create, {
+      userId,
+      name: "Free Rule A",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    await t.mutation(api.rules.create, {
+      userId,
+      name: "Free Rule B",
+      type: "min_ctr",
+      value: 2,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // 3rd rule should be rejected
+    await expect(
+      t.mutation(api.rules.create, {
+        userId,
+        name: "Free Rule C",
+        type: "fast_spend",
+        value: 10,
+        actions: { stopAd: false, notify: true },
+        targetAccountIds: [accountId],
+      })
+    ).rejects.toThrow("Лимит правил");
+  });
+
+  test("S6-DoD#4: start can create 10 rules", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleTypes: Array<"cpl_limit" | "min_ctr" | "fast_spend" | "spend_no_leads" | "budget_limit" | "low_impressions" | "clicks_no_leads"> =
+      ["cpl_limit", "min_ctr", "fast_spend", "spend_no_leads", "budget_limit", "low_impressions", "clicks_no_leads", "cpl_limit", "min_ctr", "fast_spend"];
+
+    for (let i = 0; i < 10; i++) {
+      await t.mutation(api.rules.create, {
+        userId,
+        name: `Start Rule ${i + 1}`,
+        type: ruleTypes[i],
+        value: (i + 1) * 10,
+        actions: defaultActions,
+        targetAccountIds: [accountId],
+      });
+    }
+
+    const rules = await t.query(api.rules.list, { userId });
+    expect(rules).toHaveLength(10);
+  });
+
+  test("S6-DoD#5: start rejects 11th rule with RULE_LIMIT", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleTypes: Array<"cpl_limit" | "min_ctr" | "fast_spend" | "spend_no_leads" | "budget_limit" | "low_impressions" | "clicks_no_leads"> =
+      ["cpl_limit", "min_ctr", "fast_spend", "spend_no_leads", "budget_limit", "low_impressions", "clicks_no_leads", "cpl_limit", "min_ctr", "fast_spend"];
+
+    for (let i = 0; i < 10; i++) {
+      await t.mutation(api.rules.create, {
+        userId,
+        name: `Start Rule ${i + 1}`,
+        type: ruleTypes[i],
+        value: (i + 1) * 10,
+        actions: defaultActions,
+        targetAccountIds: [accountId],
+      });
+    }
+
+    // 11th rule should be rejected
+    await expect(
+      t.mutation(api.rules.create, {
+        userId,
+        name: "Start Rule 11",
+        type: "cpl_limit",
+        value: 999,
+        actions: defaultActions,
+        targetAccountIds: [accountId],
+      })
+    ).rejects.toThrow("Лимит правил");
   });
 });

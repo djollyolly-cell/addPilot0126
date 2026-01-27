@@ -134,7 +134,12 @@ export const create = mutation({
 
     // Check autoStop permission
     const canAutoStop = user.subscriptionTier !== "freemium";
-    const stopAd = canAutoStop ? args.actions.stopAd : false;
+    if (!canAutoStop && args.actions.stopAd) {
+      throw new Error(
+        "Авто-стоп недоступен на тарифе Freemium (FEATURE_UNAVAILABLE)"
+      );
+    }
+    const stopAd = args.actions.stopAd;
 
     const defaults = RULE_TYPE_DEFAULTS[args.type] || {
       metric: args.type,

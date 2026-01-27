@@ -250,6 +250,69 @@ describe("users", () => {
       }
     });
 
+    test("S6-DoD#11: downgrade pro→freemium with 5 rules deactivates rules 3-5", async () => {
+      const t = convexTest(schema);
+
+      const userId = await t.mutation(api.users.create, {
+        email: "s6_downgrade@example.com",
+        vkId: "s6_downgrade",
+      });
+
+      // Upgrade to pro
+      await t.mutation(api.users.updateTier, { userId, tier: "pro" });
+
+      // Connect an account
+      const accountId = await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "S6DG001",
+        name: "S6 Downgrade Cabinet",
+        accessToken: "token_s6dg",
+      });
+
+      // Create 5 active rules with stopAd
+      const ruleIds = [];
+      for (let i = 1; i <= 5; i++) {
+        const ruleId = await t.run(async (ctx) => {
+          return await ctx.db.insert("rules", {
+            userId,
+            name: `Pro Rule ${i}`,
+            type: "cpl_limit",
+            conditions: { metric: "cpl", operator: ">", value: 500 },
+            actions: { stopAd: true, notify: true },
+            targetAccountIds: [accountId],
+            isActive: true,
+            triggerCount: 0,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+        });
+        ruleIds.push(ruleId);
+      }
+
+      // Downgrade to freemium (limit = 2 active rules, no autoStop)
+      await t.mutation(api.users.updateTier, { userId, tier: "freemium" });
+
+      // Check results
+      const rules = await t.run(async (ctx) => {
+        return await ctx.db
+          .query("rules")
+          .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+          .collect();
+      });
+
+      const activeRules = rules.filter((r: any) => r.isActive);
+      const inactiveRules = rules.filter((r: any) => !r.isActive);
+
+      // First 2 should be active, last 3 inactive
+      expect(activeRules).toHaveLength(2);
+      expect(inactiveRules).toHaveLength(3);
+
+      // All rules should have stopAd disabled (freemium)
+      for (const rule of rules) {
+        expect(rule.actions.stopAd).toBe(false);
+      }
+    });
+
     test("sets subscription expiration date", async () => {
       const t = convexTest(schema);
 
