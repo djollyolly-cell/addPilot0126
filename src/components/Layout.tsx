@@ -2,6 +2,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom';
 import { useAuth } from '../lib/useAuth';
 import {
   LayoutDashboard,
+  Building2,
   ListChecks,
   BarChart3,
   ScrollText,
@@ -14,6 +15,7 @@ import { cn } from '../lib/utils';
 
 const navigation = [
   { name: 'Дашборд', href: '/dashboard', icon: LayoutDashboard },
+  { name: 'Кабинеты', href: '/accounts', icon: Building2 },
   { name: 'Правила', href: '/rules', icon: ListChecks },
   { name: 'Аналитика', href: '/analytics', icon: BarChart3 },
   { name: 'Логи', href: '/logs', icon: ScrollText },

@@ -8,10 +8,12 @@
  * @module
  */
 
+import type * as adAccounts from "../adAccounts.js";
 import type * as auth from "../auth.js";
 import type * as authEmail from "../authEmail.js";
 import type * as authInternal from "../authInternal.js";
 import type * as users from "../users.js";
+import type * as vkApi from "../vkApi.js";
 
 import type {
   ApiFromModules,
@@ -20,10 +22,12 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  adAccounts: typeof adAccounts;
   auth: typeof auth;
   authEmail: typeof authEmail;
   authInternal: typeof authInternal;
   users: typeof users;
+  vkApi: typeof vkApi;
 }>;
 
 /**

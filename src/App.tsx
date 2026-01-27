@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { ProfilePage } from './pages/ProfilePage';
+import { AccountsPage } from './pages/AccountsPage';
 import { AuthCallback } from './pages/AuthCallback';
 import { useAuth } from './lib/useAuth';
 
@@ -63,6 +64,7 @@ function App() {
       >
         <Route index element={<Navigate to="/profile" replace />} />
         <Route path="profile" element={<ProfilePage />} />
+        <Route path="accounts" element={<AccountsPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
