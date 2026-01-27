@@ -111,7 +111,8 @@ export function EmailLoginForm({ className, onSwitchToOAuth }: EmailLoginFormPro
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Вы будете перенаправлены на страницу VK для ввода пароля
+        Вы будете перенаправлены на страницу VK для ввода пароля.
+        При первом входе профиль создастся автоматически.
       </p>
 
       {/* Submit button */}

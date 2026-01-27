@@ -82,6 +82,9 @@ export function LoginPage() {
               {loginMode === 'oauth' ? (
                 <>
                   <LoginButton className="w-full" />
+                  <p className="text-xs text-center text-muted-foreground">
+                    Нет аккаунта? Он создастся автоматически при первом входе
+                  </p>
                   <div className="text-center">
                     <button
                       type="button"
