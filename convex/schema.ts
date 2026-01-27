@@ -92,7 +92,10 @@ export default defineSchema({
       v.literal("cpl_limit"),
       v.literal("min_ctr"),
       v.literal("fast_spend"),
-      v.literal("spend_no_leads")
+      v.literal("spend_no_leads"),
+      v.literal("budget_limit"),
+      v.literal("low_impressions"),
+      v.literal("clicks_no_leads")
     ),
     conditions: v.object({
       metric: v.string(),

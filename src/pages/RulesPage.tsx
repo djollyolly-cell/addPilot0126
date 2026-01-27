@@ -11,13 +11,16 @@ import { Id } from '../../convex/_generated/dataModel';
 import { TargetTreeSelector, TargetSelection } from '../components/TargetTreeSelector';
 import { ActionRadio, ActionMode, actionModeToFlags } from '../components/ActionRadio';
 
-type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads';
+type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads';
 
 const RULE_TYPE_LABELS: Record<RuleType, string> = {
   cpl_limit: 'CPL лимит',
   min_ctr: 'Мин. CTR',
   fast_spend: 'Быстрый расход',
   spend_no_leads: 'Расход без лидов',
+  budget_limit: 'Лимит расхода',
+  low_impressions: 'Мало показов',
+  clicks_no_leads: 'Клики без результата',
 };
 
 const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
@@ -25,6 +28,9 @@ const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
   min_ctr: 'Остановить, если CTR ниже порога',
   fast_spend: 'Остановить при слишком быстром расходе бюджета',
   spend_no_leads: 'Остановить, если потрачено N без единого лида',
+  budget_limit: 'Остановить, если дневной расход превышает порог',
+  low_impressions: 'Уведомить, если показов меньше порога (не откручивается)',
+  clicks_no_leads: 'Остановить, если N+ кликов без единого лида',
 };
 
 const RULE_TYPE_UNITS: Record<RuleType, string> = {
@@ -32,6 +38,9 @@ const RULE_TYPE_UNITS: Record<RuleType, string> = {
   min_ctr: '%',
   fast_spend: '₽/час',
   spend_no_leads: '₽',
+  budget_limit: '₽',
+  low_impressions: 'показов',
+  clicks_no_leads: 'кликов',
 };
 
 export function RulesPage() {

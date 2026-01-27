@@ -570,4 +570,121 @@ describe("rules", () => {
     const rule = await t.query(api.rules.get, { ruleId });
     expect(rule?.targetAccountIds).toHaveLength(2);
   });
+
+  // ── New rule types: budget_limit, low_impressions ──
+
+  test("creates budget_limit rule", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Budget Limit Rule",
+      type: "budget_limit",
+      value: 5000,
+      actions: defaultActions,
+      targetAccountIds: [accountId],
+    });
+
+    expect(ruleId).toBeDefined();
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule?.type).toBe("budget_limit");
+    expect(rule?.conditions.metric).toBe("spent");
+    expect(rule?.conditions.operator).toBe(">");
+    expect(rule?.conditions.value).toBe(5000);
+    expect(rule?.isActive).toBe(true);
+  });
+
+  test("creates low_impressions rule", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Low Impressions Rule",
+      type: "low_impressions",
+      value: 100,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    expect(ruleId).toBeDefined();
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule?.type).toBe("low_impressions");
+    expect(rule?.conditions.metric).toBe("impressions");
+    expect(rule?.conditions.operator).toBe("<");
+    expect(rule?.conditions.value).toBe(100);
+  });
+
+  test("budget_limit rejects value <= 0", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    await expect(
+      t.mutation(api.rules.create, {
+        userId,
+        name: "Bad Budget",
+        type: "budget_limit",
+        value: 0,
+        actions: defaultActions,
+        targetAccountIds: [accountId],
+      })
+    ).rejects.toThrow("больше 0");
+  });
+
+  test("low_impressions rejects value <= 0", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    await expect(
+      t.mutation(api.rules.create, {
+        userId,
+        name: "Bad Impressions",
+        type: "low_impressions",
+        value: -50,
+        actions: defaultActions,
+        targetAccountIds: [accountId],
+      })
+    ).rejects.toThrow("больше 0");
+  });
+
+  test("creates clicks_no_leads rule (clicks >= N, leads = 0)", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Clicks No Leads Rule",
+      type: "clicks_no_leads",
+      value: 50,
+      actions: defaultActions,
+      targetAccountIds: [accountId],
+    });
+
+    expect(ruleId).toBeDefined();
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule?.type).toBe("clicks_no_leads");
+    expect(rule?.conditions.metric).toBe("clicks_no_leads");
+    expect(rule?.conditions.operator).toBe(">=");
+    expect(rule?.conditions.value).toBe(50);
+  });
+
+  test("clicks_no_leads rejects value <= 0", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    await expect(
+      t.mutation(api.rules.create, {
+        userId,
+        name: "Bad Clicks",
+        type: "clicks_no_leads",
+        value: 0,
+        actions: defaultActions,
+        targetAccountIds: [accountId],
+      })
+    ).rejects.toThrow("больше 0");
+  });
 });

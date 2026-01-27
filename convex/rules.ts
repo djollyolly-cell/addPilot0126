@@ -10,6 +10,9 @@ const RULE_TYPE_DEFAULTS: Record<
   min_ctr: { metric: "ctr", operator: "<" },
   fast_spend: { metric: "spent_speed", operator: ">" },
   spend_no_leads: { metric: "spent_no_leads", operator: ">" },
+  budget_limit: { metric: "spent", operator: ">" },
+  low_impressions: { metric: "impressions", operator: "<" },
+  clicks_no_leads: { metric: "clicks_no_leads", operator: ">=" },
 };
 
 // Validation
@@ -58,7 +61,10 @@ export const create = mutation({
       v.literal("cpl_limit"),
       v.literal("min_ctr"),
       v.literal("fast_spend"),
-      v.literal("spend_no_leads")
+      v.literal("spend_no_leads"),
+      v.literal("budget_limit"),
+      v.literal("low_impressions"),
+      v.literal("clicks_no_leads")
     ),
     value: v.number(),
     operator: v.optional(v.string()),
