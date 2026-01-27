@@ -31,6 +31,7 @@ export function AccountsPage() {
   const fetchAndConnect = useAction(api.adAccounts.fetchAndConnect);
   const disconnectAccount = useMutation(api.adAccounts.disconnect);
   const syncNow = useAction(api.adAccounts.syncNow);
+  const updateTier = useMutation(api.users.updateTier);
 
   const autoFetchedRef = useRef(false);
 
@@ -75,10 +76,17 @@ export function AccountsPage() {
     setShowWizard(true);
   };
 
-  const handleUpgrade = (_tier: 'start' | 'pro') => {
-    // TODO: integrate with billing in Sprint 24
-    setShowUpgradeModal(false);
-    setSuccess('Функция оплаты будет доступна в ближайшее время.');
+  const handleUpgrade = async (tier: 'start' | 'pro') => {
+    try {
+      await updateTier({
+        userId: user.userId as Id<"users">,
+        tier,
+      });
+      setShowUpgradeModal(false);
+      setSuccess(`Тариф обновлён до ${tier === 'start' ? 'Start' : 'Pro'}! Теперь можете подключить больше кабинетов.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось обновить тариф');
+    }
   };
 
   const handleRefresh = async () => {

@@ -3,7 +3,9 @@ import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { AccountsPage } from './pages/AccountsPage';
+import { RulesPage } from './pages/RulesPage';
 import { AuthCallback } from './pages/AuthCallback';
+import { AdsCallback } from './pages/AdsCallback';
 import { useAuth } from './lib/useAuth';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -54,6 +56,7 @@ function App() {
         }
       />
       <Route path="/auth/callback" element={<AuthCallback />} />
+      <Route path="/auth/ads-callback" element={<AdsCallback />} />
       <Route
         path="/"
         element={
@@ -65,6 +68,7 @@ function App() {
         <Route index element={<Navigate to="/profile" replace />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="accounts" element={<AccountsPage />} />
+        <Route path="rules" element={<RulesPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>
