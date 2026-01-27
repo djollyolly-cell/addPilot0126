@@ -79,6 +79,11 @@ export const create = mutation({
       throw new Error("Название правила не может быть пустым");
     }
 
+    // Validate targets
+    if (args.targetAccountIds.length === 0) {
+      throw new Error("Выберите хотя бы один кабинет (EMPTY_TARGETS)");
+    }
+
     // Validate value
     const valueError = validateRuleValue(args.type, args.value);
     if (valueError) {
@@ -238,6 +243,9 @@ export const update = mutation({
     }
 
     if (args.targetAccountIds !== undefined) {
+      if (args.targetAccountIds.length === 0) {
+        throw new Error("Выберите хотя бы один кабинет (EMPTY_TARGETS)");
+      }
       patch.targetAccountIds = args.targetAccountIds;
     }
     if (args.targetCampaignIds !== undefined) {

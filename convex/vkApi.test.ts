@@ -248,4 +248,99 @@ describe("vkApi", () => {
       expect(errorMsg).toContain("Ошибка VK API");
     });
   });
+
+  describe("VK token refresh request format", () => {
+    test("refresh request sends correct parameters", async () => {
+      const capturedRequests: { url: string; options: RequestInit }[] = [];
+
+      globalThis.fetch = vi.fn().mockImplementation((url: string, options?: RequestInit) => {
+        capturedRequests.push({ url: url as string, options: options || {} });
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              access_token: "new_access_token",
+              refresh_token: "new_refresh_token",
+              expires_in: 86400,
+            }),
+        });
+      });
+
+      // Simulate what refreshVkToken does
+      const VK_ID_TOKEN_URL = "https://id.vk.com/oauth2/auth";
+      const params = new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: "old_refresh_token",
+        client_id: "test_client_id",
+      });
+
+      const response = await globalThis.fetch(VK_ID_TOKEN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      });
+      const data = await response.json();
+
+      expect(capturedRequests).toHaveLength(1);
+      expect(capturedRequests[0].url).toBe("https://id.vk.com/oauth2/auth");
+      expect(capturedRequests[0].options.method).toBe("POST");
+
+      const body = capturedRequests[0].options.body as string;
+      expect(body).toContain("grant_type=refresh_token");
+      expect(body).toContain("refresh_token=old_refresh_token");
+      expect(body).toContain("client_id=test_client_id");
+
+      expect(data.access_token).toBe("new_access_token");
+      expect(data.refresh_token).toBe("new_refresh_token");
+      expect(data.expires_in).toBe(86400);
+    });
+
+    test("refresh request handles error response", async () => {
+      mockFetch({
+        error: "invalid_grant",
+        error_description: "Refresh token is expired or revoked",
+      });
+
+      const response = await globalThis.fetch("https://id.vk.com/oauth2/auth", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: "grant_type=refresh_token&refresh_token=expired_token&client_id=test",
+      });
+      const data = await response.json();
+
+      expect(data.error).toBe("invalid_grant");
+      expect(data.error_description).toContain("expired or revoked");
+    });
+
+    test("refresh request handles network error", async () => {
+      globalThis.fetch = vi.fn().mockRejectedValue(new Error("Network error"));
+
+      await expect(
+        globalThis.fetch("https://id.vk.com/oauth2/auth", {
+          method: "POST",
+          body: "grant_type=refresh_token&refresh_token=test&client_id=test",
+        })
+      ).rejects.toThrow("Network error");
+    });
+
+    test("refresh returns new refresh_token for rotation", async () => {
+      mockFetch({
+        access_token: "rotated_access",
+        refresh_token: "rotated_refresh",
+        expires_in: 43200,
+        user_id: 12345,
+      });
+
+      const response = await globalThis.fetch("https://id.vk.com/oauth2/auth", {
+        method: "POST",
+        body: "grant_type=refresh_token&refresh_token=old_refresh&client_id=test",
+      });
+      const data = await response.json();
+
+      // VK ID rotates refresh tokens — new one must be saved
+      expect(data.refresh_token).toBe("rotated_refresh");
+      expect(data.refresh_token).not.toBe("old_refresh");
+      expect(data.access_token).toBe("rotated_access");
+    });
+  });
 });

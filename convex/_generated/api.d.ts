@@ -12,6 +12,7 @@ import type * as adAccounts from "../adAccounts.js";
 import type * as auth from "../auth.js";
 import type * as authEmail from "../authEmail.js";
 import type * as authInternal from "../authInternal.js";
+import type * as rules from "../rules.js";
 import type * as users from "../users.js";
 import type * as vkApi from "../vkApi.js";
 
@@ -26,6 +27,7 @@ declare const fullApi: ApiFromModules<{
   auth: typeof auth;
   authEmail: typeof authEmail;
   authInternal: typeof authInternal;
+  rules: typeof rules;
   users: typeof users;
   vkApi: typeof vkApi;
 }>;

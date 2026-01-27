@@ -342,4 +342,232 @@ describe("rules", () => {
     // Freemium cannot use stopAd — should be forced to false
     expect(rule?.actions.stopAd).toBe(false);
   });
+
+  // ── Sprint 5 DoD: Targets and actions ──
+
+  test("creates rule with targets at account level", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Account Target Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: defaultActions,
+      targetAccountIds: [accountId],
+    });
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule).toBeDefined();
+    expect(rule?.targetAccountIds).toHaveLength(1);
+    expect(rule?.targetAccountIds[0]).toBe(accountId);
+  });
+
+  test("creates rule with targets at campaign level", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    // Create campaigns in DB
+    const campaignId1 = await t.mutation(api.adAccounts.upsertCampaign, {
+      accountId,
+      vkCampaignId: "camp_1",
+      name: "Campaign 1",
+      status: "active",
+    });
+    const campaignId2 = await t.mutation(api.adAccounts.upsertCampaign, {
+      accountId,
+      vkCampaignId: "camp_2",
+      name: "Campaign 2",
+      status: "active",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Campaign Target Rule",
+      type: "min_ctr",
+      value: 1.5,
+      actions: defaultActions,
+      targetAccountIds: [accountId],
+      targetCampaignIds: [String(campaignId1), String(campaignId2)],
+    });
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule).toBeDefined();
+    expect(rule?.targetAccountIds).toHaveLength(1);
+    expect(rule?.targetCampaignIds).toHaveLength(2);
+  });
+
+  test("creates rule with targets at ad level", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    // Create campaign + ads
+    const campaignId = await t.mutation(api.adAccounts.upsertCampaign, {
+      accountId,
+      vkCampaignId: "camp_ads",
+      name: "Campaign for Ads",
+      status: "active",
+    });
+
+    const adId1 = await t.mutation(api.adAccounts.upsertAd, {
+      accountId,
+      campaignId,
+      vkAdId: "ad_1",
+      name: "Ad 1",
+      status: "active",
+    });
+    const adId2 = await t.mutation(api.adAccounts.upsertAd, {
+      accountId,
+      campaignId,
+      vkAdId: "ad_2",
+      name: "Ad 2",
+      status: "active",
+    });
+    const adId3 = await t.mutation(api.adAccounts.upsertAd, {
+      accountId,
+      campaignId,
+      vkAdId: "ad_3",
+      name: "Ad 3",
+      status: "active",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Ad Target Rule",
+      type: "fast_spend",
+      value: 20,
+      actions: defaultActions,
+      targetAccountIds: [accountId],
+      targetAdIds: [String(adId1), String(adId2), String(adId3)],
+    });
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule).toBeDefined();
+    expect(rule?.targetAdIds).toHaveLength(3);
+  });
+
+  test("rejects empty targets (EMPTY_TARGETS)", async () => {
+    const t = convexTest(schema);
+    const { userId } = await createTestUserWithAccount(t);
+
+    await expect(
+      t.mutation(api.rules.create, {
+        userId,
+        name: "No Targets Rule",
+        type: "cpl_limit",
+        value: 500,
+        actions: defaultActions,
+        targetAccountIds: [] as Id<"adAccounts">[],
+      })
+    ).rejects.toThrow("EMPTY_TARGETS");
+  });
+
+  test("update rejects empty targets", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Will Clear Targets",
+      type: "cpl_limit",
+      value: 500,
+      actions: defaultActions,
+      targetAccountIds: [accountId],
+    });
+
+    await expect(
+      t.mutation(api.rules.update, {
+        ruleId,
+        userId,
+        targetAccountIds: [] as Id<"adAccounts">[],
+      })
+    ).rejects.toThrow("EMPTY_TARGETS");
+  });
+
+  test("creates rule with notify only action", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Notify Only Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule?.actions.stopAd).toBe(false);
+    expect(rule?.actions.notify).toBe(true);
+  });
+
+  test("creates rule with stop only action", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Stop Only Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: true, notify: false },
+      targetAccountIds: [accountId],
+    });
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule?.actions.stopAd).toBe(true);
+    expect(rule?.actions.notify).toBe(false);
+  });
+
+  test("creates rule with stop and notify action", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Stop And Notify Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: true, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule?.actions.stopAd).toBe(true);
+    expect(rule?.actions.notify).toBe(true);
+  });
+
+  test("updates rule targets", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    // Create second account (need to upgrade to "start" which allows 3)
+    const accountId2 = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "R002",
+      name: "Second Cabinet",
+      accessToken: "token_r2",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Multi Target Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: defaultActions,
+      targetAccountIds: [accountId],
+    });
+
+    // Update to include both accounts
+    await t.mutation(api.rules.update, {
+      ruleId,
+      userId,
+      targetAccountIds: [accountId, accountId2],
+    });
+
+    const rule = await t.query(api.rules.get, { ruleId });
+    expect(rule?.targetAccountIds).toHaveLength(2);
+  });
 });

@@ -1,6 +1,8 @@
-import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Trash2 } from 'lucide-react';
+import { useState } from 'react';
+import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { SyncButton } from './SyncButton';
+import { CampaignList } from './CampaignList';
 import { cn } from '../lib/utils';
 
 interface AccountCardProps {
@@ -38,6 +40,7 @@ const statusConfig = {
 };
 
 export function AccountCard({ account, onSync, onDisconnect }: AccountCardProps) {
+  const [showCampaigns, setShowCampaigns] = useState(false);
   const status = statusConfig[account.status];
   const StatusIcon = status.icon;
 
@@ -89,6 +92,28 @@ export function AccountCard({ account, onSync, onDisconnect }: AccountCardProps)
             onSync={() => onSync(account._id)}
             lastSyncAt={account.lastSyncAt}
           />
+        </div>
+
+        {/* Campaigns toggle */}
+        <div className="mt-3 pt-3 border-t">
+          <button
+            type="button"
+            onClick={() => setShowCampaigns(!showCampaigns)}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            data-testid="toggle-campaigns"
+          >
+            {showCampaigns ? (
+              <ChevronDown className="w-4 h-4" />
+            ) : (
+              <ChevronRight className="w-4 h-4" />
+            )}
+            Кампании
+          </button>
+          {showCampaigns && (
+            <div className="mt-2">
+              <CampaignList accountId={account._id} />
+            </div>
+          )}
         </div>
       </CardContent>
     </Card>

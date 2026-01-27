@@ -8,6 +8,8 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
+import { TargetTreeSelector, TargetSelection } from '../components/TargetTreeSelector';
+import { ActionRadio, ActionMode, actionModeToFlags } from '../components/ActionRadio';
 
 type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads';
 
@@ -40,11 +42,6 @@ export function RulesPage() {
 
   const rules = useQuery(
     api.rules.list,
-    user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
-  );
-
-  const accounts = useQuery(
-    api.adAccounts.list,
     user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
   );
 
@@ -130,7 +127,7 @@ export function RulesPage() {
       {showForm && (
         <RuleForm
           userId={user.userId}
-          accounts={accounts || []}
+          subscriptionTier={user.subscriptionTier}
           onSubmit={async (data) => {
             setError(null);
             try {
@@ -246,28 +243,33 @@ export function RulesPage() {
 
 interface RuleFormProps {
   userId: string;
-  accounts: Array<{ _id: string; name: string }>;
+  subscriptionTier: string;
   onSubmit: (data: {
     name: string;
     type: RuleType;
     value: number;
     actions: { stopAd: boolean; notify: boolean };
     targetAccountIds: Id<"adAccounts">[];
+    targetCampaignIds?: string[];
+    targetAdIds?: string[];
   }) => Promise<void>;
   onCancel: () => void;
 }
 
-function RuleForm({ accounts, onSubmit, onCancel }: RuleFormProps) {
+function RuleForm({ userId, subscriptionTier, onSubmit, onCancel }: RuleFormProps) {
   const [name, setName] = useState('');
   const [type, setType] = useState<RuleType>('cpl_limit');
   const [value, setValue] = useState('');
-  const [stopAd, setStopAd] = useState(true);
-  const [notify, setNotify] = useState(true);
-  const [selectedAccounts, setSelectedAccounts] = useState<string[]>(
-    accounts.map((a) => a._id)
-  );
+  const [actionMode, setActionMode] = useState<ActionMode>('notify_only');
+  const [targets, setTargets] = useState<TargetSelection>({
+    accountIds: [],
+    campaignIds: [],
+    adIds: [],
+  });
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+
+  const isFreemium = subscriptionTier === 'freemium';
 
   const handleSubmit = async () => {
     setFormError(null);
@@ -284,10 +286,12 @@ function RuleForm({ accounts, onSubmit, onCancel }: RuleFormProps) {
       setFormError('CTR не может быть больше 100%');
       return;
     }
-    if (selectedAccounts.length === 0) {
+    if (targets.accountIds.length === 0) {
       setFormError('Выберите хотя бы один кабинет');
       return;
     }
+
+    const flags = actionModeToFlags(actionMode);
 
     setSubmitting(true);
     try {
@@ -295,8 +299,10 @@ function RuleForm({ accounts, onSubmit, onCancel }: RuleFormProps) {
         name: name.trim(),
         type,
         value: Number(value),
-        actions: { stopAd, notify },
-        targetAccountIds: selectedAccounts as Id<"adAccounts">[],
+        actions: flags,
+        targetAccountIds: targets.accountIds as Id<"adAccounts">[],
+        targetCampaignIds: targets.campaignIds.length > 0 ? targets.campaignIds : undefined,
+        targetAdIds: targets.adIds.length > 0 ? targets.adIds : undefined,
       });
     } catch {
       // Error handled by parent
@@ -385,54 +391,32 @@ function RuleForm({ accounts, onSubmit, onCancel }: RuleFormProps) {
           </div>
         </div>
 
-        {/* Actions */}
+        {/* Action radio */}
         <div className="space-y-2">
-          <label className="block text-sm font-medium">Действия</label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={stopAd}
-              onChange={(e) => setStopAd(e.target.checked)}
-              className="rounded"
-            />
-            Остановить объявление
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={notify}
-              onChange={(e) => setNotify(e.target.checked)}
-              className="rounded"
-            />
-            Отправить уведомление
-          </label>
+          <label className="block text-sm font-medium">Действие при срабатывании</label>
+          <ActionRadio
+            value={actionMode}
+            onChange={setActionMode}
+            isFreemium={isFreemium}
+          />
         </div>
 
-        {/* Target accounts */}
-        {accounts.length > 0 && (
-          <div>
-            <label className="block text-sm font-medium mb-1">Кабинеты</label>
-            <div className="space-y-1">
-              {accounts.map((acc) => (
-                <label key={acc._id} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selectedAccounts.includes(acc._id)}
-                    onChange={(e) => {
-                      if (e.target.checked) {
-                        setSelectedAccounts([...selectedAccounts, acc._id]);
-                      } else {
-                        setSelectedAccounts(selectedAccounts.filter((id) => id !== acc._id));
-                      }
-                    }}
-                    className="rounded"
-                  />
-                  {acc.name}
-                </label>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Target tree selector */}
+        <div>
+          <label className="block text-sm font-medium mb-2">Применить к</label>
+          <TargetTreeSelector
+            userId={userId}
+            value={targets}
+            onChange={setTargets}
+          />
+          {targets.accountIds.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {targets.accountIds.length} кабинет(ов)
+              {targets.campaignIds.length > 0 && `, ${targets.campaignIds.length} кампаний`}
+              {targets.adIds.length > 0 && `, ${targets.adIds.length} объявлений`}
+            </p>
+          )}
+        </div>
 
         {/* Submit */}
         <button
