@@ -266,6 +266,41 @@ export const getMtAgencyClients = action({
   },
 });
 
+// myTarget statistics types
+export interface MtStatRow {
+  date: string;
+  impressions: number;
+  clicks: number;
+  spent: string; // "250.00"
+  goals: number; // leads / conversions
+  reach?: number;
+}
+
+export interface MtStatItem {
+  id: number;
+  rows: MtStatRow[];
+}
+
+// Get banner (ad) statistics via myTarget API v2
+export const getMtStatistics = action({
+  args: {
+    accessToken: v.string(),
+    dateFrom: v.string(), // "YYYY-MM-DD"
+    dateTo: v.string(),   // "YYYY-MM-DD"
+  },
+  handler: async (_, args): Promise<MtStatItem[]> => {
+    const data = await callMtApi<{ items: MtStatItem[]; total: MtStatRow }>(
+      "statistics/banners/day.json",
+      args.accessToken,
+      {
+        date_from: args.dateFrom,
+        date_to: args.dateTo,
+      }
+    );
+    return data.items || [];
+  },
+});
+
 // Get banners (ads) via myTarget API v2
 export const getMtBanners = action({
   args: {
