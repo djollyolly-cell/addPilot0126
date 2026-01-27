@@ -4,6 +4,7 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { AccountList } from '../components/AccountList';
 import { VkAdsConnectWizard } from '../components/VkAdsConnectWizard';
+import { UpgradeModal } from '../components/UpgradeModal';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Building2, Loader2, AlertCircle, RefreshCw, Link } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -15,9 +16,15 @@ export function AccountsPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   const accounts = useQuery(
     api.adAccounts.list,
+    user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
+  );
+
+  const limits = useQuery(
+    api.users.getLimits,
     user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
   );
 
@@ -57,6 +64,22 @@ export function AccountsPage() {
       </div>
     );
   }
+
+  const canAddAccount = limits?.canAddAccount ?? true;
+
+  const handleConnectClick = () => {
+    if (!canAddAccount) {
+      setShowUpgradeModal(true);
+      return;
+    }
+    setShowWizard(true);
+  };
+
+  const handleUpgrade = (_tier: 'start' | 'pro') => {
+    // TODO: integrate with billing in Sprint 24
+    setShowUpgradeModal(false);
+    setSuccess('Функция оплаты будет доступна в ближайшее время.');
+  };
 
   const handleRefresh = async () => {
     setIsConnecting(true);
@@ -106,6 +129,13 @@ export function AccountsPage() {
 
   const isLoading = accounts === undefined;
 
+  // Format usage/limit label
+  const usageLabel = limits
+    ? limits.limits.accounts === Infinity
+      ? `${limits.usage.accounts} / ∞`
+      : `${limits.usage.accounts} / ${limits.limits.accounts}`
+    : null;
+
   return (
     <div className="max-w-3xl mx-auto p-6 space-y-6" data-testid="accounts-page">
       {/* Header */}
@@ -120,6 +150,20 @@ export function AccountsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Usage badge */}
+          {usageLabel && (
+            <span
+              className={cn(
+                'px-2.5 py-1 rounded-full text-xs font-medium',
+                canAddAccount
+                  ? 'bg-muted text-muted-foreground'
+                  : 'bg-warning/10 text-warning'
+              )}
+              data-testid="usage-badge"
+            >
+              {usageLabel}
+            </span>
+          )}
           <button
             type="button"
             onClick={handleRefresh}
@@ -145,7 +189,7 @@ export function AccountsPage() {
           </button>
           <button
             type="button"
-            onClick={() => setShowWizard(true)}
+            onClick={handleConnectClick}
             disabled={isConnecting}
             className={cn(
               'inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all',
@@ -221,6 +265,18 @@ export function AccountsPage() {
             setShowWizard(false);
             setSuccess('Кабинеты VK Ads успешно подключены!');
           }}
+        />
+      )}
+
+      {/* Upgrade modal */}
+      {showUpgradeModal && limits && (
+        <UpgradeModal
+          currentTier={limits.tier}
+          limitType="accounts"
+          currentUsage={limits.usage.accounts}
+          limit={limits.limits.accounts}
+          onClose={() => setShowUpgradeModal(false)}
+          onUpgrade={handleUpgrade}
         />
       )}
     </div>

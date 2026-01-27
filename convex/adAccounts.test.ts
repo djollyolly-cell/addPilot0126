@@ -166,6 +166,65 @@ describe("adAccounts", () => {
       expect(accountId).toBeDefined();
     });
 
+    test("throws error when start tier limit reached (start = 3)", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      // Upgrade to start (limit = 3)
+      await t.mutation(api.users.updateTier, { userId, tier: "start" });
+
+      await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "200001",
+        name: "Кабинет 1",
+        accessToken: "token_1",
+      });
+      await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "200002",
+        name: "Кабинет 2",
+        accessToken: "token_2",
+      });
+      await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "200003",
+        name: "Кабинет 3",
+        accessToken: "token_3",
+      });
+
+      // 4th should fail
+      await expect(
+        t.mutation(api.adAccounts.connect, {
+          userId,
+          vkAccountId: "200004",
+          name: "Кабинет 4",
+          accessToken: "token_4",
+        })
+      ).rejects.toThrow("Лимит кабинетов");
+    });
+
+    test("pro tier allows unlimited accounts", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      // Upgrade to pro
+      await t.mutation(api.users.updateTier, { userId, tier: "pro" });
+
+      // Connect 10 accounts — all should succeed
+      for (let i = 1; i <= 10; i++) {
+        const accountId = await t.mutation(api.adAccounts.connect, {
+          userId,
+          vkAccountId: `300${String(i).padStart(3, "0")}`,
+          name: `Кабинет ${i}`,
+          accessToken: `token_${i}`,
+        });
+        expect(accountId).toBeDefined();
+      }
+
+      const accounts = await t.query(api.adAccounts.list, { userId });
+      expect(accounts).toHaveLength(10);
+    });
+
     test("throws when another user tries to connect same account", async () => {
       const t = convexTest(schema);
       const userId1 = await createTestUser(t);
