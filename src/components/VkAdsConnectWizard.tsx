@@ -168,7 +168,7 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
             <>
               <CardTitle>Подключение VK Ads</CardTitle>
               <CardDescription>
-                Введите client_id и client_secret вашего приложения VK Ads
+                Введите Client ID и Client Secret вашего рекламного кабинета
               </CardDescription>
             </>
           )}
@@ -201,10 +201,10 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
           {step === 1 && !loading && (
             <div className="space-y-4">
               <div className="p-3 rounded-lg bg-muted text-sm space-y-2">
-                <p className="font-medium">Как получить credentials:</p>
+                <p className="font-medium">Где взять Client ID и Client Secret:</p>
                 <ol className="list-decimal list-inside space-y-1 text-muted-foreground">
                   <li>
-                    Перейдите в{' '}
+                    Откройте{' '}
                     <a
                       href="https://ads.vk.com/hq/settings/access"
                       target="_blank"
@@ -215,8 +215,7 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
                       <ExternalLink className="w-3 h-3" />
                     </a>
                   </li>
-                  <li>Создайте приложение (или используйте существующее)</li>
-                  <li>Скопируйте <strong>Client ID</strong> и <strong>Client Secret</strong></li>
+                  <li>Скопируйте <strong>Client ID</strong> и <strong>Client Secret</strong> вашего рекламного кабинета</li>
                 </ol>
               </div>
 
