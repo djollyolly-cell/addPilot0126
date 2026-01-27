@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { mutation, query, action } from "./_generated/server";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 // List all ad accounts for a user
 export const list = query({
@@ -138,6 +138,191 @@ export const disconnect = mutation({
   },
 });
 
+// Fetch available accounts: own account + agency clients
+export const fetchAvailableAccounts = action({
+  args: {
+    userId: v.id("users"),
+    clientId: v.optional(v.string()),
+    clientSecret: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{
+    accounts: Array<{
+      id: string;
+      name: string;
+      type: "own" | "agency_client";
+      username: string;
+    }>;
+  }> => {
+    // Step 1: Get token (connectVkAds handles credential priority)
+    await ctx.runAction(api.auth.connectVkAds, {
+      userId: args.userId,
+      clientId: args.clientId,
+      clientSecret: args.clientSecret,
+    });
+
+    // Step 2: Get valid token
+    const accessToken = await ctx.runAction(internal.auth.getValidVkAdsToken, {
+      userId: args.userId,
+    });
+
+    const accounts: Array<{
+      id: string;
+      name: string;
+      type: "own" | "agency_client";
+      username: string;
+    }> = [];
+
+    // Step 3: Get own account
+    try {
+      const user = await ctx.runAction(api.vkApi.getMtUser, { accessToken });
+      accounts.push({
+        id: `mt_${user.id}`,
+        name: user.username || `Аккаунт ${user.id}`,
+        type: "own",
+        username: user.username,
+      });
+    } catch {
+      // If user endpoint fails, add a generic own account
+      accounts.push({
+        id: "vk_ads_main",
+        name: "Мой кабинет VK Ads",
+        type: "own",
+        username: "",
+      });
+    }
+
+    // Step 4: Get agency clients (empty if not agency)
+    try {
+      const clients = await ctx.runAction(api.vkApi.getMtAgencyClients, { accessToken });
+      for (const client of clients) {
+        accounts.push({
+          id: `mt_client_${client.user.id}`,
+          name: client.user.username || `Клиент ${client.user.id}`,
+          type: "agency_client",
+          username: client.user.username,
+        });
+      }
+    } catch {
+      // Silently ignore — not an agency or API error
+    }
+
+    return { accounts };
+  },
+});
+
+// Connect selected accounts from the wizard
+export const connectSelectedAccounts = action({
+  args: {
+    userId: v.id("users"),
+    accounts: v.array(
+      v.object({
+        id: v.string(),
+        name: v.string(),
+      })
+    ),
+  },
+  handler: async (ctx, args): Promise<{ connected: number }> => {
+    // Get valid token
+    const accessToken = await ctx.runAction(internal.auth.getValidVkAdsToken, {
+      userId: args.userId,
+    });
+
+    let connected = 0;
+    for (const account of args.accounts) {
+      try {
+        await ctx.runMutation(api.adAccounts.connect, {
+          userId: args.userId,
+          vkAccountId: account.id,
+          name: account.name,
+          accessToken,
+        });
+        connected++;
+      } catch (err) {
+        // Skip accounts that are already connected by another user
+        if (err instanceof Error && err.message.includes("другим пользователем")) {
+          continue;
+        }
+        // Re-throw limit errors
+        if (err instanceof Error && err.message.includes("Лимит")) {
+          throw err;
+        }
+      }
+    }
+
+    return { connected };
+  },
+});
+
+// Fetch VK ad accounts/campaigns using user's stored VK Ads token and connect
+export const fetchAndConnect = action({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args): Promise<{ connected: number; accounts: Array<{ account_id: string; account_name: string }> }> => {
+    // Get valid VK Ads API token (myTarget)
+    const accessToken = await ctx.runAction(internal.auth.getValidVkAdsToken, {
+      userId: args.userId,
+    });
+
+    // In myTarget API, the token IS the account — no separate accounts list.
+    // We create one adAccount entry representing the user's VK Ads cabinet.
+    // Then fetch campaigns to verify the token works.
+    const campaigns = await ctx.runAction(api.vkApi.getMtCampaigns, {
+      accessToken,
+    });
+
+    // Connect as a single "VK Ads" account
+    const accountName = `VK Ads (${campaigns.length} кампаний)`;
+    const accountId = "vk_ads_main";
+
+    try {
+      await ctx.runMutation(api.adAccounts.connect, {
+        userId: args.userId,
+        vkAccountId: accountId,
+        name: accountName,
+        accessToken,
+      });
+    } catch (err) {
+      // If already connected, update the name
+      if (err instanceof Error && err.message.includes("уже подключён")) {
+        // Different user owns it — rethrow
+        throw err;
+      }
+    }
+
+    return {
+      connected: 1,
+      accounts: [{ account_id: accountId, account_name: accountName }],
+    };
+  },
+});
+
+// List campaigns for an account
+export const listCampaigns = query({
+  args: {
+    accountId: v.id("adAccounts"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("campaigns")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .collect();
+  },
+});
+
+// List ads for a campaign
+export const listAds = query({
+  args: {
+    campaignId: v.id("campaigns"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("ads")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", args.campaignId))
+      .collect();
+  },
+});
+
 // Update account status
 export const updateStatus = mutation({
   args: {
@@ -153,7 +338,7 @@ export const updateStatus = mutation({
   },
 });
 
-// Sync account data from VK API
+// Sync account data from VK Ads API v2 (myTarget)
 export const syncNow = action({
   args: {
     accountId: v.id("adAccounts"),
@@ -174,49 +359,54 @@ export const syncNow = action({
     }
 
     try {
-      // Fetch campaigns from VK API
-      const vkCampaigns: Array<{ id: number; name: string; status: number; day_limit: string; all_limit: string }> =
-        await ctx.runAction(api.vkApi.getCampaigns, {
-          accessToken: account.accessToken,
-          accountId: account.vkAccountId,
-        });
+      // Get a valid VK Ads token (myTarget, auto-refreshes if needed)
+      const accessToken = await ctx.runAction(internal.auth.getValidVkAdsToken, {
+        userId: args.userId,
+      });
+
+      // Fetch campaigns from myTarget API
+      const mtCampaigns = await ctx.runAction(api.vkApi.getMtCampaigns, {
+        accessToken,
+      });
 
       // Upsert campaigns
-      for (const vkCampaign of vkCampaigns) {
+      for (const campaign of mtCampaigns) {
         await ctx.runMutation(api.adAccounts.upsertCampaign, {
           accountId: args.accountId,
-          vkCampaignId: String(vkCampaign.id),
-          name: vkCampaign.name,
-          status: String(vkCampaign.status),
-          dailyLimit: parseFloat(vkCampaign.day_limit) || undefined,
-          allLimit: parseFloat(vkCampaign.all_limit) || undefined,
+          vkCampaignId: String(campaign.id),
+          name: campaign.name || `Кампания ${campaign.id}`,
+          status: campaign.status,
+          dailyLimit: parseFloat(campaign.budget_limit_day) || undefined,
+          allLimit: parseFloat(campaign.budget_limit) || undefined,
         });
       }
 
-      // Fetch ads from VK API
-      const vkAds: Array<{ id: number; campaign_id: number; name: string; status: number; approved: string }> =
-        await ctx.runAction(api.vkApi.getAds, {
-          accessToken: account.accessToken,
-          accountId: account.vkAccountId,
-        });
+      // Fetch banners (ads) from myTarget API
+      const mtBanners = await ctx.runAction(api.vkApi.getMtBanners, {
+        accessToken,
+      });
 
-      // Upsert ads
-      for (const vkAd of vkAds) {
+      // Upsert ads (banners)
+      let adsCount = 0;
+      for (const banner of mtBanners) {
         // Find the campaign in our DB
         const campaign = await ctx.runQuery(api.adAccounts.getCampaignByVkId, {
           accountId: args.accountId,
-          vkCampaignId: String(vkAd.campaign_id),
+          vkCampaignId: String(banner.campaign_id),
         });
 
         if (campaign) {
+          // Extract banner name from textblocks or use id
+          const bannerName = banner.textblocks?.title?.text || `Баннер ${banner.id}`;
           await ctx.runMutation(api.adAccounts.upsertAd, {
             accountId: args.accountId,
             campaignId: campaign._id,
-            vkAdId: String(vkAd.id),
-            name: vkAd.name,
-            status: String(vkAd.status),
-            approved: vkAd.approved,
+            vkAdId: String(banner.id),
+            name: bannerName,
+            status: banner.status,
+            approved: banner.moderation_status,
           });
+          adsCount++;
         }
       }
 
@@ -225,7 +415,7 @@ export const syncNow = action({
         accountId: args.accountId,
       });
 
-      return { success: true, campaigns: vkCampaigns.length, ads: vkAds.length };
+      return { success: true, campaigns: mtCampaigns.length, ads: adsCount };
     } catch (error) {
       const message = error instanceof Error ? error.message : "Неизвестная ошибка";
 
@@ -233,9 +423,9 @@ export const syncNow = action({
         await ctx.runMutation(api.adAccounts.updateStatus, {
           accountId: args.accountId,
           status: "error",
-          lastError: "Токен истёк. Переавторизуйтесь.",
+          lastError: "Токен VK Ads истёк. Подключите VK Ads заново.",
         });
-        throw new Error("Токен истёк. Переавторизуйтесь.");
+        throw new Error("Токен VK Ads истёк. Подключите VK Ads заново.");
       }
 
       await ctx.runMutation(api.adAccounts.updateStatus, {
@@ -243,7 +433,7 @@ export const syncNow = action({
         status: "error",
         lastError: message,
       });
-      throw new Error(`Ошибка VK API: ${message}`);
+      throw new Error(`Ошибка VK Ads API: ${message}`);
     }
   },
 });

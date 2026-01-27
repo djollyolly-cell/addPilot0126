@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 
 // Subscription tier limits
 export const TIER_LIMITS = {
@@ -300,10 +300,12 @@ export const upsertFromVk = internalMutation({
     name: v.string(),
     avatarUrl: v.optional(v.string()),
     accessToken: v.string(),
+    refreshToken: v.optional(v.string()),
     expiresIn: v.number(),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    const tokenExpiresAt = args.expiresIn > 0 ? now + args.expiresIn * 1000 : undefined;
 
     // Check if user exists
     const existingUser = await ctx.db
@@ -315,10 +317,19 @@ export const upsertFromVk = internalMutation({
       // Update existing user
       await ctx.db.patch(existingUser._id, {
         name: args.name,
-        avatarUrl: args.avatarUrl,
         email: args.email,
+        vkAccessToken: args.accessToken,
         updatedAt: now,
       });
+      if (args.avatarUrl !== undefined) {
+        await ctx.db.patch(existingUser._id, { avatarUrl: args.avatarUrl });
+      }
+      if (args.refreshToken !== undefined) {
+        await ctx.db.patch(existingUser._id, { vkRefreshToken: args.refreshToken });
+      }
+      if (tokenExpiresAt !== undefined) {
+        await ctx.db.patch(existingUser._id, { vkTokenExpiresAt: tokenExpiresAt });
+      }
       return existingUser._id;
     }
 
@@ -328,6 +339,9 @@ export const upsertFromVk = internalMutation({
       vkId: args.vkId,
       name: args.name,
       avatarUrl: args.avatarUrl,
+      vkAccessToken: args.accessToken,
+      vkRefreshToken: args.refreshToken,
+      vkTokenExpiresAt: tokenExpiresAt,
       subscriptionTier: "freemium",
       onboardingCompleted: false,
       createdAt: now,
@@ -347,6 +361,147 @@ export const upsertFromVk = internalMutation({
     });
 
     return userId;
+  },
+});
+
+// Internal mutation to update VK tokens after refresh
+export const updateVkTokens = internalMutation({
+  args: {
+    userId: v.id("users"),
+    accessToken: v.string(),
+    refreshToken: v.optional(v.string()),
+    expiresIn: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const tokenExpiresAt = args.expiresIn > 0 ? now + args.expiresIn * 1000 : undefined;
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    await ctx.db.patch(args.userId, {
+      vkAccessToken: args.accessToken,
+      vkRefreshToken: args.refreshToken ?? user.vkRefreshToken,
+      vkTokenExpiresAt: tokenExpiresAt ?? user.vkTokenExpiresAt,
+      updatedAt: now,
+    });
+  },
+});
+
+// Internal query to get VK tokens for a user
+export const getVkTokens = internalQuery({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      return null;
+    }
+    return {
+      accessToken: user.vkAccessToken,
+      refreshToken: user.vkRefreshToken,
+      expiresAt: user.vkTokenExpiresAt,
+    };
+  },
+});
+
+// Internal mutation to update VK Ads API tokens (myTarget/ads.vk.com)
+export const updateVkAdsTokens = internalMutation({
+  args: {
+    userId: v.id("users"),
+    accessToken: v.string(),
+    refreshToken: v.optional(v.string()),
+    expiresIn: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const tokenExpiresAt = args.expiresIn > 0 ? now + args.expiresIn * 1000 : undefined;
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    await ctx.db.patch(args.userId, {
+      vkAdsAccessToken: args.accessToken,
+      vkAdsRefreshToken: args.refreshToken ?? user.vkAdsRefreshToken,
+      vkAdsTokenExpiresAt: tokenExpiresAt ?? user.vkAdsTokenExpiresAt,
+      updatedAt: now,
+    });
+  },
+});
+
+// Internal query to get VK Ads API tokens
+export const getVkAdsTokens = internalQuery({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      return null;
+    }
+    return {
+      accessToken: user.vkAdsAccessToken,
+      refreshToken: user.vkAdsRefreshToken,
+      expiresAt: user.vkAdsTokenExpiresAt,
+    };
+  },
+});
+
+// Save per-user VK Ads API credentials
+export const saveVkAdsCredentials = mutation({
+  args: {
+    userId: v.id("users"),
+    clientId: v.string(),
+    clientSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new Error("Пользователь не найден");
+    }
+
+    await ctx.db.patch(args.userId, {
+      vkAdsClientId: args.clientId,
+      vkAdsClientSecret: args.clientSecret,
+      updatedAt: Date.now(),
+    });
+    return { success: true };
+  },
+});
+
+// Get per-user VK Ads credentials (internal — for backend API calls)
+export const getVkAdsCredentials = internalQuery({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      return null;
+    }
+    return {
+      clientId: user.vkAdsClientId,
+      clientSecret: user.vkAdsClientSecret,
+    };
+  },
+});
+
+// Check if user has VK Ads credentials saved (for frontend)
+export const hasVkAdsCredentials = query({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      return false;
+    }
+    return !!(user.vkAdsClientId && user.vkAdsClientSecret);
   },
 });
 

@@ -16,6 +16,16 @@ export default defineSchema({
     subscriptionExpiresAt: v.optional(v.number()),
     onboardingCompleted: v.boolean(),
     createdAt: v.number(),
+    vkAccessToken: v.optional(v.string()),
+    vkRefreshToken: v.optional(v.string()),
+    vkTokenExpiresAt: v.optional(v.number()),
+    // VK Ads API (myTarget) tokens — separate from VK ID login tokens
+    vkAdsAccessToken: v.optional(v.string()),
+    vkAdsRefreshToken: v.optional(v.string()),
+    vkAdsTokenExpiresAt: v.optional(v.number()),
+    // Per-user VK Ads API credentials (client_id / client_secret)
+    vkAdsClientId: v.optional(v.string()),
+    vkAdsClientSecret: v.optional(v.string()),
     updatedAt: v.number(),
   })
     .index("by_vkId", ["vkId"])

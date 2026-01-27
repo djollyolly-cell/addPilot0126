@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useAction, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { AccountList } from '../components/AccountList';
+import { VkAdsConnectWizard } from '../components/VkAdsConnectWizard';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Building2, Plus, Loader2, AlertCircle, LogIn } from 'lucide-react';
+import { Building2, Loader2, AlertCircle, RefreshCw, Link } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
 
@@ -12,16 +13,42 @@ export function AccountsPage() {
   const { user } = useAuth();
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
+  const [showWizard, setShowWizard] = useState(false);
 
   const accounts = useQuery(
     api.adAccounts.list,
     user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
   );
 
-  const getVkAccounts = useAction(api.vkApi.getAccounts);
-  const connectAccount = useMutation(api.adAccounts.connect);
+  const fetchAndConnect = useAction(api.adAccounts.fetchAndConnect);
   const disconnectAccount = useMutation(api.adAccounts.disconnect);
   const syncNow = useAction(api.adAccounts.syncNow);
+
+  const autoFetchedRef = useRef(false);
+
+  // Auto-fetch VK Ads accounts on page load
+  useEffect(() => {
+    if (!user?.userId || autoFetchedRef.current) return;
+    autoFetchedRef.current = true;
+
+    setIsConnecting(true);
+    fetchAndConnect({ userId: user.userId as Id<"users"> })
+      .then(() => {
+        if (success) setSuccess(null);
+      })
+      .catch((err) => {
+        if (err instanceof Error && err.message.includes('Подключите VK Ads')) {
+          // Token not available — user needs to connect VK Ads first
+        } else if (err instanceof Error && err.message.includes('заново')) {
+          setError('Токен истёк. Подключите VK Ads заново.');
+        }
+        // Silently ignore other errors on auto-fetch
+      })
+      .finally(() => {
+        setIsConnecting(false);
+      });
+  }, [user?.userId, fetchAndConnect, success]);
 
   if (!user) {
     return (
@@ -31,47 +58,27 @@ export function AccountsPage() {
     );
   }
 
-  const handleConnect = async () => {
+  const handleRefresh = async () => {
     setIsConnecting(true);
     setError(null);
 
     try {
-      // Get the user's access token from their session/account
-      // For now we use the token stored in the first connected account or from auth
-      const vkAccounts = await getVkAccounts({
-        accessToken: '', // This will be populated from stored VK token
+      const result = await fetchAndConnect({
+        userId: user.userId as Id<"users">,
       });
 
-      if (!vkAccounts || vkAccounts.length === 0) {
+      if (result.connected === 0 && result.accounts.length === 0) {
         setError('Нет доступных кабинетов VK Ads');
-        return;
-      }
-
-      // Connect each available account
-      for (const vkAccount of vkAccounts) {
-        try {
-          await connectAccount({
-            userId: user.userId as Id<"users">,
-            vkAccountId: String(vkAccount.account_id),
-            name: vkAccount.account_name || `Кабинет ${vkAccount.account_id}`,
-            accessToken: '', // Access token will come from VK OAuth
-          });
-        } catch (err) {
-          // Skip duplicates or limit errors
-          if (err instanceof Error && !err.message.includes('уже подключён')) {
-            throw err;
-          }
-        }
       }
     } catch (err) {
       if (err instanceof Error) {
-        if (err.message === 'TOKEN_EXPIRED') {
-          setError('Токен истёк. Переавторизуйтесь.');
+        if (err.message.includes('Подключите VK Ads')) {
+          setError('Сначала подключите VK Ads (кнопка выше).');
         } else {
           setError(err.message);
         }
       } else {
-        setError('Ошибка VK API');
+        setError('Ошибка VK Ads API');
       }
     } finally {
       setIsConnecting(false);
@@ -112,30 +119,53 @@ export function AccountsPage() {
             Подключённые кабинеты VK Ads
           </p>
         </div>
-        <button
-          type="button"
-          onClick={handleConnect}
-          disabled={isConnecting}
-          className={cn(
-            'inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all',
-            'bg-primary text-primary-foreground hover:bg-primary/90',
-            'disabled:opacity-50 disabled:cursor-not-allowed'
-          )}
-          data-testid="connect-button"
-        >
-          {isConnecting ? (
-            <>
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Подключение...
-            </>
-          ) : (
-            <>
-              <Plus className="w-4 h-4" />
-              Подключить
-            </>
-          )}
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={isConnecting}
+            className={cn(
+              'inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all',
+              'bg-secondary text-secondary-foreground hover:bg-secondary/80',
+              'disabled:opacity-50 disabled:cursor-not-allowed'
+            )}
+            data-testid="refresh-button"
+          >
+            {isConnecting ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Загрузка...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="w-4 h-4" />
+                Обновить
+              </>
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowWizard(true)}
+            disabled={isConnecting}
+            className={cn(
+              'inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all',
+              'bg-primary text-primary-foreground hover:bg-primary/90',
+              'disabled:opacity-50 disabled:cursor-not-allowed'
+            )}
+            data-testid="connect-vk-ads-button"
+          >
+            <Link className="w-4 h-4" />
+            Подключить VK Ads
+          </button>
+        </div>
       </div>
+
+      {/* Success */}
+      {success && (
+        <div className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
+          <span>{success}</span>
+        </div>
+      )}
 
       {/* Error */}
       {error && (
@@ -145,16 +175,6 @@ export function AccountsPage() {
         >
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{error}</span>
-          {error.includes('Переавторизуйтесь') && (
-            <a
-              href="/login"
-              className="inline-flex items-center gap-1 ml-auto text-sm font-medium underline"
-              data-testid="reauth-link"
-            >
-              <LogIn className="w-3 h-3" />
-              Войти
-            </a>
-          )}
         </div>
       )}
 
@@ -167,7 +187,7 @@ export function AccountsPage() {
               ? 'Загрузка...'
               : accounts.length > 0
                 ? `${accounts.length} ${accounts.length === 1 ? 'кабинет' : accounts.length < 5 ? 'кабинета' : 'кабинетов'} подключено`
-                : 'Нет подключённых кабинетов'}
+                : 'Нет подключённых кабинетов. Нажмите «Подключить VK Ads».'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -191,6 +211,18 @@ export function AccountsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Wizard modal */}
+      {showWizard && (
+        <VkAdsConnectWizard
+          userId={user.userId}
+          onClose={() => setShowWizard(false)}
+          onConnected={() => {
+            setShowWizard(false);
+            setSuccess('Кабинеты VK Ads успешно подключены!');
+          }}
+        />
+      )}
     </div>
   );
 }

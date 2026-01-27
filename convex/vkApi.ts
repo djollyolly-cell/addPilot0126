@@ -1,6 +1,9 @@
 import { v } from "convex/values";
 import { action } from "./_generated/server";
 
+// ─── OLD VK API (api.vk.com/method/ads.*) ─────────────────────────
+// Kept for backwards compatibility; may work with tokens that have `ads` scope
+
 const VK_API_URL = "https://api.vk.com/method";
 const VK_API_VERSION = "5.131";
 const RATE_LIMIT_ERROR_CODE = 6;
@@ -60,7 +63,7 @@ async function callVkApi<T>(
   throw lastError || new Error("VK API request failed after retries");
 }
 
-// VK API types
+// VK API types (old API)
 export interface VkAdAccount {
   account_id: number;
   account_type: string;
@@ -86,7 +89,7 @@ export interface VkAd {
   approved: string;
 }
 
-// Get all ad accounts accessible by the user
+// Old VK API actions (kept for backwards compat)
 export const getAccounts = action({
   args: {
     accessToken: v.string(),
@@ -96,7 +99,6 @@ export const getAccounts = action({
   },
 });
 
-// Get campaigns for a specific ad account
 export const getCampaigns = action({
   args: {
     accessToken: v.string(),
@@ -109,7 +111,6 @@ export const getCampaigns = action({
   },
 });
 
-// Get ads for a specific ad account (optionally filtered by campaign)
 export const getAds = action({
   args: {
     accessToken: v.string(),
@@ -124,5 +125,165 @@ export const getAds = action({
       params.campaign_ids = args.campaignIds;
     }
     return await callVkApi<VkAd[]>("ads.getAds", args.accessToken, params);
+  },
+});
+
+// ─── VK ADS API v2 (myTarget / target.my.com) ─────────────────────
+// New API for VK Ads (formerly myTarget), uses Bearer token auth
+
+const MT_API_BASE = "https://target.my.com";
+const MT_MAX_RETRIES = 3;
+
+// myTarget API types
+export interface MtCampaign {
+  id: number;
+  name: string;
+  status: string;
+  budget_limit: string;
+  budget_limit_day: string;
+  created: string;
+  updated: string;
+}
+
+export interface MtBanner {
+  id: number;
+  campaign_id: number;
+  textblocks?: Record<string, { text: string }>;
+  status: string;
+  moderation_status: string;
+  created: string;
+  updated: string;
+}
+
+async function callMtApi<T>(
+  endpoint: string,
+  accessToken: string,
+  params?: Record<string, string>
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < MT_MAX_RETRIES; attempt++) {
+    const url = new URL(`${MT_API_BASE}/api/v2/${endpoint}`);
+    if (params) {
+      Object.entries(params).forEach(([k, val]) => url.searchParams.set(k, val));
+    }
+
+    const response = await fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+    });
+
+    if (response.status === 429 && attempt < MT_MAX_RETRIES - 1) {
+      await sleep(RETRY_DELAY_MS * (attempt + 1));
+      continue;
+    }
+
+    if (response.status === 401) {
+      throw new Error("TOKEN_EXPIRED");
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      lastError = new Error(`VK Ads API Error ${response.status}: ${text}`);
+      throw lastError;
+    }
+
+    return response.json();
+  }
+
+  throw lastError || new Error("VK Ads API request failed after retries");
+}
+
+// Get campaigns via myTarget API v2
+export const getMtCampaigns = action({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (_, args): Promise<MtCampaign[]> => {
+    const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
+      "campaigns.json",
+      args.accessToken,
+      { fields: "id,name,status,budget_limit,budget_limit_day,created,updated" }
+    );
+    return data.items || [];
+  },
+});
+
+// myTarget API types for agency/user
+export interface MtUser {
+  id: number;
+  username: string;
+  status: string;
+  // Agency flag — present in user response
+  agency_id?: number;
+}
+
+export interface MtAgencyClient {
+  id: number;
+  user: {
+    id: number;
+    username: string;
+    status: string;
+  };
+  status: string;
+}
+
+// Get current user info (own account) via myTarget API v2
+export const getMtUser = action({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (_, args): Promise<MtUser> => {
+    return await callMtApi<MtUser>("user.json", args.accessToken);
+  },
+});
+
+// Get agency clients via myTarget API v2
+// Returns empty array if not an agency account (403/404)
+export const getMtAgencyClients = action({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (_, args): Promise<MtAgencyClient[]> => {
+    try {
+      const data = await callMtApi<MtAgencyClient[]>(
+        "agency/clients.json",
+        args.accessToken,
+        { fields: "id,user,status" }
+      );
+      return data || [];
+    } catch (err) {
+      // 403/404 means not an agency account — that's fine
+      if (
+        err instanceof Error &&
+        (err.message.includes("403") || err.message.includes("404"))
+      ) {
+        return [];
+      }
+      throw err;
+    }
+  },
+});
+
+// Get banners (ads) via myTarget API v2
+export const getMtBanners = action({
+  args: {
+    accessToken: v.string(),
+    campaignId: v.optional(v.string()),
+  },
+  handler: async (_, args): Promise<MtBanner[]> => {
+    const params: Record<string, string> = {
+      fields: "id,campaign_id,textblocks,status,moderation_status,created,updated",
+    };
+    if (args.campaignId) {
+      params._campaign_id = args.campaignId;
+    }
+    const data = await callMtApi<{ items: MtBanner[]; count: number }>(
+      "banners.json",
+      args.accessToken,
+      params
+    );
+    return data.items || [];
   },
 });
