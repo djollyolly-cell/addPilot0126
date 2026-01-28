@@ -74,7 +74,7 @@ function formatTimestamp(ts: number): string {
 
 export function LogsPage() {
   const { user } = useAuth();
-  const userId = user?._id as Id<'users'> | undefined;
+  const userId = user?.userId as Id<'users'> | undefined;
 
   // Filters
   const [actionType, setActionType] = useState<ActionType | ''>('');
