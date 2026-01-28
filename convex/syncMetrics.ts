@@ -108,6 +108,16 @@ export const syncAll = internalAction({
         });
       }
     }
+
+    // After all accounts synced, run rule engine
+    try {
+      await ctx.runAction(internal.ruleEngine.checkAllRules, {});
+    } catch (error) {
+      console.error(
+        "[syncMetrics] Error running rule engine:",
+        error instanceof Error ? error.message : error
+      );
+    }
   },
 });
 

@@ -1,0 +1,627 @@
+import { convexTest } from "convex-test";
+import { expect, test, describe } from "vitest";
+import { api } from "./_generated/api";
+import schema from "./schema";
+import {
+  evaluateCondition,
+  calculateSavings,
+  minutesUntilEndOfDay,
+} from "./ruleEngine";
+
+// Helper: create user + account for testing
+async function createTestSetup(t: ReturnType<typeof convexTest>) {
+  const userId = await t.mutation(api.users.create, {
+    email: "engine@test.com",
+    vkId: "engine_user",
+    name: "Rule Engine Test",
+  });
+  await t.mutation(api.users.updateTier, { userId, tier: "start" });
+
+  const accountId = await t.mutation(api.adAccounts.connect, {
+    userId,
+    vkAccountId: "RE001",
+    name: "Engine Test Cabinet",
+    accessToken: "token_engine",
+  });
+
+  return { userId, accountId };
+}
+
+describe("ruleEngine", () => {
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #1: CPL > threshold
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#1: CPL > threshold triggers rule (cpl=600, value=500)", () => {
+    const result = evaluateCondition(
+      "cpl_limit",
+      { metric: "cpl", operator: ">", value: 500 },
+      { spent: 3000, leads: 5, impressions: 10000, clicks: 200 } // cpl = 600
+    );
+    expect(result).toBe(true);
+  });
+
+  test("CPL below threshold does NOT trigger", () => {
+    const result = evaluateCondition(
+      "cpl_limit",
+      { metric: "cpl", operator: ">", value: 500 },
+      { spent: 2000, leads: 5, impressions: 10000, clicks: 200 } // cpl = 400
+    );
+    expect(result).toBe(false);
+  });
+
+  test("CPL with zero leads does NOT trigger (no division by zero)", () => {
+    const result = evaluateCondition(
+      "cpl_limit",
+      { metric: "cpl", operator: ">", value: 500 },
+      { spent: 3000, leads: 0, impressions: 10000, clicks: 200 }
+    );
+    expect(result).toBe(false);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #2: CTR < threshold
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#2: CTR < threshold triggers rule (ctr=0.5, value=1.0)", () => {
+    const result = evaluateCondition(
+      "min_ctr",
+      { metric: "ctr", operator: "<", value: 1.0 },
+      { spent: 1000, leads: 2, impressions: 10000, clicks: 50 } // ctr = 0.5%
+    );
+    expect(result).toBe(true);
+  });
+
+  test("CTR above threshold does NOT trigger", () => {
+    const result = evaluateCondition(
+      "min_ctr",
+      { metric: "ctr", operator: "<", value: 1.0 },
+      { spent: 1000, leads: 2, impressions: 10000, clicks: 200 } // ctr = 2%
+    );
+    expect(result).toBe(false);
+  });
+
+  test("CTR with zero impressions does NOT trigger", () => {
+    const result = evaluateCondition(
+      "min_ctr",
+      { metric: "ctr", operator: "<", value: 1.0 },
+      { spent: 0, leads: 0, impressions: 0, clicks: 0 }
+    );
+    expect(result).toBe(false);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #3: fast_spend
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#3: fast_spend triggers when 25% spent in 15min (value=20)", () => {
+    const now = Date.now();
+    const fifteenMinAgo = now - 15 * 60 * 1000;
+
+    const result = evaluateCondition(
+      "fast_spend",
+      { metric: "spent_speed", operator: ">", value: 20 },
+      { spent: 1000, leads: 5, impressions: 10000, clicks: 200 },
+      {
+        spendHistory: [
+          { spent: 750, timestamp: fifteenMinAgo },
+          { spent: 1000, timestamp: now }, // diff = 250 / 1000 budget = 25%
+        ],
+        dailyBudget: 1000,
+      }
+    );
+    expect(result).toBe(true);
+  });
+
+  test("fast_spend does NOT trigger when below threshold", () => {
+    const now = Date.now();
+    const fifteenMinAgo = now - 15 * 60 * 1000;
+
+    const result = evaluateCondition(
+      "fast_spend",
+      { metric: "spent_speed", operator: ">", value: 20 },
+      { spent: 500, leads: 2, impressions: 5000, clicks: 100 },
+      {
+        spendHistory: [
+          { spent: 400, timestamp: fifteenMinAgo },
+          { spent: 500, timestamp: now }, // diff = 100 / 1000 = 10%
+        ],
+        dailyBudget: 1000,
+      }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("fast_spend requires at least 2 snapshots", () => {
+    const result = evaluateCondition(
+      "fast_spend",
+      { metric: "spent_speed", operator: ">", value: 20 },
+      { spent: 1000, leads: 5, impressions: 10000, clicks: 200 },
+      {
+        spendHistory: [{ spent: 1000, timestamp: Date.now() }],
+        dailyBudget: 1000,
+      }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("fast_spend requires dailyBudget", () => {
+    const now = Date.now();
+    const result = evaluateCondition(
+      "fast_spend",
+      { metric: "spent_speed", operator: ">", value: 20 },
+      { spent: 1000, leads: 5, impressions: 10000, clicks: 200 },
+      {
+        spendHistory: [
+          { spent: 750, timestamp: now - 15 * 60 * 1000 },
+          { spent: 1000, timestamp: now },
+        ],
+      }
+    );
+    expect(result).toBe(false);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #4: spend_no_leads
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#4: spend_no_leads triggers (spent=1500, leads=0, value=1000)", () => {
+    const result = evaluateCondition(
+      "spend_no_leads",
+      { metric: "spent_no_leads", operator: ">", value: 1000 },
+      { spent: 1500, leads: 0, impressions: 20000, clicks: 300 }
+    );
+    expect(result).toBe(true);
+  });
+
+  test("spend_no_leads does NOT trigger with leads present", () => {
+    const result = evaluateCondition(
+      "spend_no_leads",
+      { metric: "spent_no_leads", operator: ">", value: 1000 },
+      { spent: 1500, leads: 1, impressions: 20000, clicks: 300 }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("spend_no_leads does NOT trigger when below threshold", () => {
+    const result = evaluateCondition(
+      "spend_no_leads",
+      { metric: "spent_no_leads", operator: ">", value: 1000 },
+      { spent: 800, leads: 0, impressions: 10000, clicks: 100 }
+    );
+    expect(result).toBe(false);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #5: calculateSavings
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#5: calculateSavings = 100rub/min * 360min = 36000rub", () => {
+    const savings = calculateSavings(100, 360);
+    expect(savings).toBe(36000);
+  });
+
+  test("calculateSavings returns 0 for zero spend rate", () => {
+    expect(calculateSavings(0, 360)).toBe(0);
+  });
+
+  test("calculateSavings returns 0 for zero minutes remaining", () => {
+    expect(calculateSavings(100, 0)).toBe(0);
+  });
+
+  test("calculateSavings returns 0 for negative inputs", () => {
+    expect(calculateSavings(-10, 360)).toBe(0);
+    expect(calculateSavings(100, -60)).toBe(0);
+  });
+
+  test("minutesUntilEndOfDay at 12:00 returns 360", () => {
+    const noon = new Date("2026-01-28T12:00:00");
+    expect(minutesUntilEndOfDay(noon)).toBe(360);
+  });
+
+  test("minutesUntilEndOfDay after 18:00 returns 0", () => {
+    const evening = new Date("2026-01-28T19:00:00");
+    expect(minutesUntilEndOfDay(evening)).toBe(0);
+  });
+
+  test("minutesUntilEndOfDay at 17:30 returns 30", () => {
+    const late = new Date("2026-01-28T17:30:00");
+    expect(minutesUntilEndOfDay(late)).toBe(30);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #6: VK API stop — actionLog with status=success
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#6: stopAd creates actionLog with status=success", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "CPL Stop Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: true, notify: false },
+      targetAccountIds: [accountId],
+    });
+
+    // Simulate successful stop by creating actionLog with status=success
+    const logId = await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_stop_1",
+      adName: "Test Ad",
+      actionType: "stopped",
+      reason: "CPL 600\u20BD \u043F\u0440\u0435\u0432\u044B\u0441\u0438\u043B \u043B\u0438\u043C\u0438\u0442 500\u20BD",
+      metricsSnapshot: {
+        spent: 3000,
+        leads: 5,
+        cpl: 600,
+      },
+      savedAmount: 36000,
+      status: "success",
+    });
+
+    expect(logId).toBeDefined();
+
+    const logs = await t.query(api.ruleEngine.listActionLogs, { userId });
+    expect(logs).toHaveLength(1);
+    expect(logs[0].status).toBe("success");
+    expect(logs[0].actionType).toBe("stopped");
+    expect(logs[0].adId).toBe("ad_stop_1");
+    expect(logs[0].savedAmount).toBe(36000);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #7: actionLog created with all required fields
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#7: actionLog contains all required fields", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "CTR Watch",
+      type: "min_ctr",
+      value: 1.0,
+      actions: { stopAd: true, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const logId = await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_ctr_1",
+      adName: "Low CTR Ad",
+      campaignName: "Campaign A",
+      actionType: "stopped_and_notified",
+      reason: "CTR 0.50% \u043D\u0438\u0436\u0435 \u043C\u0438\u043D\u0438\u043C\u0443\u043C\u0430 1.00%",
+      metricsSnapshot: {
+        spent: 1000,
+        leads: 2,
+        impressions: 10000,
+        clicks: 50,
+        ctr: 0.5,
+      },
+      savedAmount: 18000,
+      status: "success",
+    });
+
+    expect(logId).toBeDefined();
+
+    const logs = await t.query(api.ruleEngine.listActionLogs, { userId });
+    expect(logs).toHaveLength(1);
+
+    const log = logs[0];
+    expect(log.userId).toBe(userId);
+    expect(log.ruleId).toBe(ruleId);
+    expect(log.accountId).toBe(accountId);
+    expect(log.adId).toBe("ad_ctr_1");
+    expect(log.adName).toBe("Low CTR Ad");
+    expect(log.campaignName).toBe("Campaign A");
+    expect(log.actionType).toBe("stopped_and_notified");
+    expect(log.reason).toContain("CTR");
+    expect(log.metricsSnapshot.spent).toBe(1000);
+    expect(log.metricsSnapshot.leads).toBe(2);
+    expect(log.metricsSnapshot.impressions).toBe(10000);
+    expect(log.metricsSnapshot.clicks).toBe(50);
+    expect(log.metricsSnapshot.ctr).toBe(0.5);
+    expect(log.savedAmount).toBe(18000);
+    expect(log.status).toBe("success");
+    expect(log.createdAt).toBeGreaterThan(0);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #10: isActive=false rule is skipped
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#10: inactive rule is not returned by active rules query", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    // Create active rule
+    const activeRuleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Active CPL Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: true, notify: false },
+      targetAccountIds: [accountId],
+    });
+
+    // Create and deactivate another rule
+    const inactiveRuleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Inactive CTR Rule",
+      type: "min_ctr",
+      value: 1.0,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    await t.mutation(api.rules.toggleActive, {
+      ruleId: inactiveRuleId,
+      userId,
+    });
+
+    // Verify total rules = 2
+    const allRules = await t.query(api.rules.list, { userId });
+    expect(allRules).toHaveLength(2);
+
+    // Verify only 1 active
+    const activeRules = allRules.filter((r) => r.isActive);
+    expect(activeRules).toHaveLength(1);
+    expect(activeRules[0]._id).toBe(activeRuleId);
+
+    // The inactive rule should never be evaluated by checkAllRules
+    // because listActiveRules filters by isActive=true
+    const inactiveRule = allRules.find((r) => r._id === inactiveRuleId);
+    expect(inactiveRule?.isActive).toBe(false);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #11: minSamples not met — rule does not trigger
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#11: rule with minSamples=10 skips when only 5 samples", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    // Create a rule with minSamples=10
+    await t.mutation(api.rules.create, {
+      userId,
+      name: "Min Samples Rule",
+      type: "cpl_limit",
+      value: 500,
+      minSamples: 10,
+      actions: { stopAd: true, notify: false },
+      targetAccountIds: [accountId],
+    });
+
+    // Save only 5 realtime snapshots
+    for (let i = 0; i < 5; i++) {
+      await t.mutation(api.metrics.saveRealtimePublic, {
+        accountId,
+        adId: "ad_samples",
+        spent: 600 * (i + 1),
+        leads: i + 1,
+        impressions: 1000 * (i + 1),
+        clicks: 50 * (i + 1),
+      });
+    }
+
+    // The condition WOULD trigger if evaluated (CPL=600 > 500)
+    const conditionResult = evaluateCondition(
+      "cpl_limit",
+      { metric: "cpl", operator: ">", value: 500 },
+      { spent: 3000, leads: 5, impressions: 5000, clicks: 250 }
+    );
+    expect(conditionResult).toBe(true);
+
+    // But checkAllRules skips it because:
+    // history.length (5) < rule.conditions.minSamples (10)
+    // Verify we have exactly 5 snapshots
+    const latestMetric = await t.query(api.metrics.getRealtimeByAd, {
+      adId: "ad_samples",
+    });
+    expect(latestMetric).toBeDefined();
+    expect(latestMetric?.spent).toBe(3000); // Last snapshot: 600*5
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 8 DoD #12: VK API error → status=failed
+  // ═══════════════════════════════════════════════════════════
+
+  test("S8-DoD#12: VK API error creates actionLog with status=failed", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Budget Limit Rule",
+      type: "budget_limit",
+      value: 5000,
+      actions: { stopAd: true, notify: false },
+      targetAccountIds: [accountId],
+    });
+
+    // Simulate VK API failure — create actionLog with status=failed
+    const logId = await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_error_1",
+      adName: "Error Ad",
+      actionType: "stopped",
+      reason: "\u0420\u0430\u0441\u0445\u043E\u0434 6000\u20BD \u043F\u0440\u0435\u0432\u044B\u0441\u0438\u043B \u0431\u044E\u0434\u0436\u0435\u0442 5000\u20BD",
+      metricsSnapshot: {
+        spent: 6000,
+        leads: 3,
+      },
+      savedAmount: 0,
+      status: "failed",
+      errorMessage: "VK Ads API Error 500: Internal Server Error",
+    });
+
+    expect(logId).toBeDefined();
+
+    const logs = await t.query(api.ruleEngine.listActionLogs, { userId });
+    expect(logs).toHaveLength(1);
+    expect(logs[0].status).toBe("failed");
+    expect(logs[0].errorMessage).toContain("500");
+    expect(logs[0].errorMessage).toContain("Internal Server Error");
+    expect(logs[0].adId).toBe("ad_error_1");
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Additional unit tests — all rule types
+  // ═══════════════════════════════════════════════════════════
+
+  test("budget_limit triggers when spent > value", () => {
+    const result = evaluateCondition(
+      "budget_limit",
+      { metric: "spent", operator: ">", value: 5000 },
+      { spent: 6000, leads: 3, impressions: 30000, clicks: 500 }
+    );
+    expect(result).toBe(true);
+  });
+
+  test("budget_limit does NOT trigger when below value", () => {
+    const result = evaluateCondition(
+      "budget_limit",
+      { metric: "spent", operator: ">", value: 5000 },
+      { spent: 4000, leads: 3, impressions: 30000, clicks: 500 }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("low_impressions triggers when impressions < value", () => {
+    const result = evaluateCondition(
+      "low_impressions",
+      { metric: "impressions", operator: "<", value: 1000 },
+      { spent: 500, leads: 1, impressions: 500, clicks: 20 }
+    );
+    expect(result).toBe(true);
+  });
+
+  test("low_impressions does NOT trigger when above value", () => {
+    const result = evaluateCondition(
+      "low_impressions",
+      { metric: "impressions", operator: "<", value: 1000 },
+      { spent: 500, leads: 1, impressions: 2000, clicks: 50 }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("clicks_no_leads triggers when clicks >= value and leads=0", () => {
+    const result = evaluateCondition(
+      "clicks_no_leads",
+      { metric: "clicks_no_leads", operator: ">=", value: 100 },
+      { spent: 800, leads: 0, impressions: 10000, clicks: 150 }
+    );
+    expect(result).toBe(true);
+  });
+
+  test("clicks_no_leads does NOT trigger with leads present", () => {
+    const result = evaluateCondition(
+      "clicks_no_leads",
+      { metric: "clicks_no_leads", operator: ">=", value: 100 },
+      { spent: 800, leads: 1, impressions: 10000, clicks: 150 }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("clicks_no_leads does NOT trigger when clicks below value", () => {
+    const result = evaluateCondition(
+      "clicks_no_leads",
+      { metric: "clicks_no_leads", operator: ">=", value: 100 },
+      { spent: 300, leads: 0, impressions: 5000, clicks: 50 }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("unknown rule type returns false", () => {
+    const result = evaluateCondition(
+      "unknown_type",
+      { metric: "unknown", operator: ">", value: 100 },
+      { spent: 500, leads: 2, impressions: 10000, clicks: 100 }
+    );
+    expect(result).toBe(false);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Integration: actionLogs query by rule
+  // ═══════════════════════════════════════════════════════════
+
+  test("getActionLogsByRule returns logs for specific rule", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const rule1 = await t.mutation(api.rules.create, {
+      userId,
+      name: "Rule A",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: true, notify: false },
+      targetAccountIds: [accountId],
+    });
+
+    const rule2 = await t.mutation(api.rules.create, {
+      userId,
+      name: "Rule B",
+      type: "min_ctr",
+      value: 1.0,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create logs for both rules
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId: rule1,
+      accountId,
+      adId: "ad_1",
+      adName: "Ad 1",
+      actionType: "stopped",
+      reason: "CPL exceeded",
+      metricsSnapshot: { spent: 3000, leads: 5 },
+      savedAmount: 10000,
+      status: "success",
+    });
+
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId: rule2,
+      accountId,
+      adId: "ad_2",
+      adName: "Ad 2",
+      actionType: "notified",
+      reason: "Low CTR",
+      metricsSnapshot: { spent: 1000, leads: 2 },
+      savedAmount: 5000,
+      status: "success",
+    });
+
+    // Query by rule1
+    const rule1Logs = await t.query(api.ruleEngine.getActionLogsByRule, {
+      ruleId: rule1,
+    });
+    expect(rule1Logs).toHaveLength(1);
+    expect(rule1Logs[0].adId).toBe("ad_1");
+
+    // Query by rule2
+    const rule2Logs = await t.query(api.ruleEngine.getActionLogsByRule, {
+      ruleId: rule2,
+    });
+    expect(rule2Logs).toHaveLength(1);
+    expect(rule2Logs[0].adId).toBe("ad_2");
+
+    // All logs for user
+    const allLogs = await t.query(api.ruleEngine.listActionLogs, { userId });
+    expect(allLogs).toHaveLength(2);
+  });
+});

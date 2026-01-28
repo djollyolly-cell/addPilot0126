@@ -1,0 +1,546 @@
+import { v } from "convex/values";
+import {
+  internalAction,
+  internalMutation,
+  internalQuery,
+  mutation,
+  query,
+} from "./_generated/server";
+import { api, internal } from "./_generated/api";
+
+// ═══════════════════════════════════════════════════════════
+// Pure functions — exported for direct unit testing
+// ═══════════════════════════════════════════════════════════
+
+export interface MetricsSnapshot {
+  spent: number;
+  leads: number;
+  impressions: number;
+  clicks: number;
+  cpl?: number;
+  ctr?: number;
+}
+
+export interface RuleCondition {
+  metric: string;
+  operator: string;
+  value: number;
+  minSamples?: number;
+}
+
+export interface SpendSnapshot {
+  spent: number;
+  timestamp: number;
+}
+
+/**
+ * Evaluate whether a rule condition is met.
+ * Returns true if the rule should trigger (ad should be stopped/notified).
+ */
+export function evaluateCondition(
+  ruleType: string,
+  condition: RuleCondition,
+  metrics: MetricsSnapshot,
+  context?: {
+    spendHistory?: SpendSnapshot[];
+    dailyBudget?: number;
+  }
+): boolean {
+  switch (ruleType) {
+    case "cpl_limit": {
+      const cpl =
+        metrics.leads > 0 ? metrics.spent / metrics.leads : undefined;
+      if (cpl === undefined) return false;
+      return cpl > condition.value;
+    }
+
+    case "min_ctr": {
+      const ctr =
+        metrics.impressions > 0
+          ? (metrics.clicks / metrics.impressions) * 100
+          : undefined;
+      if (ctr === undefined) return false;
+      return ctr < condition.value;
+    }
+
+    case "fast_spend": {
+      if (!context?.spendHistory || context.spendHistory.length < 2)
+        return false;
+      const sorted = [...context.spendHistory].sort(
+        (a, b) => a.timestamp - b.timestamp
+      );
+      const oldest = sorted[0];
+      const newest = sorted[sorted.length - 1];
+      const spentDiff = newest.spent - oldest.spent;
+      const budget = context.dailyBudget;
+      if (!budget || budget <= 0) return false;
+      const percentSpent = (spentDiff / budget) * 100;
+      return percentSpent > condition.value;
+    }
+
+    case "spend_no_leads": {
+      return metrics.spent > condition.value && metrics.leads === 0;
+    }
+
+    case "budget_limit": {
+      return metrics.spent > condition.value;
+    }
+
+    case "low_impressions": {
+      return metrics.impressions < condition.value;
+    }
+
+    case "clicks_no_leads": {
+      return metrics.clicks >= condition.value && metrics.leads === 0;
+    }
+
+    default:
+      return false;
+  }
+}
+
+/**
+ * Calculate projected savings if ad is stopped now.
+ * @param spentPerMinute - current spending rate (rub/min)
+ * @param minutesRemaining - minutes until end of work day
+ */
+export function calculateSavings(
+  spentPerMinute: number,
+  minutesRemaining: number
+): number {
+  if (spentPerMinute <= 0 || minutesRemaining <= 0) return 0;
+  return spentPerMinute * minutesRemaining;
+}
+
+/**
+ * Get minutes remaining until 18:00 today.
+ */
+export function minutesUntilEndOfDay(now: Date = new Date()): number {
+  const endOfDay = new Date(now);
+  endOfDay.setHours(18, 0, 0, 0);
+  if (now >= endOfDay) return 0;
+  return Math.floor((endOfDay.getTime() - now.getTime()) / (1000 * 60));
+}
+
+// ═══════════════════════════════════════════════════════════
+// Convex queries & mutations for the rule engine
+// ═══════════════════════════════════════════════════════════
+
+/** Get all active rules for a user */
+export const listActiveRules = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("rules")
+      .withIndex("by_userId_active", (q) =>
+        q.eq("userId", args.userId).eq("isActive", true)
+      )
+      .collect();
+  },
+});
+
+/** Get today's daily metrics for an account */
+export const getAccountTodayMetrics = internalQuery({
+  args: {
+    accountId: v.id("adAccounts"),
+    date: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_accountId_date", (q) =>
+        q.eq("accountId", args.accountId).eq("date", args.date)
+      )
+      .collect();
+  },
+});
+
+/** Get realtime history for an ad (for fast_spend detection) */
+export const getRealtimeHistory = internalQuery({
+  args: {
+    adId: v.string(),
+    sinceTimestamp: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const records = await ctx.db
+      .query("metricsRealtime")
+      .withIndex("by_adId", (q) => q.eq("adId", args.adId))
+      .collect();
+    return records.filter((r) => r.timestamp >= args.sinceTimestamp);
+  },
+});
+
+/** Get campaign daily limit for fast_spend calculation */
+export const getCampaignDailyLimit = internalQuery({
+  args: { adId: v.string() },
+  handler: async (ctx, args) => {
+    const ad = await ctx.db
+      .query("ads")
+      .withIndex("by_vkAdId", (q) => q.eq("vkAdId", args.adId))
+      .first();
+    if (!ad) return null;
+    const campaign = await ctx.db.get(ad.campaignId);
+    return campaign?.dailyLimit ?? null;
+  },
+});
+
+/** Create an action log entry (internal) */
+export const createActionLog = internalMutation({
+  args: {
+    userId: v.id("users"),
+    ruleId: v.id("rules"),
+    accountId: v.id("adAccounts"),
+    adId: v.string(),
+    adName: v.string(),
+    campaignName: v.optional(v.string()),
+    actionType: v.union(
+      v.literal("stopped"),
+      v.literal("notified"),
+      v.literal("stopped_and_notified")
+    ),
+    reason: v.string(),
+    metricsSnapshot: v.object({
+      cpl: v.optional(v.number()),
+      ctr: v.optional(v.number()),
+      spent: v.number(),
+      leads: v.number(),
+      impressions: v.optional(v.number()),
+      clicks: v.optional(v.number()),
+    }),
+    savedAmount: v.number(),
+    status: v.union(
+      v.literal("success"),
+      v.literal("failed"),
+      v.literal("reverted")
+    ),
+    errorMessage: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("actionLogs", {
+      ...args,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/** Create action log — public mutation for testing */
+export const createActionLogPublic = mutation({
+  args: {
+    userId: v.id("users"),
+    ruleId: v.id("rules"),
+    accountId: v.id("adAccounts"),
+    adId: v.string(),
+    adName: v.string(),
+    campaignName: v.optional(v.string()),
+    actionType: v.union(
+      v.literal("stopped"),
+      v.literal("notified"),
+      v.literal("stopped_and_notified")
+    ),
+    reason: v.string(),
+    metricsSnapshot: v.object({
+      cpl: v.optional(v.number()),
+      ctr: v.optional(v.number()),
+      spent: v.number(),
+      leads: v.number(),
+      impressions: v.optional(v.number()),
+      clicks: v.optional(v.number()),
+    }),
+    savedAmount: v.number(),
+    status: v.union(
+      v.literal("success"),
+      v.literal("failed"),
+      v.literal("reverted")
+    ),
+    errorMessage: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("actionLogs", {
+      ...args,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/** Update rule trigger count */
+export const incrementTriggerCount = internalMutation({
+  args: { ruleId: v.id("rules") },
+  handler: async (ctx, args) => {
+    const rule = await ctx.db.get(args.ruleId);
+    if (!rule) return;
+    await ctx.db.patch(args.ruleId, {
+      triggerCount: rule.triggerCount + 1,
+      lastTriggeredAt: Date.now(),
+      updatedAt: Date.now(),
+    });
+  },
+});
+
+/** Query action logs for a user */
+export const listActionLogs = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .collect();
+  },
+});
+
+/** Get action logs by rule */
+export const getActionLogsByRule = query({
+  args: { ruleId: v.id("rules") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("actionLogs")
+      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .order("desc")
+      .collect();
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════
+
+function todayStr(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function buildReason(
+  ruleType: string,
+  condition: RuleCondition,
+  metrics: MetricsSnapshot
+): string {
+  switch (ruleType) {
+    case "cpl_limit": {
+      const cpl = metrics.leads > 0 ? metrics.spent / metrics.leads : 0;
+      return `CPL ${cpl.toFixed(0)}\u20BD \u043F\u0440\u0435\u0432\u044B\u0441\u0438\u043B \u043B\u0438\u043C\u0438\u0442 ${condition.value}\u20BD`;
+    }
+    case "min_ctr": {
+      const ctr =
+        metrics.impressions > 0
+          ? (metrics.clicks / metrics.impressions) * 100
+          : 0;
+      return `CTR ${ctr.toFixed(2)}% \u043D\u0438\u0436\u0435 \u043C\u0438\u043D\u0438\u043C\u0443\u043C\u0430 ${condition.value}%`;
+    }
+    case "fast_spend":
+      return `\u0421\u043B\u0438\u0448\u043A\u043E\u043C \u0431\u044B\u0441\u0442\u0440\u044B\u0439 \u0440\u0430\u0441\u0445\u043E\u0434 \u0431\u044E\u0434\u0436\u0435\u0442\u0430 (\u043F\u043E\u0440\u043E\u0433 ${condition.value}%)`;
+    case "spend_no_leads":
+      return `\u041F\u043E\u0442\u0440\u0430\u0447\u0435\u043D\u043E ${metrics.spent}\u20BD \u0431\u0435\u0437 \u043B\u0438\u0434\u043E\u0432 (\u043B\u0438\u043C\u0438\u0442 ${condition.value}\u20BD)`;
+    case "budget_limit":
+      return `\u0420\u0430\u0441\u0445\u043E\u0434 ${metrics.spent}\u20BD \u043F\u0440\u0435\u0432\u044B\u0441\u0438\u043B \u0431\u044E\u0434\u0436\u0435\u0442 ${condition.value}\u20BD`;
+    case "low_impressions":
+      return `\u041F\u043E\u043A\u0430\u0437\u043E\u0432 ${metrics.impressions} \u043C\u0435\u043D\u044C\u0448\u0435 \u043C\u0438\u043D\u0438\u043C\u0443\u043C\u0430 ${condition.value}`;
+    case "clicks_no_leads":
+      return `${metrics.clicks} \u043A\u043B\u0438\u043A\u043E\u0432 \u0431\u0435\u0437 \u043B\u0438\u0434\u043E\u0432 (\u043F\u043E\u0440\u043E\u0433 ${condition.value})`;
+    default:
+      return `\u041F\u0440\u0430\u0432\u0438\u043B\u043E ${ruleType} \u0441\u0440\u0430\u0431\u043E\u0442\u0430\u043B\u043E`;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Main orchestrator — called after metrics sync
+// ═══════════════════════════════════════════════════════════
+
+export const checkAllRules = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const accounts = await ctx.runQuery(
+      internal.syncMetrics.listActiveAccounts
+    );
+    if (accounts.length === 0) return;
+
+    const date = todayStr();
+    const processedUsers = new Set<string>();
+    let totalTriggered = 0;
+
+    for (const account of accounts) {
+      const userIdStr = account.userId as string;
+      if (processedUsers.has(userIdStr)) continue;
+      processedUsers.add(userIdStr);
+
+      try {
+        const rules = await ctx.runQuery(
+          internal.ruleEngine.listActiveRules,
+          { userId: account.userId }
+        );
+
+        if (rules.length === 0) continue;
+
+        for (const rule of rules) {
+          for (const targetAccountId of rule.targetAccountIds) {
+            // Get today's metrics for all ads in this account
+            const dailyMetrics = await ctx.runQuery(
+              internal.ruleEngine.getAccountTodayMetrics,
+              { accountId: targetAccountId, date }
+            );
+
+            for (const metric of dailyMetrics) {
+              // Filter by targeted ads if specified
+              if (rule.targetAdIds && rule.targetAdIds.length > 0) {
+                if (!rule.targetAdIds.includes(metric.adId)) continue;
+              }
+
+              // Check minSamples requirement
+              if (rule.conditions.minSamples) {
+                const history = await ctx.runQuery(
+                  internal.ruleEngine.getRealtimeHistory,
+                  {
+                    adId: metric.adId,
+                    sinceTimestamp: Date.now() - 24 * 60 * 60 * 1000,
+                  }
+                );
+                if (history.length < rule.conditions.minSamples) continue;
+              }
+
+              // Build context for fast_spend
+              let context:
+                | {
+                    spendHistory?: SpendSnapshot[];
+                    dailyBudget?: number;
+                  }
+                | undefined;
+
+              if (rule.type === "fast_spend") {
+                const fifteenMinAgo = Date.now() - 15 * 60 * 1000;
+                const history = await ctx.runQuery(
+                  internal.ruleEngine.getRealtimeHistory,
+                  { adId: metric.adId, sinceTimestamp: fifteenMinAgo }
+                );
+                const dailyBudget = await ctx.runQuery(
+                  internal.ruleEngine.getCampaignDailyLimit,
+                  { adId: metric.adId }
+                );
+                context = {
+                  spendHistory: history.map((h) => ({
+                    spent: h.spent,
+                    timestamp: h.timestamp,
+                  })),
+                  dailyBudget: dailyBudget ?? undefined,
+                };
+              }
+
+              // Evaluate condition
+              const metricsSnapshot: MetricsSnapshot = {
+                spent: metric.spent,
+                leads: metric.leads,
+                impressions: metric.impressions,
+                clicks: metric.clicks,
+                cpl: metric.cpl ?? undefined,
+                ctr: metric.ctr ?? undefined,
+              };
+
+              const triggered = evaluateCondition(
+                rule.type,
+                rule.conditions,
+                metricsSnapshot,
+                context
+              );
+
+              if (!triggered) continue;
+
+              // Calculate savings
+              const now = new Date();
+              const minsLeft = minutesUntilEndOfDay(now);
+              const hoursElapsed =
+                now.getHours() + now.getMinutes() / 60;
+              const spentPerMinute =
+                hoursElapsed > 0
+                  ? metric.spent / (hoursElapsed * 60)
+                  : 0;
+              const savedAmount = calculateSavings(
+                spentPerMinute,
+                minsLeft
+              );
+
+              // Determine action type
+              const actionType:
+                | "stopped"
+                | "notified"
+                | "stopped_and_notified" =
+                rule.actions.stopAd && rule.actions.notify
+                  ? "stopped_and_notified"
+                  : rule.actions.stopAd
+                    ? "stopped"
+                    : "notified";
+
+              const reason = buildReason(
+                rule.type,
+                rule.conditions,
+                metricsSnapshot
+              );
+
+              // Try to stop the ad via VK API
+              let status: "success" | "failed" = "success";
+              let errorMessage: string | undefined;
+
+              if (rule.actions.stopAd) {
+                try {
+                  const accessToken = await ctx.runAction(
+                    internal.auth.getValidVkAdsToken,
+                    { userId: account.userId }
+                  );
+                  await ctx.runAction(api.vkApi.stopAd, {
+                    accessToken,
+                    adId: metric.adId,
+                    accountId: targetAccountId,
+                  });
+                } catch (err) {
+                  status = "failed";
+                  errorMessage =
+                    err instanceof Error
+                      ? err.message
+                      : "Unknown error";
+                }
+              }
+
+              // Create action log
+              await ctx.runMutation(
+                internal.ruleEngine.createActionLog,
+                {
+                  userId: account.userId,
+                  ruleId: rule._id,
+                  accountId: targetAccountId,
+                  adId: metric.adId,
+                  adName: `Ad ${metric.adId}`,
+                  actionType,
+                  reason,
+                  metricsSnapshot: {
+                    spent: metric.spent,
+                    leads: metric.leads,
+                    impressions: metric.impressions,
+                    clicks: metric.clicks,
+                    cpl: metric.cpl ?? undefined,
+                    ctr: metric.ctr ?? undefined,
+                  },
+                  savedAmount,
+                  status,
+                  errorMessage,
+                }
+              );
+
+              // Update rule trigger count
+              await ctx.runMutation(
+                internal.ruleEngine.incrementTriggerCount,
+                { ruleId: rule._id }
+              );
+
+              totalTriggered++;
+            }
+          }
+        }
+      } catch (error) {
+        console.error(
+          `[ruleEngine] Error checking rules for user ${userIdStr}:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+
+    if (totalTriggered > 0) {
+      console.log(`[ruleEngine] ${totalTriggered} rules triggered`);
+    }
+  },
+});
