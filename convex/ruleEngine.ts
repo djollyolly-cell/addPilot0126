@@ -461,6 +461,129 @@ export const getRecentEvents = query({
 });
 
 // ═══════════════════════════════════════════════════════════
+// Sprint 17 — Analytics queries
+// ═══════════════════════════════════════════════════════════
+
+/** Get daily savings data for line chart (within a date range) */
+export const getAnalyticsSavings = query({
+  args: {
+    userId: v.id("users"),
+    startDate: v.number(),
+    endDate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q
+          .eq("userId", args.userId)
+          .gte("createdAt", args.startDate)
+          .lte("createdAt", args.endDate)
+      )
+      .collect();
+
+    // Group by date
+    const byDate: Record<string, number> = {};
+    for (const log of logs) {
+      const date = new Date(log.createdAt).toISOString().slice(0, 10);
+      byDate[date] = (byDate[date] ?? 0) + log.savedAmount;
+    }
+
+    // Fill all dates in range
+    const result: { date: string; amount: number }[] = [];
+    const current = new Date(args.startDate);
+    const end = new Date(args.endDate);
+    while (current <= end) {
+      const dateStr = current.toISOString().slice(0, 10);
+      result.push({ date: dateStr, amount: byDate[dateStr] ?? 0 });
+      current.setDate(current.getDate() + 1);
+    }
+
+    return result;
+  },
+});
+
+/** Get action type breakdown for bar chart */
+export const getAnalyticsByType = query({
+  args: {
+    userId: v.id("users"),
+    startDate: v.number(),
+    endDate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q
+          .eq("userId", args.userId)
+          .gte("createdAt", args.startDate)
+          .lte("createdAt", args.endDate)
+      )
+      .collect();
+
+    const counts: Record<string, number> = {
+      stopped: 0,
+      notified: 0,
+      stopped_and_notified: 0,
+    };
+
+    for (const log of logs) {
+      counts[log.actionType] = (counts[log.actionType] ?? 0) + 1;
+    }
+
+    return [
+      { type: "stopped", label: "Остановки", count: counts.stopped },
+      { type: "notified", label: "Уведомления", count: counts.notified },
+      {
+        type: "stopped_and_notified",
+        label: "Стоп + увед.",
+        count: counts.stopped_and_notified,
+      },
+    ];
+  },
+});
+
+/** Get triggers per rule for pie chart */
+export const getAnalyticsTriggersByRule = query({
+  args: {
+    userId: v.id("users"),
+    startDate: v.number(),
+    endDate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q
+          .eq("userId", args.userId)
+          .gte("createdAt", args.startDate)
+          .lte("createdAt", args.endDate)
+      )
+      .collect();
+
+    // Group by ruleId
+    const byRule: Record<string, number> = {};
+    for (const log of logs) {
+      const key = log.ruleId as string;
+      byRule[key] = (byRule[key] ?? 0) + 1;
+    }
+
+    // Fetch rule names
+    const result: { ruleId: string; name: string; count: number }[] = [];
+    for (const [ruleId, count] of Object.entries(byRule)) {
+      const rule = await ctx.db.get(ruleId as Id<"rules">);
+      result.push({
+        ruleId,
+        name: rule?.name ?? "Удалённое правило",
+        count,
+      });
+    }
+
+    return result.sort((a, b) => b.count - a.count);
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
 // Sprint 11 — Revert action
 // ═══════════════════════════════════════════════════════════
 

@@ -1146,4 +1146,266 @@ describe("ruleEngine", () => {
     });
     expect(events).toHaveLength(3);
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 17 — Analytics queries
+  // ═══════════════════════════════════════════════════════════
+
+  // S17-DoD#1: getAnalyticsSavings returns daily savings for line chart
+  test("S17-DoD#1: getAnalyticsSavings returns daily savings data", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Analytics Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create action logs at specific time
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId,
+        ruleId,
+        accountId,
+        adId: "ad_a1",
+        adName: "Analytics Ad 1",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 2, cpl: 500 },
+        savedAmount: 500,
+        status: "success",
+        createdAt: now,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId,
+        ruleId,
+        accountId,
+        adId: "ad_a2",
+        adName: "Analytics Ad 2",
+        actionType: "notified",
+        reason: "CPL warning",
+        metricsSnapshot: { spent: 800, leads: 1, cpl: 800 },
+        savedAmount: 300,
+        status: "success",
+        createdAt: now,
+      });
+    });
+
+    const data = await t.query(api.ruleEngine.getAnalyticsSavings, {
+      userId,
+      startDate: now - 86400000,
+      endDate: now + 86400000,
+    });
+
+    expect(data.length).toBeGreaterThanOrEqual(1);
+    const totalSavings = data.reduce((s, d) => s + d.amount, 0);
+    expect(totalSavings).toBe(800);
+  });
+
+  // S17-DoD#2: getAnalyticsByType returns action type breakdown
+  test("S17-DoD#2: getAnalyticsByType returns action type counts", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Type Breakdown Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_t1", adName: "Stopped",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 1, cpl: 1000 },
+        savedAmount: 500, status: "success", createdAt: now,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_t2", adName: "Notified 1",
+        actionType: "notified",
+        reason: "CPL warning",
+        metricsSnapshot: { spent: 800, leads: 1, cpl: 800 },
+        savedAmount: 200, status: "success", createdAt: now,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_t3", adName: "Notified 2",
+        actionType: "notified",
+        reason: "CPL warning",
+        metricsSnapshot: { spent: 600, leads: 1, cpl: 600 },
+        savedAmount: 100, status: "success", createdAt: now,
+      });
+    });
+
+    const data = await t.query(api.ruleEngine.getAnalyticsByType, {
+      userId,
+      startDate: now - 86400000,
+      endDate: now + 86400000,
+    });
+
+    expect(data).toHaveLength(3);
+    const stopped = data.find((d) => d.type === "stopped");
+    const notified = data.find((d) => d.type === "notified");
+    expect(stopped?.count).toBe(1);
+    expect(notified?.count).toBe(2);
+  });
+
+  // S17-DoD#3: getAnalyticsTriggersByRule returns per-rule counts for pie chart
+  test("S17-DoD#3: getAnalyticsTriggersByRule returns per-rule counts", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId1 = await t.mutation(api.rules.create, {
+      userId,
+      name: "Rule Alpha",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+    const ruleId2 = await t.mutation(api.rules.create, {
+      userId,
+      name: "Rule Beta",
+      type: "min_ctr",
+      value: 2,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      // 3 triggers for rule Alpha
+      for (let i = 0; i < 3; i++) {
+        await ctx.db.insert("actionLogs", {
+          userId, ruleId: ruleId1, accountId,
+          adId: `ad_alpha_${i}`, adName: `Alpha Ad ${i}`,
+          actionType: "notified",
+          reason: "CPL exceeded",
+          metricsSnapshot: { spent: 1000, leads: 1, cpl: 1000 },
+          savedAmount: 500, status: "success", createdAt: now,
+        });
+      }
+      // 1 trigger for rule Beta
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId: ruleId2, accountId,
+        adId: "ad_beta_0", adName: "Beta Ad",
+        actionType: "stopped",
+        reason: "CTR low",
+        metricsSnapshot: { spent: 500, leads: 0, cpl: 0 },
+        savedAmount: 200, status: "success", createdAt: now,
+      });
+    });
+
+    const data = await t.query(api.ruleEngine.getAnalyticsTriggersByRule, {
+      userId,
+      startDate: now - 86400000,
+      endDate: now + 86400000,
+    });
+
+    expect(data).toHaveLength(2);
+    expect(data[0].name).toBe("Rule Alpha");
+    expect(data[0].count).toBe(3);
+    expect(data[1].name).toBe("Rule Beta");
+    expect(data[1].count).toBe(1);
+  });
+
+  // S17-DoD#4: getAnalyticsSavings returns zeros for period with no data
+  test("S17-DoD#4: getAnalyticsSavings returns empty for no-data period", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "noanalytics@test.com",
+      vkId: "noanalytics_user",
+      name: "No Analytics User",
+    });
+
+    const now = Date.now();
+    const data = await t.query(api.ruleEngine.getAnalyticsSavings, {
+      userId,
+      startDate: now - 7 * 86400000,
+      endDate: now,
+    });
+
+    // Should have entries for each day, all with amount 0
+    expect(data.length).toBeGreaterThanOrEqual(7);
+    expect(data.every((d) => d.amount === 0)).toBe(true);
+  });
+
+  // S17-DoD#5: getAnalyticsByType returns zeros for new user
+  test("S17-DoD#5: getAnalyticsByType returns zeros for new user", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "notype@test.com",
+      vkId: "notype_user",
+      name: "No Type User",
+    });
+
+    const now = Date.now();
+    const data = await t.query(api.ruleEngine.getAnalyticsByType, {
+      userId,
+      startDate: now - 86400000,
+      endDate: now,
+    });
+
+    expect(data).toHaveLength(3);
+    expect(data.every((d) => d.count === 0)).toBe(true);
+  });
+
+  // S17-DoD#6: getAnalyticsTriggersByRule returns empty for new user
+  test("S17-DoD#6: getAnalyticsTriggersByRule returns empty for new user", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "notrigger@test.com",
+      vkId: "notrigger_user",
+      name: "No Triggers User",
+    });
+
+    const now = Date.now();
+    const data = await t.query(api.ruleEngine.getAnalyticsTriggersByRule, {
+      userId,
+      startDate: now - 86400000,
+      endDate: now,
+    });
+
+    expect(data).toHaveLength(0);
+  });
+
+  // S17-DoD#7: getAnalyticsSavings fills missing dates with 0
+  test("S17-DoD#7: getAnalyticsSavings fills all dates in range", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "filldates@test.com",
+      vkId: "filldates_user",
+      name: "Fill Dates User",
+    });
+
+    const now = Date.now();
+    const startDate = now - 3 * 86400000;
+    const endDate = now;
+
+    const data = await t.query(api.ruleEngine.getAnalyticsSavings, {
+      userId,
+      startDate,
+      endDate,
+    });
+
+    // Should have at least 3 days
+    expect(data.length).toBeGreaterThanOrEqual(3);
+    // Each entry should have a date string and amount
+    for (const entry of data) {
+      expect(entry.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(entry.amount).toBe(0);
+    }
+  });
 });
