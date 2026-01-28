@@ -89,6 +89,98 @@ export function parseCallbackData(
 }
 
 /**
+ * Check if the current time falls within quiet hours.
+ * Supports overnight ranges (e.g., 23:00 - 07:00).
+ * "00:00"-"00:00" means quiet hours are disabled.
+ * Returns true if notifications should be suppressed.
+ */
+export function isQuietHours(
+  nowHHMM: string, // "HH:MM"
+  startHHMM: string, // "HH:MM"
+  endHHMM: string // "HH:MM"
+): boolean {
+  // "00:00"-"00:00" = disabled
+  if (startHHMM === "00:00" && endHHMM === "00:00") return false;
+  // Same start and end (but not 00:00) = 24h quiet
+  if (startHHMM === endHHMM) return true;
+
+  if (startHHMM <= endHHMM) {
+    // Same-day range: e.g. 09:00 - 18:00
+    return nowHHMM >= startHHMM && nowHHMM < endHHMM;
+  }
+  // Overnight range: e.g. 23:00 - 07:00
+  return nowHHMM >= startHHMM || nowHHMM < endHHMM;
+}
+
+/** Action log summary for daily digest */
+export interface DigestActionLogSummary {
+  adName: string;
+  actionType: string;
+  reason: string;
+  savedAmount: number;
+  metricsSnapshot: {
+    spent: number;
+    leads: number;
+    cpl?: number;
+    ctr?: number;
+  };
+}
+
+/**
+ * Format daily digest message from action log summaries.
+ * Returns empty string if no events.
+ */
+export function formatDailyDigest(
+  events: DigestActionLogSummary[],
+  dateStr: string // "DD.MM.YYYY"
+): string {
+  if (events.length === 0) return "";
+
+  const totalSaved = events.reduce((sum, e) => sum + e.savedAmount, 0);
+  const totalSpent = events.reduce((sum, e) => sum + e.metricsSnapshot.spent, 0);
+  const stoppedCount = events.filter(
+    (e) => e.actionType === "stopped" || e.actionType === "stopped_and_notified"
+  ).length;
+  const notifyCount = events.filter((e) => e.actionType === "notified").length;
+
+  const lines: string[] = [
+    `📊 <b>Дайджест за ${dateStr}</b>`,
+    "",
+    `Сработало правил: ${events.length}`,
+  ];
+
+  if (stoppedCount > 0) {
+    lines.push(`🛑 Остановлено: ${stoppedCount}`);
+  }
+  if (notifyCount > 0) {
+    lines.push(`⚠️ Предупреждений: ${notifyCount}`);
+  }
+
+  lines.push("");
+  lines.push(`💰 Общий расход: ${totalSpent.toFixed(0)}₽`);
+  if (totalSaved > 0) {
+    lines.push(`✅ Сэкономлено: ~${totalSaved.toFixed(0)}₽`);
+  }
+
+  lines.push("");
+  lines.push("<b>Детали:</b>");
+
+  for (const event of events.slice(0, 10)) {
+    const emoji =
+      event.actionType === "stopped" || event.actionType === "stopped_and_notified"
+        ? "🛑"
+        : "⚠️";
+    lines.push(`${emoji} ${event.adName} — ${event.reason}`);
+  }
+
+  if (events.length > 10) {
+    lines.push(`...и ещё ${events.length - 10}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
  * Parse /start command and extract the payload token.
  * "/start abc123" -> "abc123"
  * "/start" (no payload) -> null
@@ -808,6 +900,39 @@ export const sendRuleNotification = internalAction({
 
     const now = Date.now();
 
+    // Check quiet hours (non-critical only)
+    if (args.priority !== "critical") {
+      const settings = await ctx.runQuery(
+        internal.userSettings.getInternal,
+        { userId: args.userId }
+      );
+      if (
+        settings?.quietHoursEnabled &&
+        settings.quietHoursStart &&
+        settings.quietHoursEnd
+      ) {
+        // Get current time in user's timezone (default MSK)
+        const tz = settings.timezone || "Europe/Moscow";
+        const nowDate = new Date(now);
+        const timeStr = nowDate.toLocaleTimeString("en-GB", {
+          timeZone: tz,
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        });
+        if (isQuietHours(timeStr, settings.quietHoursStart, settings.quietHoursEnd)) {
+          // Store notification but don't send — will be included in digest
+          await ctx.runMutation(internal.telegram.storePendingNotification, {
+            userId: args.userId,
+            event: args.event,
+            priority: args.priority,
+            createdAt: now,
+          });
+          return { sent: false, reason: "quiet_hours" };
+        }
+      }
+    }
+
     if (args.priority === "critical") {
       // Critical → send immediately
       const notifId = await ctx.runMutation(
@@ -982,5 +1107,123 @@ export const sendMessageWithRetry = internalAction({
     }
 
     throw lastError ?? new Error("Telegram send failed");
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
+// Sprint 12 — Daily Digest & Quiet Hours
+// ═══════════════════════════════════════════════════════════
+
+/** Internal: get action logs for a user within a date range */
+export const getDigestActionLogs = internalQuery({
+  args: {
+    userId: v.id("users"),
+    since: v.number(),
+    until: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q.eq("userId", args.userId).gte("createdAt", args.since)
+      )
+      .collect();
+    return logs.filter((l) => l.createdAt < args.until);
+  },
+});
+
+/** Internal: get all users with Telegram connected and digest enabled */
+export const getDigestRecipients = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    // Get all users with telegramChatId
+    const users = await ctx.db.query("users").collect();
+    const connectedUsers = users.filter((u) => !!u.telegramChatId);
+
+    const result: Array<{
+      userId: typeof connectedUsers[0]["_id"];
+      chatId: string;
+    }> = [];
+
+    for (const user of connectedUsers) {
+      // Check if user has digest enabled (default: true)
+      const settings = await ctx.db
+        .query("userSettings")
+        .withIndex("by_userId", (q) => q.eq("userId", user._id))
+        .first();
+
+      // If no settings exist, default to digest enabled
+      if (!settings || settings.digestEnabled) {
+        result.push({
+          userId: user._id,
+          chatId: user.telegramChatId!,
+        });
+      }
+    }
+
+    return result;
+  },
+});
+
+/**
+ * Send daily digest to all users with Telegram connected.
+ * Called by cron at 09:00 MSK (06:00 UTC).
+ */
+export const sendDailyDigest = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const recipients = await ctx.runQuery(
+      internal.telegram.getDigestRecipients,
+      {}
+    );
+
+    if (recipients.length === 0) return { sent: 0 };
+
+    // Yesterday 00:00 to today 00:00 (UTC-based, approximation for MSK)
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const since = now - dayMs;
+    const until = now;
+
+    // Format date string for digest header
+    const date = new Date(since);
+    const dateStr = `${String(date.getDate()).padStart(2, "0")}.${String(date.getMonth() + 1).padStart(2, "0")}.${date.getFullYear()}`;
+
+    let sentCount = 0;
+
+    for (const recipient of recipients) {
+      const logs = await ctx.runQuery(
+        internal.telegram.getDigestActionLogs,
+        { userId: recipient.userId, since, until }
+      );
+
+      if (logs.length === 0) continue; // S12-DoD#7: No events → no digest
+
+      const events: DigestActionLogSummary[] = logs.map((log: any) => ({
+        adName: log.adName,
+        actionType: log.actionType,
+        reason: log.reason,
+        savedAmount: log.savedAmount,
+        metricsSnapshot: log.metricsSnapshot,
+      }));
+
+      const message = formatDailyDigest(events, dateStr);
+      if (!message) continue;
+
+      try {
+        await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+          chatId: recipient.chatId,
+          text: message,
+        });
+        sentCount++;
+      } catch (err) {
+        console.error(
+          `[telegram] Failed to send digest to ${recipient.userId}:`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
+
+    return { sent: sentCount };
   },
 });

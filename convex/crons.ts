@@ -10,4 +10,11 @@ crons.interval(
   internal.syncMetrics.syncAll
 );
 
+// Daily digest at 06:00 UTC (09:00 MSK)
+crons.cron(
+  "daily-digest",
+  "0 6 * * *",
+  internal.telegram.sendDailyDigest
+);
+
 export default crons;

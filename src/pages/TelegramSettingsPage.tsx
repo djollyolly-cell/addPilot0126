@@ -18,6 +18,8 @@ import {
   ExternalLink,
   Copy,
   Link2,
+  Moon,
+  Clock,
 } from "lucide-react";
 import { Id } from "../../convex/_generated/dataModel";
 
@@ -37,14 +39,34 @@ export function TelegramSettingsPage() {
   );
   const generateToken = useMutation(api.telegram.generateLinkToken);
 
+  const userSettings = useQuery(
+    api.userSettings.get,
+    userId ? { userId } : "skip"
+  );
+  const setQuietHours = useMutation(api.userSettings.setQuietHours);
+  const setDigestEnabled = useMutation(api.userSettings.setDigestEnabled);
+
   const [linkToken, setLinkToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [quietEnabled, setQuietEnabled] = useState(false);
+  const [quietStart, setQuietStart] = useState("23:00");
+  const [quietEnd, setQuietEnd] = useState("07:00");
+  const [digestOn, setDigestOn] = useState(true);
 
   useEffect(() => {
     if (existingToken) {
       setLinkToken(existingToken);
     }
   }, [existingToken]);
+
+  useEffect(() => {
+    if (userSettings) {
+      setQuietEnabled(userSettings.quietHoursEnabled);
+      setQuietStart(userSettings.quietHoursStart ?? "23:00");
+      setQuietEnd(userSettings.quietHoursEnd ?? "07:00");
+      setDigestOn(userSettings.digestEnabled);
+    }
+  }, [userSettings]);
 
   const handleGenerateToken = async () => {
     if (!userId) return;
@@ -128,6 +150,131 @@ export function TelegramSettingsPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Quiet Hours */}
+      {connectionStatus?.connected && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Moon className="h-5 w-5" />
+              <div>
+                <CardTitle className="text-lg">Тихие часы</CardTitle>
+                <CardDescription>
+                  Не отправлять уведомления в указанное время
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={quietEnabled}
+                onChange={async (e) => {
+                  const enabled = e.target.checked;
+                  setQuietEnabled(enabled);
+                  if (userId) {
+                    await setQuietHours({
+                      userId,
+                      enabled,
+                      start: quietStart,
+                      end: quietEnd,
+                    });
+                  }
+                }}
+                className="h-4 w-4 rounded border-gray-300"
+                data-testid="quiet-hours-toggle"
+              />
+              <span className="text-sm font-medium">Включить тихие часы</span>
+            </label>
+
+            {quietEnabled && (
+              <div className="flex items-center gap-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">С</label>
+                  <input
+                    type="time"
+                    value={quietStart}
+                    onChange={async (e) => {
+                      const val = e.target.value;
+                      setQuietStart(val);
+                      if (userId) {
+                        await setQuietHours({
+                          userId,
+                          enabled: true,
+                          start: val,
+                          end: quietEnd,
+                        });
+                      }
+                    }}
+                    className="block w-28 px-2 py-1 border rounded text-sm"
+                    data-testid="quiet-hours-start"
+                  />
+                </div>
+                <span className="text-muted-foreground mt-5">—</span>
+                <div className="space-y-1">
+                  <label className="text-xs text-muted-foreground">До</label>
+                  <input
+                    type="time"
+                    value={quietEnd}
+                    onChange={async (e) => {
+                      const val = e.target.value;
+                      setQuietEnd(val);
+                      if (userId) {
+                        await setQuietHours({
+                          userId,
+                          enabled: true,
+                          start: quietStart,
+                          end: val,
+                        });
+                      }
+                    }}
+                    className="block w-28 px-2 py-1 border rounded text-sm"
+                    data-testid="quiet-hours-end"
+                  />
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Daily Digest */}
+      {connectionStatus?.connected && (
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              <div>
+                <CardTitle className="text-lg">Дайджест</CardTitle>
+                <CardDescription>
+                  Ежедневная сводка за предыдущий день
+                </CardDescription>
+              </div>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <label className="flex items-center gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={digestOn}
+                onChange={async (e) => {
+                  const enabled = e.target.checked;
+                  setDigestOn(enabled);
+                  if (userId) {
+                    await setDigestEnabled({ userId, enabled });
+                  }
+                }}
+                className="h-4 w-4 rounded border-gray-300"
+                data-testid="digest-toggle"
+              />
+              <span className="text-sm font-medium">
+                Отправлять дайджест в 09:00 (МСК)
+              </span>
+            </label>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Connection Flow */}
       {!connectionStatus?.connected && (

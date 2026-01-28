@@ -10,7 +10,10 @@ import {
   formatGroupedNotification,
   buildInlineKeyboard,
   parseCallbackData,
+  isQuietHours,
+  formatDailyDigest,
   RuleNotificationEvent,
+  DigestActionLogSummary,
 } from "./telegram";
 import { REVERT_TIMEOUT_MS } from "./ruleEngine";
 
@@ -839,5 +842,218 @@ describe("telegram", () => {
 
     expect(result.success).toBe(false);
     expect(result.reason).toBe("not_stoppable");
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 12 — Telegram: дайджест и тихие часы
+  // ═══════════════════════════════════════════════════════════
+
+  // S12-DoD#1: sendDailyDigest — формирование дайджеста (сводка за день)
+  test("S12-DoD#1: formatDailyDigest produces daily summary", () => {
+    const events: DigestActionLogSummary[] = [
+      {
+        adName: "Баннер 1",
+        actionType: "stopped",
+        reason: "CPL 500₽ превысил лимит",
+        savedAmount: 1500,
+        metricsSnapshot: { spent: 3000, leads: 6, cpl: 500 },
+      },
+      {
+        adName: "Баннер 2",
+        actionType: "notified",
+        reason: "CTR 0.3% ниже минимума",
+        savedAmount: 0,
+        metricsSnapshot: { spent: 800, leads: 0, ctr: 0.3 },
+      },
+      {
+        adName: "Баннер 3",
+        actionType: "stopped_and_notified",
+        reason: "Бюджет исчерпан",
+        savedAmount: 2000,
+        metricsSnapshot: { spent: 5000, leads: 3 },
+      },
+    ];
+
+    const message = formatDailyDigest(events, "27.01.2026");
+
+    // Contains date header
+    expect(message).toContain("Дайджест за 27.01.2026");
+    // Contains rule count
+    expect(message).toContain("Сработало правил: 3");
+    // Contains stopped count (2: stopped + stopped_and_notified)
+    expect(message).toContain("Остановлено: 2");
+    // Contains warning count
+    expect(message).toContain("Предупреждений: 1");
+    // Contains total spend
+    expect(message).toContain("8800₽");
+    // Contains total savings (1500 + 2000 = 3500)
+    expect(message).toContain("3500₽");
+    // Contains details for each ad
+    expect(message).toContain("Баннер 1");
+    expect(message).toContain("Баннер 2");
+    expect(message).toContain("Баннер 3");
+  });
+
+  // S12-DoD#2: Тихие часы блокируют — 23:00-07:00, now=02:00 → не отправляется
+  test("S12-DoD#2: isQuietHours blocks at 02:00 in 23:00-07:00 range", () => {
+    expect(isQuietHours("02:00", "23:00", "07:00")).toBe(true);
+  });
+
+  test("S12-DoD#2: isQuietHours allows at 12:00 in 23:00-07:00 range", () => {
+    expect(isQuietHours("12:00", "23:00", "07:00")).toBe(false);
+  });
+
+  test("S12-DoD#2: isQuietHours blocks at 23:30 in 23:00-07:00 range", () => {
+    expect(isQuietHours("23:30", "23:00", "07:00")).toBe(true);
+  });
+
+  test("S12-DoD#2: isQuietHours allows at 07:00 (end is exclusive)", () => {
+    expect(isQuietHours("07:00", "23:00", "07:00")).toBe(false);
+  });
+
+  test("S12-DoD#2: isQuietHours same-day range (09:00-18:00)", () => {
+    expect(isQuietHours("12:00", "09:00", "18:00")).toBe(true);
+    expect(isQuietHours("08:00", "09:00", "18:00")).toBe(false);
+    expect(isQuietHours("18:00", "09:00", "18:00")).toBe(false);
+  });
+
+  // S12-DoD#3: Cron daily-digest — sendDailyDigest action exists
+  test("S12-DoD#3: sendDailyDigest internal action exists", () => {
+    expect(internal.telegram.sendDailyDigest).toBeDefined();
+  });
+
+  // S12-DoD#3: getDigestRecipients returns connected users with digest enabled
+  test("S12-DoD#3: getDigestRecipients returns users with Telegram connected", async () => {
+    const t = convexTest(schema);
+    const userId = await createTestUser(t);
+
+    // Connect Telegram
+    const token = await t.mutation(api.telegram.generateLinkToken, { userId });
+    await t.mutation(api.telegram.processStartCommand, {
+      chatId: "digest_chat_1",
+      token,
+    });
+
+    const recipients = await t.query(internal.telegram.getDigestRecipients, {});
+    expect(recipients.length).toBeGreaterThanOrEqual(1);
+    const found = recipients.find((r: any) => r.chatId === "digest_chat_1");
+    expect(found).toBeDefined();
+  });
+
+  // S12-DoD#3: getDigestActionLogs returns logs within date range
+  test("S12-DoD#3: getDigestActionLogs returns logs within range", async () => {
+    const t = convexTest(schema);
+    const userId = await createTestUser(t);
+
+    const accountId = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "digest_acc",
+      name: "Digest Account",
+      accessToken: "tok",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Digest Rule",
+      type: "cpl_limit",
+      value: 100,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+
+    // Create action log
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_digest",
+      adName: "Digest Ad",
+      actionType: "notified",
+      reason: "CPL high",
+      metricsSnapshot: { spent: 500, leads: 1 },
+      savedAmount: 0,
+      status: "success",
+    });
+
+    const logs = await t.query(internal.telegram.getDigestActionLogs, {
+      userId,
+      since: now - 24 * 60 * 60 * 1000,
+      until: now + 60000,
+    });
+
+    expect(logs.length).toBe(1);
+    expect(logs[0].adName).toBe("Digest Ad");
+  });
+
+  // S12-DoD#7: Нет событий за день — дайджест не отправляется
+  test("S12-DoD#7: formatDailyDigest returns empty for 0 events", () => {
+    const message = formatDailyDigest([], "27.01.2026");
+    expect(message).toBe("");
+  });
+
+  // S12-DoD#8: 00:00-00:00 — тихие часы отключены
+  test("S12-DoD#8: isQuietHours with 00:00-00:00 is disabled", () => {
+    expect(isQuietHours("02:00", "00:00", "00:00")).toBe(false);
+    expect(isQuietHours("12:00", "00:00", "00:00")).toBe(false);
+    expect(isQuietHours("23:59", "00:00", "00:00")).toBe(false);
+  });
+
+  // S12: setQuietHours mutation works
+  test("S12: setQuietHours creates settings and saves quiet hours", async () => {
+    const t = convexTest(schema);
+    const userId = await createTestUser(t);
+
+    await t.mutation(api.userSettings.setQuietHours, {
+      userId,
+      enabled: true,
+      start: "23:00",
+      end: "07:00",
+    });
+
+    const settings = await t.query(api.userSettings.get, { userId });
+    expect(settings).toBeDefined();
+    expect(settings!.quietHoursEnabled).toBe(true);
+    expect(settings!.quietHoursStart).toBe("23:00");
+    expect(settings!.quietHoursEnd).toBe("07:00");
+  });
+
+  // S12: setDigestEnabled mutation works
+  test("S12: setDigestEnabled creates settings and saves digest pref", async () => {
+    const t = convexTest(schema);
+    const userId = await createTestUser(t);
+
+    await t.mutation(api.userSettings.setDigestEnabled, {
+      userId,
+      enabled: false,
+    });
+
+    const settings = await t.query(api.userSettings.get, { userId });
+    expect(settings).toBeDefined();
+    expect(settings!.digestEnabled).toBe(false);
+  });
+
+  // S12: Digest recipient excluded when digestEnabled=false
+  test("S12: getDigestRecipients excludes users with digest disabled", async () => {
+    const t = convexTest(schema);
+    const userId = await createTestUser(t);
+
+    // Connect Telegram
+    const token = await t.mutation(api.telegram.generateLinkToken, { userId });
+    await t.mutation(api.telegram.processStartCommand, {
+      chatId: "no_digest_chat",
+      token,
+    });
+
+    // Disable digest
+    await t.mutation(api.userSettings.setDigestEnabled, {
+      userId,
+      enabled: false,
+    });
+
+    const recipients = await t.query(internal.telegram.getDigestRecipients, {});
+    const found = recipients.find((r: any) => r.chatId === "no_digest_chat");
+    expect(found).toBeUndefined();
   });
 });
