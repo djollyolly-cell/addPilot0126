@@ -527,6 +527,37 @@ export const checkAllRules = internalAction({
                 { ruleId: rule._id }
               );
 
+              // Send Telegram notification if notify is enabled
+              if (rule.actions.notify) {
+                try {
+                  await ctx.runAction(
+                    internal.telegram.sendRuleNotification,
+                    {
+                      userId: account.userId,
+                      event: {
+                        ruleName: rule.name,
+                        adName: `Ad ${metric.adId}`,
+                        reason,
+                        actionType,
+                        savedAmount,
+                        metrics: {
+                          spent: metric.spent,
+                          leads: metric.leads,
+                          cpl: metric.cpl ?? undefined,
+                          ctr: metric.ctr ?? undefined,
+                        },
+                      },
+                      priority: rule.actions.stopAd ? "critical" : "standard",
+                    }
+                  );
+                } catch (notifErr) {
+                  console.error(
+                    `[ruleEngine] Failed to send notification for rule ${rule._id}:`,
+                    notifErr instanceof Error ? notifErr.message : notifErr
+                  );
+                }
+              }
+
               totalTriggered++;
             }
           }

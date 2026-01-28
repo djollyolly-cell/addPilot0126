@@ -326,3 +326,407 @@ export const getConnectionStatus = query({
     };
   },
 });
+
+// ═══════════════════════════════════════════════════════════
+// Sprint 10 — Rule Notifications
+// ═══════════════════════════════════════════════════════════
+
+/** Notification event data */
+export interface RuleNotificationEvent {
+  ruleName: string;
+  adName: string;
+  campaignName?: string;
+  reason: string;
+  actionType: "stopped" | "notified" | "stopped_and_notified";
+  savedAmount: number;
+  metrics: {
+    spent: number;
+    leads: number;
+    cpl?: number;
+    ctr?: number;
+  };
+}
+
+/**
+ * Format a single rule notification message (pure function).
+ * Uses PRD-specified format with emoji.
+ */
+export function formatRuleNotification(event: RuleNotificationEvent): string {
+  const actionEmoji =
+    event.actionType === "stopped" || event.actionType === "stopped_and_notified"
+      ? "🛑"
+      : "⚠️";
+
+  const actionText =
+    event.actionType === "stopped" || event.actionType === "stopped_and_notified"
+      ? "Остановлено"
+      : "Требует внимания";
+
+  const lines: string[] = [
+    `${actionEmoji} <b>${actionText}</b>`,
+    "",
+    `📋 Правило: ${event.ruleName}`,
+    `📢 Объявление: ${event.adName}`,
+  ];
+
+  if (event.campaignName) {
+    lines.push(`📁 Кампания: ${event.campaignName}`);
+  }
+
+  lines.push(`💡 Причина: ${event.reason}`);
+  lines.push("");
+  lines.push(`💰 Потрачено: ${event.metrics.spent}₽`);
+
+  if (event.metrics.cpl !== undefined) {
+    lines.push(`📊 CPL: ${event.metrics.cpl.toFixed(0)}₽`);
+  }
+  if (event.metrics.ctr !== undefined) {
+    lines.push(`📈 CTR: ${event.metrics.ctr.toFixed(2)}%`);
+  }
+
+  if (event.savedAmount > 0) {
+    lines.push("");
+    lines.push(`✅ Сэкономлено: ~${event.savedAmount.toFixed(0)}₽`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Format a grouped notification for multiple events (pure function).
+ */
+export function formatGroupedNotification(
+  events: RuleNotificationEvent[]
+): string {
+  if (events.length === 0) return "";
+  if (events.length === 1) return formatRuleNotification(events[0]);
+
+  const totalSaved = events.reduce((sum, e) => sum + e.savedAmount, 0);
+  const stoppedCount = events.filter(
+    (e) => e.actionType === "stopped" || e.actionType === "stopped_and_notified"
+  ).length;
+
+  const lines: string[] = [
+    `🔔 <b>Сработало правил: ${events.length}</b>`,
+    "",
+  ];
+
+  for (const event of events) {
+    const emoji =
+      event.actionType === "stopped" || event.actionType === "stopped_and_notified"
+        ? "🛑"
+        : "⚠️";
+    lines.push(`${emoji} ${event.adName} — ${event.reason}`);
+  }
+
+  lines.push("");
+  if (stoppedCount > 0) {
+    lines.push(`Остановлено: ${stoppedCount} объявлений`);
+  }
+  if (totalSaved > 0) {
+    lines.push(`✅ Сэкономлено: ~${totalSaved.toFixed(0)}₽`);
+  }
+
+  return lines.join("\n");
+}
+
+/** Internal: get user's chatId */
+export const getUserChatId = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    return user?.telegramChatId ?? null;
+  },
+});
+
+/** Internal: store a pending notification event for grouping */
+export const storePendingNotification = internalMutation({
+  args: {
+    userId: v.id("users"),
+    event: v.object({
+      ruleName: v.string(),
+      adName: v.string(),
+      campaignName: v.optional(v.string()),
+      reason: v.string(),
+      actionType: v.union(
+        v.literal("stopped"),
+        v.literal("notified"),
+        v.literal("stopped_and_notified")
+      ),
+      savedAmount: v.number(),
+      metrics: v.object({
+        spent: v.number(),
+        leads: v.number(),
+        cpl: v.optional(v.number()),
+        ctr: v.optional(v.number()),
+      }),
+    }),
+    priority: v.union(v.literal("critical"), v.literal("standard")),
+    createdAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("notifications", {
+      userId: args.userId,
+      type: args.priority === "critical" ? "critical" : "standard",
+      channel: "telegram",
+      title: `Правило: ${args.event.ruleName}`,
+      message: formatRuleNotification(args.event),
+      data: args.event,
+      status: "pending",
+      createdAt: args.createdAt,
+    });
+  },
+});
+
+/** Internal: get pending Telegram notifications for a user within a time window */
+export const getPendingNotifications = internalQuery({
+  args: {
+    userId: v.id("users"),
+    since: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const all = await ctx.db
+      .query("notifications")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    return all.filter(
+      (n) =>
+        n.channel === "telegram" &&
+        n.status === "pending" &&
+        n.createdAt >= args.since
+    );
+  },
+});
+
+/** Internal: mark notifications as sent */
+export const markNotificationsSent = internalMutation({
+  args: {
+    notificationIds: v.array(v.id("notifications")),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    for (const id of args.notificationIds) {
+      await ctx.db.patch(id, { status: "sent", sentAt: now });
+    }
+  },
+});
+
+/** Internal: mark notification as failed */
+export const markNotificationFailed = internalMutation({
+  args: {
+    notificationId: v.id("notifications"),
+    errorMessage: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.notificationId, {
+      status: "failed",
+      errorMessage: args.errorMessage,
+    });
+  },
+});
+
+/**
+ * Send a rule notification via Telegram.
+ * - critical priority → send immediately
+ * - standard priority → store as pending, flush grouped later
+ * - missing chatId → skip silently
+ */
+export const sendRuleNotification = internalAction({
+  args: {
+    userId: v.id("users"),
+    event: v.object({
+      ruleName: v.string(),
+      adName: v.string(),
+      campaignName: v.optional(v.string()),
+      reason: v.string(),
+      actionType: v.union(
+        v.literal("stopped"),
+        v.literal("notified"),
+        v.literal("stopped_and_notified")
+      ),
+      savedAmount: v.number(),
+      metrics: v.object({
+        spent: v.number(),
+        leads: v.number(),
+        cpl: v.optional(v.number()),
+        ctr: v.optional(v.number()),
+      }),
+    }),
+    priority: v.union(v.literal("critical"), v.literal("standard")),
+  },
+  handler: async (ctx, args) => {
+    // Check if user has Telegram connected
+    const chatId = await ctx.runQuery(internal.telegram.getUserChatId, {
+      userId: args.userId,
+    });
+
+    if (!chatId) {
+      console.warn(
+        `[telegram] User ${args.userId} has no telegramChatId, skipping notification`
+      );
+      return { sent: false, reason: "no_chat_id" };
+    }
+
+    const now = Date.now();
+
+    if (args.priority === "critical") {
+      // Critical → send immediately
+      const notifId = await ctx.runMutation(
+        internal.telegram.storePendingNotification,
+        {
+          userId: args.userId,
+          event: args.event,
+          priority: args.priority,
+          createdAt: now,
+        }
+      );
+
+      const message = formatRuleNotification(args.event);
+
+      try {
+        await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+          chatId,
+          text: message,
+        });
+        await ctx.runMutation(internal.telegram.markNotificationsSent, {
+          notificationIds: [notifId],
+        });
+        return { sent: true, grouped: false };
+      } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : "Unknown error";
+        await ctx.runMutation(internal.telegram.markNotificationFailed, {
+          notificationId: notifId,
+          errorMessage: errorMsg,
+        });
+        return { sent: false, reason: errorMsg };
+      }
+    }
+
+    // Standard → store pending, then check if we should flush
+    await ctx.runMutation(internal.telegram.storePendingNotification, {
+      userId: args.userId,
+      event: args.event,
+      priority: args.priority,
+      createdAt: now,
+    });
+
+    // Flush pending notifications (group within 5-min window)
+    await ctx.runAction(internal.telegram.flushPendingNotifications, {
+      userId: args.userId,
+    });
+
+    return { sent: true, grouped: true };
+  },
+});
+
+/** Flush pending notifications for a user — group into one message */
+export const flushPendingNotifications = internalAction({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const chatId = await ctx.runQuery(internal.telegram.getUserChatId, {
+      userId: args.userId,
+    });
+    if (!chatId) return;
+
+    const fiveMinAgo = Date.now() - 5 * 60 * 1000;
+    const pending = await ctx.runQuery(
+      internal.telegram.getPendingNotifications,
+      { userId: args.userId, since: fiveMinAgo }
+    );
+
+    if (pending.length === 0) return;
+
+    // Reconstruct events from stored data
+    const events: RuleNotificationEvent[] = pending
+      .map((n) => n.data as RuleNotificationEvent | null)
+      .filter((e): e is RuleNotificationEvent => e !== null);
+
+    const message =
+      events.length > 1
+        ? formatGroupedNotification(events)
+        : events.length === 1
+          ? formatRuleNotification(events[0])
+          : pending[0].message;
+
+    try {
+      await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+        chatId,
+        text: message,
+      });
+      await ctx.runMutation(internal.telegram.markNotificationsSent, {
+        notificationIds: pending.map((n) => n._id),
+      });
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      for (const n of pending) {
+        await ctx.runMutation(internal.telegram.markNotificationFailed, {
+          notificationId: n._id,
+          errorMessage: errorMsg,
+        });
+      }
+    }
+  },
+});
+
+/**
+ * Send a Telegram message with retry on 429 (rate limit).
+ * Retries up to 3 times with Retry-After delay.
+ */
+export const sendMessageWithRetry = internalAction({
+  args: {
+    chatId: v.string(),
+    text: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+      throw new Error("TELEGRAM_BOT_TOKEN not configured");
+    }
+
+    const maxRetries = 3;
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const response = await fetch(
+        `${TELEGRAM_API_BASE}${botToken}/sendMessage`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: args.chatId,
+            text: args.text,
+            parse_mode: "HTML",
+          }),
+        }
+      );
+
+      if (response.ok) {
+        return await response.json();
+      }
+
+      if (response.status === 429 && attempt < maxRetries) {
+        // Parse Retry-After header
+        const retryAfterHeader = response.headers.get("Retry-After");
+        const retryAfterSec = retryAfterHeader
+          ? parseInt(retryAfterHeader, 10)
+          : 1 + attempt;
+        const delayMs = Math.min(retryAfterSec * 1000, 30000);
+
+        console.warn(
+          `[telegram] Rate limited (429), retry after ${retryAfterSec}s (attempt ${attempt + 1}/${maxRetries})`
+        );
+
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
+      }
+
+      const errorText = await response.text();
+      lastError = new Error(
+        `Telegram API Error ${response.status}: ${errorText}`
+      );
+      break;
+    }
+
+    throw lastError ?? new Error("Telegram send failed");
+  },
+});
