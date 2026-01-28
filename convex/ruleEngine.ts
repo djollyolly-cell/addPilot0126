@@ -7,6 +7,7 @@ import {
   query,
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 
 // ═══════════════════════════════════════════════════════════
 // Pure functions — exported for direct unit testing
@@ -571,10 +572,12 @@ export const getAnalyticsTriggersByRule = query({
     // Fetch rule names
     const result: { ruleId: string; name: string; count: number }[] = [];
     for (const [ruleId, count] of Object.entries(byRule)) {
-      const rule = await ctx.db.get(ruleId as Id<"rules">);
+      const ruleDoc = await ctx.db.get(ruleId as Id<"rules">);
+      const ruleName =
+        ruleDoc && "name" in ruleDoc ? ruleDoc.name : "Удалённое правило";
       result.push({
         ruleId,
-        name: rule?.name ?? "Удалённое правило",
+        name: ruleName as string,
         count,
       });
     }
