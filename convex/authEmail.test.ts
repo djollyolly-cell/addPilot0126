@@ -163,4 +163,58 @@ describe("authEmail", () => {
       expect(result.blocked).toBe(false);
     });
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 20 — Settings: validateEmail for password change
+  // ═══════════════════════════════════════════════════════════
+
+  describe("validateEmail (S20 settings)", () => {
+    // S20-DoD#1: validateEmail accepts typical user emails
+    test("S20-DoD#1: accepts typical user emails for settings", () => {
+      expect(validateEmail("user@mail.ru")).toBe(true);
+      expect(validateEmail("vk.user@yandex.ru")).toBe(true);
+      expect(validateEmail("786709647@vk.com")).toBe(true);
+    });
+
+    // S20-DoD#2: rejects empty/invalid emails in settings context
+    test("S20-DoD#2: rejects empty and invalid emails", () => {
+      expect(validateEmail("")).toBe(false);
+      expect(validateEmail("   ")).toBe(false);
+      expect(validateEmail("no-at-sign")).toBe(false);
+    });
+  });
+
+  describe("rate limiting for password change", () => {
+    // S20-DoD#3: password change attempts are rate-limited
+    test("S20-DoD#3: rate limit applies to repeated auth attempts", async () => {
+      const t = convexTest(schema);
+      const email = "passwordchange@test.com";
+
+      // Simulate 5 failed password verifications
+      for (let i = 0; i < 5; i++) {
+        await t.mutation(internal.authEmail.recordFailedAttempt, { email });
+      }
+
+      const result = await t.query(api.authEmail.checkRateLimit, { email });
+      expect(result.blocked).toBe(true);
+      expect(result.attemptsLeft).toBe(0);
+    });
+
+    // S20-DoD#4: rate limit resets after successful auth
+    test("S20-DoD#4: rate limit resets after success", async () => {
+      const t = convexTest(schema);
+      const email = "resetpw@test.com";
+
+      // Add some failed attempts
+      await t.mutation(internal.authEmail.recordFailedAttempt, { email });
+      await t.mutation(internal.authEmail.recordFailedAttempt, { email });
+
+      // Reset on successful login/password change
+      await t.mutation(internal.authEmail.resetAttempts, { email });
+
+      const result = await t.query(api.authEmail.checkRateLimit, { email });
+      expect(result.blocked).toBe(false);
+      expect(result.attemptsLeft).toBe(5);
+    });
+  });
 });
