@@ -379,6 +379,40 @@ export const getSavedHistory = query({
 });
 
 // ═══════════════════════════════════════════════════════════
+// Sprint 14 — Activity Stats
+// ═══════════════════════════════════════════════════════════
+
+/** Get activity stats: count of triggers, stops, notifications for today */
+export const getActivityStats = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const now = new Date();
+    const startOfDay = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    ).getTime();
+
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q.eq("userId", args.userId).gte("createdAt", startOfDay)
+      )
+      .collect();
+
+    const triggers = logs.length;
+    const stops = logs.filter(
+      (l) => l.actionType === "stopped" || l.actionType === "stopped_and_notified"
+    ).length;
+    const notifications = logs.filter(
+      (l) => l.actionType === "notified" || l.actionType === "stopped_and_notified"
+    ).length;
+
+    return { triggers, stops, notifications };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
 // Sprint 11 — Revert action
 // ═══════════════════════════════════════════════════════════
 

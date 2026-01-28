@@ -813,4 +813,112 @@ describe("ruleEngine", () => {
     });
     expect(history3).toHaveLength(3);
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 14 — Activity Stats
+  // ═══════════════════════════════════════════════════════════
+
+  // S14-DoD#1: getActivityStats returns {triggers, stops, notifications}
+  test("S14-DoD#1: getActivityStats returns correct counts", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Activity Rule",
+      type: "cpl_limit",
+      value: 300,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create action logs with different types
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_a1",
+      adName: "Stopped Ad",
+      actionType: "stopped",
+      reason: "CPL high",
+      metricsSnapshot: { spent: 1000, leads: 2 },
+      savedAmount: 500,
+      status: "success",
+    });
+
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_a2",
+      adName: "Notified Ad",
+      actionType: "notified",
+      reason: "CTR low",
+      metricsSnapshot: { spent: 800, leads: 1 },
+      savedAmount: 0,
+      status: "success",
+    });
+
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_a3",
+      adName: "Stopped+Notified Ad",
+      actionType: "stopped_and_notified",
+      reason: "Budget exceeded",
+      metricsSnapshot: { spent: 2000, leads: 3 },
+      savedAmount: 1000,
+      status: "success",
+    });
+
+    const stats = await t.query(api.ruleEngine.getActivityStats, { userId });
+
+    expect(stats.triggers).toBe(3); // all 3 logs
+    expect(stats.stops).toBe(2); // stopped + stopped_and_notified
+    expect(stats.notifications).toBe(2); // notified + stopped_and_notified
+  });
+
+  // S14-DoD#1: getActivityStats returns zeros for new user
+  test("S14-DoD#1: getActivityStats returns zeros for new user", async () => {
+    const t = convexTest(schema);
+    const { userId } = await createTestSetup(t);
+
+    const stats = await t.query(api.ruleEngine.getActivityStats, { userId });
+
+    expect(stats.triggers).toBe(0);
+    expect(stats.stops).toBe(0);
+    expect(stats.notifications).toBe(0);
+  });
+
+  // S14-DoD#9: No accounts edge case (query still works)
+  test("S14-DoD#9: getActivityStats works with no accounts", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "noaccounts@test.com",
+      vkId: "noaccounts_user",
+      name: "No Accounts User",
+    });
+
+    const stats = await t.query(api.ruleEngine.getActivityStats, { userId });
+    expect(stats.triggers).toBe(0);
+    expect(stats.stops).toBe(0);
+    expect(stats.notifications).toBe(0);
+  });
+
+  // S14-DoD#10: Error status account (health indicator test via data)
+  test("S14-DoD#10: account with error status is queryable", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    // Simulate error status via direct DB patch
+    await t.run(async (ctx) => {
+      await ctx.db.patch(accountId, { status: "error", lastError: "Token expired" });
+    });
+
+    const accounts = await t.query(api.adAccounts.list, { userId });
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0].status).toBe("error");
+    expect(accounts[0].lastError).toBe("Token expired");
+  });
 });

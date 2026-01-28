@@ -4,7 +4,7 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Id } from '../../convex/_generated/dataModel';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
-import { LayoutDashboard, Loader2, Trash2, CheckCircle2, Building2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import { LayoutDashboard, Loader2, Trash2, CheckCircle2, Building2, TrendingUp, TrendingDown, Minus, Zap, ShieldOff, Bell } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Link } from 'react-router-dom';
 
@@ -150,6 +150,77 @@ function SavingsWidget({ userId }: { userId: Id<"users"> }) {
   );
 }
 
+/** Activity Block — triggers, stops, notifications counts */
+function ActivityBlock({ userId }: { userId: Id<"users"> }) {
+  const stats = useQuery(api.ruleEngine.getActivityStats, { userId });
+
+  const items = [
+    {
+      label: 'Срабатываний',
+      value: stats?.triggers ?? 0,
+      icon: Zap,
+      color: 'text-amber-500',
+      bg: 'bg-amber-500/10',
+    },
+    {
+      label: 'Остановок',
+      value: stats?.stops ?? 0,
+      icon: ShieldOff,
+      color: 'text-red-500',
+      bg: 'bg-red-500/10',
+    },
+    {
+      label: 'Уведомлений',
+      value: stats?.notifications ?? 0,
+      icon: Bell,
+      color: 'text-blue-500',
+      bg: 'bg-blue-500/10',
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-3 gap-4" data-testid="activity-block">
+      {items.map((item) => (
+        <Card key={item.label}>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className={cn('p-2 rounded-lg', item.bg)}>
+              <item.icon className={cn('w-5 h-5', item.color)} />
+            </div>
+            <div>
+              <p className="text-2xl font-bold tabular-nums">{item.value}</p>
+              <p className="text-xs text-muted-foreground">{item.label}</p>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
+/** Health indicator dot for account status */
+function HealthIndicator({ status }: { status: string }) {
+  const colorClass =
+    status === 'active'
+      ? 'bg-green-500'
+      : status === 'error'
+        ? 'bg-red-500'
+        : 'bg-yellow-500';
+
+  return (
+    <span
+      className={cn('inline-block w-2.5 h-2.5 rounded-full shrink-0', colorClass)}
+      data-testid="health-indicator"
+      title={
+        status === 'active'
+          ? 'Активен'
+          : status === 'error'
+            ? 'Ошибка синхронизации'
+            : 'Приостановлен'
+      }
+    />
+  );
+}
+
 export function DashboardPage() {
   const { user } = useAuth();
   const typedUserId = user?.userId as Id<"users"> | undefined;
@@ -204,6 +275,9 @@ export function DashboardPage() {
       {/* Savings Widget */}
       {typedUserId && <SavingsWidget userId={typedUserId} />}
 
+      {/* Activity Block */}
+      {typedUserId && <ActivityBlock userId={typedUserId} />}
+
       {/* Content */}
       {isLoading ? (
         <div className="flex items-center justify-center py-16">
@@ -242,7 +316,7 @@ export function DashboardPage() {
               Нажмите на кабинет, чтобы сделать его активным
             </CardDescription>
           </CardHeader>
-          <CardContent className="space-y-2">
+          <CardContent className="space-y-2" data-testid="account-cards">
             {accounts.map((account) => {
               const isActive = activeAccountId === account._id;
               return (
@@ -257,6 +331,7 @@ export function DashboardPage() {
                   )}
                   data-testid={`account-card-${account._id}`}
                 >
+                  <HealthIndicator status={account.status} />
                   <Building2 className="w-5 h-5 text-muted-foreground shrink-0" />
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{account.name}</p>
