@@ -7,7 +7,7 @@ import {
   mutation,
   query,
 } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org/bot";
 
@@ -33,6 +33,59 @@ export interface TelegramUpdate {
     text?: string;
     date: number;
   };
+  callback_query?: {
+    id: string;
+    from: {
+      id: number;
+      is_bot: boolean;
+      first_name: string;
+      username?: string;
+    };
+    message?: {
+      message_id: number;
+      chat: {
+        id: number;
+        type: string;
+      };
+    };
+    data?: string;
+  };
+}
+
+/** Telegram inline keyboard button */
+export interface InlineKeyboardButton {
+  text: string;
+  callback_data: string;
+}
+
+/**
+ * Build inline keyboard reply_markup for a stopped ad notification.
+ * Returns 2 buttons: "Отменить остановку" (revert) and "ОК" (dismiss).
+ */
+export function buildInlineKeyboard(
+  actionLogId: string
+): { inline_keyboard: InlineKeyboardButton[][] } {
+  return {
+    inline_keyboard: [
+      [
+        { text: "↩️ Отменить остановку", callback_data: `revert:${actionLogId}` },
+        { text: "✅ ОК", callback_data: `dismiss:${actionLogId}` },
+      ],
+    ],
+  };
+}
+
+/**
+ * Parse callback_data from inline button press.
+ * "revert:abc123" -> { action: "revert", actionLogId: "abc123" }
+ * "dismiss:abc123" -> { action: "dismiss", actionLogId: "abc123" }
+ */
+export function parseCallbackData(
+  data: string
+): { action: string; actionLogId: string } | null {
+  const match = data.match(/^(revert|dismiss):(.+)$/);
+  if (!match) return null;
+  return { action: match[1], actionLogId: match[2] };
 }
 
 /**
@@ -202,6 +255,83 @@ export const sendMessage = internalAction({
   },
 });
 
+/** Send a message with inline keyboard via Telegram Bot API (internal) */
+export const sendMessageWithKeyboard = internalAction({
+  args: {
+    chatId: v.string(),
+    text: v.string(),
+    replyMarkup: v.any(),
+  },
+  handler: async (_ctx, args) => {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+      throw new Error("TELEGRAM_BOT_TOKEN not configured");
+    }
+
+    const response = await fetch(
+      `${TELEGRAM_API_BASE}${botToken}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: args.chatId,
+          text: args.text,
+          parse_mode: "HTML",
+          reply_markup: args.replyMarkup,
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Telegram API Error ${response.status}: ${errorText}`
+      );
+    }
+
+    return await response.json();
+  },
+});
+
+/** Answer a callback query via Telegram Bot API (internal) */
+export const answerCallbackQuery = internalAction({
+  args: {
+    callbackQueryId: v.string(),
+    text: v.optional(v.string()),
+    showAlert: v.optional(v.boolean()),
+  },
+  handler: async (_ctx, args) => {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+      throw new Error("TELEGRAM_BOT_TOKEN not configured");
+    }
+
+    const body: Record<string, unknown> = {
+      callback_query_id: args.callbackQueryId,
+    };
+    if (args.text) body.text = args.text;
+    if (args.showAlert) body.show_alert = args.showAlert;
+
+    const response = await fetch(
+      `${TELEGRAM_API_BASE}${botToken}/answerCallbackQuery`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(
+        `Telegram API Error ${response.status}: ${errorText}`
+      );
+    }
+
+    return await response.json();
+  },
+});
+
 /** Send a message via Telegram Bot API (public, for testing) */
 export const sendMessagePublic = action({
   args: {
@@ -246,9 +376,117 @@ export const handleWebhook = internalAction({
   args: {
     body: v.any(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ ok: boolean; linked?: boolean; action?: string; reason?: string }> => {
     const update: TelegramUpdate = args.body;
 
+    // ── Handle callback_query (inline button press) ──
+    if (update.callback_query) {
+      const cb = update.callback_query;
+      const cbData = cb.data;
+      const chatId = cb.message?.chat?.id
+        ? String(cb.message.chat.id)
+        : null;
+
+      if (!cbData) {
+        return { ok: true };
+      }
+
+      const parsed = parseCallbackData(cbData);
+      if (!parsed) {
+        return { ok: true };
+      }
+
+      if (parsed.action === "dismiss") {
+        // Just acknowledge the button press
+        await ctx.runAction(internal.telegram.answerCallbackQuery, {
+          callbackQueryId: cb.id,
+          text: "👌",
+        });
+        return { ok: true, action: "dismissed" };
+      }
+
+      if (parsed.action === "revert") {
+        // Try to revert the action
+        const result = await ctx.runMutation(
+          internal.ruleEngine.revertAction,
+          {
+            actionLogId: parsed.actionLogId as any,
+            revertedBy: `telegram:${cb.from.id}`,
+          }
+        );
+
+        if (result.reason === "already_reverted") {
+          await ctx.runAction(internal.telegram.answerCallbackQuery, {
+            callbackQueryId: cb.id,
+            text: "⚠️ Уже отменено",
+            showAlert: true,
+          });
+          return { ok: true, action: "already_reverted" };
+        }
+
+        if (result.reason === "timeout") {
+          await ctx.runAction(internal.telegram.answerCallbackQuery, {
+            callbackQueryId: cb.id,
+            text: "⏰ Время истекло (более 5 минут)",
+            showAlert: true,
+          });
+          return { ok: true, action: "timeout" };
+        }
+
+        if (!result.success) {
+          await ctx.runAction(internal.telegram.answerCallbackQuery, {
+            callbackQueryId: cb.id,
+            text: "❌ Не удалось отменить",
+            showAlert: true,
+          });
+          return { ok: true, action: "failed", reason: result.reason };
+        }
+
+        // Revert succeeded — restart the ad via VK API
+        const actionLog = await ctx.runQuery(
+          internal.ruleEngine.getActionLog,
+          { actionLogId: parsed.actionLogId as any }
+        );
+
+        if (actionLog) {
+          try {
+            const accessToken = await ctx.runAction(
+              internal.auth.getValidVkAdsToken,
+              { userId: actionLog.userId }
+            );
+            await ctx.runAction(api.vkApi.restartAd, {
+              accessToken,
+              adId: actionLog.adId,
+              accountId: actionLog.accountId,
+            });
+          } catch (err) {
+            console.error(
+              `[telegram] Failed to restart ad ${actionLog.adId}:`,
+              err instanceof Error ? err.message : err
+            );
+          }
+        }
+
+        await ctx.runAction(internal.telegram.answerCallbackQuery, {
+          callbackQueryId: cb.id,
+          text: "✅ Отменено! Объявление запущено.",
+        });
+
+        // Send confirmation message to chat
+        if (chatId) {
+          await ctx.runAction(internal.telegram.sendMessage, {
+            chatId,
+            text: "✅ <b>Остановка отменена</b>\n\nОбъявление снова запущено.",
+          });
+        }
+
+        return { ok: true, action: "reverted" };
+      }
+
+      return { ok: true };
+    }
+
+    // ── Handle text messages ──
     if (!update.message?.text) return { ok: true };
 
     const chatId = String(update.message.chat.id);
@@ -553,6 +791,7 @@ export const sendRuleNotification = internalAction({
       }),
     }),
     priority: v.union(v.literal("critical"), v.literal("standard")),
+    actionLogId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Check if user has Telegram connected
@@ -583,11 +822,26 @@ export const sendRuleNotification = internalAction({
 
       const message = formatRuleNotification(args.event);
 
+      // Include inline keyboard for stopped ads
+      const isStopped =
+        args.event.actionType === "stopped" ||
+        args.event.actionType === "stopped_and_notified";
+
       try {
-        await ctx.runAction(internal.telegram.sendMessageWithRetry, {
-          chatId,
-          text: message,
-        });
+        if (isStopped && args.actionLogId) {
+          // Send with inline keyboard (revert / ok buttons)
+          const replyMarkup = buildInlineKeyboard(args.actionLogId);
+          await ctx.runAction(internal.telegram.sendMessageWithKeyboard, {
+            chatId,
+            text: message,
+            replyMarkup,
+          });
+        } else {
+          await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+            chatId,
+            text: message,
+          });
+        }
         await ctx.runMutation(internal.telegram.markNotificationsSent, {
           notificationIds: [notifId],
         });
@@ -638,8 +892,8 @@ export const flushPendingNotifications = internalAction({
 
     // Reconstruct events from stored data
     const events: RuleNotificationEvent[] = pending
-      .map((n) => n.data as RuleNotificationEvent | null)
-      .filter((e): e is RuleNotificationEvent => e !== null);
+      .map((n: any) => n.data as RuleNotificationEvent | null)
+      .filter((e: RuleNotificationEvent | null): e is RuleNotificationEvent => e !== null);
 
     const message =
       events.length > 1
@@ -654,7 +908,7 @@ export const flushPendingNotifications = internalAction({
         text: message,
       });
       await ctx.runMutation(internal.telegram.markNotificationsSent, {
-        notificationIds: pending.map((n) => n._id),
+        notificationIds: pending.map((n: any) => n._id),
       });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Unknown error";

@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { expect, test, describe } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import {
   parseStartCommand,
@@ -8,8 +8,11 @@ import {
   buildBotLink,
   formatRuleNotification,
   formatGroupedNotification,
+  buildInlineKeyboard,
+  parseCallbackData,
   RuleNotificationEvent,
 } from "./telegram";
+import { REVERT_TIMEOUT_MS } from "./ruleEngine";
 
 // Helper: create test user
 async function createTestUser(t: ReturnType<typeof convexTest>) {
@@ -396,7 +399,7 @@ describe("telegram", () => {
       metrics: { spent: 1000, leads: 2 },
     };
 
-    const notifId = await t.mutation(api.telegram.storePendingNotification, {
+    const notifId = await t.mutation(internal.telegram.storePendingNotification, {
       userId,
       event,
       priority: "critical",
@@ -477,7 +480,7 @@ describe("telegram", () => {
     const t = convexTest(schema);
     const userId = await createTestUser(t);
 
-    const chatId = await t.query(api.telegram.getUserChatId, { userId });
+    const chatId = await t.query(internal.telegram.getUserChatId, { userId });
     expect(chatId).toBeNull();
   });
 
@@ -492,14 +495,14 @@ describe("telegram", () => {
       token,
     });
 
-    const chatId = await t.query(api.telegram.getUserChatId, { userId });
+    const chatId = await t.query(internal.telegram.getUserChatId, { userId });
     expect(chatId).toBe("999888777");
   });
 
   // S10-DoD#7: Retry logic (tested via pure function behavior)
   test("S10-DoD#7: sendMessageWithRetry action exists", () => {
     // Verify the internal action is exported
-    expect(api.telegram.sendMessageWithRetry).toBeDefined();
+    expect(internal.telegram.sendMessageWithRetry).toBeDefined();
   });
 
   // Notification lifecycle: store → get pending → mark sent
@@ -518,7 +521,7 @@ describe("telegram", () => {
     };
 
     // Store notification
-    const notifId = await t.mutation(api.telegram.storePendingNotification, {
+    const notifId = await t.mutation(internal.telegram.storePendingNotification, {
       userId,
       event,
       priority: "standard",
@@ -527,7 +530,7 @@ describe("telegram", () => {
     expect(notifId).toBeDefined();
 
     // Get pending within 5 min window
-    const pending = await t.query(api.telegram.getPendingNotifications, {
+    const pending = await t.query(internal.telegram.getPendingNotifications, {
       userId,
       since: now - 5 * 60 * 1000,
     });
@@ -536,12 +539,12 @@ describe("telegram", () => {
     expect(pending[0].channel).toBe("telegram");
 
     // Mark as sent
-    await t.mutation(api.telegram.markNotificationsSent, {
+    await t.mutation(internal.telegram.markNotificationsSent, {
       notificationIds: [notifId],
     });
 
     // Verify no longer pending
-    const afterSend = await t.query(api.telegram.getPendingNotifications, {
+    const afterSend = await t.query(internal.telegram.getPendingNotifications, {
       userId,
       since: now - 5 * 60 * 1000,
     });
@@ -553,7 +556,7 @@ describe("telegram", () => {
     const t = convexTest(schema);
     const userId = await createTestUser(t);
 
-    const notifId = await t.mutation(api.telegram.storePendingNotification, {
+    const notifId = await t.mutation(internal.telegram.storePendingNotification, {
       userId,
       event: {
         ruleName: "Test",
@@ -567,16 +570,274 @@ describe("telegram", () => {
       createdAt: Date.now(),
     });
 
-    await t.mutation(api.telegram.markNotificationFailed, {
+    await t.mutation(internal.telegram.markNotificationFailed, {
       notificationId: notifId,
       errorMessage: "Telegram API Error 429: Too Many Requests",
     });
 
     // Verify no longer in pending
-    const pending = await t.query(api.telegram.getPendingNotifications, {
+    const pending = await t.query(internal.telegram.getPendingNotifications, {
       userId,
       since: Date.now() - 5 * 60 * 1000,
     });
     expect(pending.length).toBe(0);
+  });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 11 — Telegram: inline-кнопки и откат
+  // ═══════════════════════════════════════════════════════════
+
+  // S11-DoD#1: inline_keyboard — формирование reply_markup с 2 кнопками
+  test("S11-DoD#1: buildInlineKeyboard returns 2 buttons", () => {
+    const keyboard = buildInlineKeyboard("log123");
+
+    expect(keyboard.inline_keyboard).toHaveLength(1);
+    expect(keyboard.inline_keyboard[0]).toHaveLength(2);
+
+    const [revertBtn, okBtn] = keyboard.inline_keyboard[0];
+    expect(revertBtn.text).toContain("Отменить");
+    expect(revertBtn.callback_data).toBe("revert:log123");
+    expect(okBtn.text).toContain("ОК");
+    expect(okBtn.callback_data).toBe("dismiss:log123");
+  });
+
+  test("S11-DoD#1: parseCallbackData parses revert action", () => {
+    const result = parseCallbackData("revert:abc123");
+    expect(result).toEqual({ action: "revert", actionLogId: "abc123" });
+  });
+
+  test("S11-DoD#1: parseCallbackData parses dismiss action", () => {
+    const result = parseCallbackData("dismiss:xyz789");
+    expect(result).toEqual({ action: "dismiss", actionLogId: "xyz789" });
+  });
+
+  test("S11-DoD#1: parseCallbackData returns null for invalid data", () => {
+    expect(parseCallbackData("invalid")).toBeNull();
+    expect(parseCallbackData("")).toBeNull();
+    expect(parseCallbackData("unknown:123")).toBeNull();
+  });
+
+  // S11-DoD#2: callback revert → actionLogs.status=reverted
+  test("S11-DoD#2: revertAction sets status=reverted on actionLog", async () => {
+    const t = convexTest(schema);
+    const userId = await createTestUser(t);
+
+    // Upgrade to pro so stopAd is available
+    await t.mutation(api.users.updateTier, { userId, tier: "pro" });
+
+    // Create an ad account
+    const accountId = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "test_acc_1",
+      name: "Test Account",
+      accessToken: "tok",
+    });
+
+    // Create a rule
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "CPL Limit",
+      type: "cpl_limit",
+      value: 300,
+      actions: { stopAd: true, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create an action log (simulates a stopped ad)
+    const actionLogId = await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_001",
+      adName: "Баннер 1",
+      actionType: "stopped",
+      reason: "CPL too high",
+      metricsSnapshot: { spent: 1000, leads: 2 },
+      savedAmount: 500,
+      status: "success",
+    });
+
+    // Revert
+    const result = await t.mutation(internal.ruleEngine.revertAction, {
+      actionLogId,
+      revertedBy: "telegram:12345",
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.reason).toBe("ok");
+
+    // Verify status is reverted
+    const log = await t.query(internal.ruleEngine.getActionLog, { actionLogId });
+    expect(log).toBeDefined();
+    expect(log!.status).toBe("reverted");
+    expect(log!.revertedBy).toBe("telegram:12345");
+    expect(log!.revertedAt).toBeDefined();
+  });
+
+  // S11-DoD#3: revertAction mutation exists (tested by DoD#2 above)
+  test("S11-DoD#3: revertAction internal mutation is available", () => {
+    expect(internal.ruleEngine.revertAction).toBeDefined();
+  });
+
+  // S11-DoD#4: answerCallbackQuery action exists
+  test("S11-DoD#4: answerCallbackQuery action exists", () => {
+    expect(internal.telegram.answerCallbackQuery).toBeDefined();
+  });
+
+  test("S11-DoD#4: sendMessageWithKeyboard action exists", () => {
+    expect(internal.telegram.sendMessageWithKeyboard).toBeDefined();
+  });
+
+  // S11-DoD#7: > 5 минут → "Время истекло"
+  test("S11-DoD#7: revertAction returns timeout after 5 minutes", async () => {
+    const t = convexTest(schema);
+    const userId = await createTestUser(t);
+
+    // Upgrade to pro so stopAd is available
+    await t.mutation(api.users.updateTier, { userId, tier: "pro" });
+
+    const accountId = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "test_acc_7",
+      name: "Test Account",
+      accessToken: "tok",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Budget Limit",
+      type: "budget_limit",
+      value: 5000,
+      actions: { stopAd: true, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create action log with old createdAt (6 minutes ago)
+    // We insert directly to control timestamp
+    const actionLogId = await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_timeout",
+      adName: "Old Ad",
+      actionType: "stopped",
+      reason: "Budget exceeded",
+      metricsSnapshot: { spent: 6000, leads: 1 },
+      savedAmount: 300,
+      status: "success",
+    });
+
+    // Wait-simulate: patch the log to have old createdAt
+    // Since createActionLog uses Date.now(), and REVERT_TIMEOUT_MS is 5 min,
+    // we need to test the timing. We'll patch the createdAt manually.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(actionLogId, {
+        createdAt: Date.now() - REVERT_TIMEOUT_MS - 60000, // 6 minutes ago
+      });
+    });
+
+    const result = await t.mutation(internal.ruleEngine.revertAction, {
+      actionLogId,
+      revertedBy: "telegram:999",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe("timeout");
+  });
+
+  // S11-DoD#8: Повторный клик → "Уже отменено"
+  test("S11-DoD#8: revertAction returns already_reverted on second click", async () => {
+    const t = convexTest(schema);
+    const userId = await createTestUser(t);
+
+    // Upgrade to pro so stopAd is available
+    await t.mutation(api.users.updateTier, { userId, tier: "pro" });
+
+    const accountId = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "test_acc_8",
+      name: "Test Account",
+      accessToken: "tok",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "CTR Check",
+      type: "min_ctr",
+      value: 1,
+      actions: { stopAd: true, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const actionLogId = await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_double",
+      adName: "Double Click Ad",
+      actionType: "stopped",
+      reason: "CTR too low",
+      metricsSnapshot: { spent: 500, leads: 0 },
+      savedAmount: 200,
+      status: "success",
+    });
+
+    // First revert → success
+    const result1 = await t.mutation(internal.ruleEngine.revertAction, {
+      actionLogId,
+      revertedBy: "telegram:111",
+    });
+    expect(result1.success).toBe(true);
+
+    // Second revert → already_reverted
+    const result2 = await t.mutation(internal.ruleEngine.revertAction, {
+      actionLogId,
+      revertedBy: "telegram:111",
+    });
+    expect(result2.success).toBe(false);
+    expect(result2.reason).toBe("already_reverted");
+  });
+
+  // Edge: revert on notify-only action (not stoppable)
+  test("S11: revertAction on notify-only action returns not_stoppable", async () => {
+    const t = convexTest(schema);
+    const userId = await createTestUser(t);
+
+    const accountId = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "test_acc_ns",
+      name: "Test Account",
+      accessToken: "tok",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Notify Only",
+      type: "cpl_limit",
+      value: 100,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const actionLogId = await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_notify",
+      adName: "Notify Ad",
+      actionType: "notified",
+      reason: "CPL high",
+      metricsSnapshot: { spent: 200, leads: 1 },
+      savedAmount: 0,
+      status: "success",
+    });
+
+    const result = await t.mutation(internal.ruleEngine.revertAction, {
+      actionLogId,
+      revertedBy: "telegram:222",
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe("not_stoppable");
   });
 });

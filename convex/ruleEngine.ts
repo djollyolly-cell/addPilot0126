@@ -301,6 +301,62 @@ export const getActionLogsByRule = query({
 });
 
 // ═══════════════════════════════════════════════════════════
+// Sprint 11 — Revert action
+// ═══════════════════════════════════════════════════════════
+
+/** Revert timeout in milliseconds (5 minutes) */
+export const REVERT_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** Get an action log by ID (internal, for callback processing) */
+export const getActionLog = internalQuery({
+  args: { actionLogId: v.id("actionLogs") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.actionLogId);
+  },
+});
+
+/**
+ * Revert a stopped ad — mark actionLog as reverted.
+ * Returns { success, reason } with reason for failure.
+ */
+export const revertAction = internalMutation({
+  args: {
+    actionLogId: v.id("actionLogs"),
+    revertedBy: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const log = await ctx.db.get(args.actionLogId);
+    if (!log) {
+      return { success: false, reason: "not_found" };
+    }
+
+    // Already reverted?
+    if (log.status === "reverted") {
+      return { success: false, reason: "already_reverted" };
+    }
+
+    // Timeout check (>5 minutes since creation)
+    const elapsed = Date.now() - log.createdAt;
+    if (elapsed > REVERT_TIMEOUT_MS) {
+      return { success: false, reason: "timeout" };
+    }
+
+    // Only revert "stopped" or "stopped_and_notified" actions
+    if (log.actionType !== "stopped" && log.actionType !== "stopped_and_notified") {
+      return { success: false, reason: "not_stoppable" };
+    }
+
+    await ctx.db.patch(args.actionLogId, {
+      status: "reverted",
+      revertedAt: Date.now(),
+      revertedBy: args.revertedBy,
+    });
+
+    return { success: true, reason: "ok" };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
 // Helpers
 // ═══════════════════════════════════════════════════════════
 
@@ -414,7 +470,7 @@ export const checkAllRules = internalAction({
                   { adId: metric.adId }
                 );
                 context = {
-                  spendHistory: history.map((h) => ({
+                  spendHistory: history.map((h: { spent: number; timestamp: number }) => ({
                     spent: h.spent,
                     timestamp: h.timestamp,
                   })),
@@ -497,7 +553,7 @@ export const checkAllRules = internalAction({
               }
 
               // Create action log
-              await ctx.runMutation(
+              const actionLogId = await ctx.runMutation(
                 internal.ruleEngine.createActionLog,
                 {
                   userId: account.userId,
@@ -548,6 +604,7 @@ export const checkAllRules = internalAction({
                         },
                       },
                       priority: rule.actions.stopAd ? "critical" : "standard",
+                      actionLogId: actionLogId as string,
                     }
                   );
                 } catch (notifErr) {

@@ -347,6 +347,52 @@ export const stopAd = action({
   },
 });
 
+// Restart (unblock) a banner (ad) via myTarget API v2
+export const restartAd = action({
+  args: {
+    accessToken: v.string(),
+    adId: v.string(),
+    accountId: v.id("adAccounts"),
+  },
+  handler: async (_, args): Promise<{ success: boolean }> => {
+    const url = `${MT_API_BASE}/api/v2/banners/${args.adId}.json`;
+
+    let lastError: Error | null = null;
+
+    for (let attempt = 0; attempt < MT_MAX_RETRIES; attempt++) {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ status: "active" }),
+      });
+
+      if (response.status === 429 && attempt < MT_MAX_RETRIES - 1) {
+        await sleep(RETRY_DELAY_MS * (attempt + 1));
+        continue;
+      }
+
+      if (response.status === 401) {
+        throw new Error("TOKEN_EXPIRED");
+      }
+
+      if (!response.ok) {
+        const text = await response.text();
+        lastError = new Error(
+          `VK Ads API Error ${response.status}: ${text}`
+        );
+        throw lastError;
+      }
+
+      return { success: true };
+    }
+
+    throw lastError || new Error("Failed to restart ad after retries");
+  },
+});
+
 // Get banners (ads) via myTarget API v2
 export const getMtBanners = action({
   args: {
