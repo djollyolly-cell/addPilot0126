@@ -9,6 +9,7 @@ import { AuthCallback } from './pages/AuthCallback';
 import { AdsCallback } from './pages/AdsCallback';
 import { TelegramSettingsPage } from './pages/TelegramSettingsPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
+import { LogsPage } from './pages/LogsPage';
 import { useAuth } from './lib/useAuth';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -74,6 +75,7 @@ function App() {
         <Route path="accounts" element={<AccountsPage />} />
         <Route path="rules" element={<RulesPage />} />
         <Route path="analytics" element={<AnalyticsPage />} />
+        <Route path="logs" element={<LogsPage />} />
         <Route path="settings" element={<Navigate to="/settings/telegram" replace />} />
         <Route path="settings/telegram" element={<TelegramSettingsPage />} />
       </Route>

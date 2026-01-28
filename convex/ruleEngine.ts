@@ -675,6 +675,101 @@ export const getROI = query({
 });
 
 // ═══════════════════════════════════════════════════════════
+// Sprint 19 — Logs page queries
+// ═══════════════════════════════════════════════════════════
+
+/** Full logs query with 4 filters + text search */
+export const getLogs = query({
+  args: {
+    userId: v.id("users"),
+    actionType: v.optional(
+      v.union(
+        v.literal("stopped"),
+        v.literal("notified"),
+        v.literal("stopped_and_notified")
+      )
+    ),
+    accountId: v.optional(v.id("adAccounts")),
+    ruleId: v.optional(v.id("rules")),
+    status: v.optional(
+      v.union(
+        v.literal("success"),
+        v.literal("failed"),
+        v.literal("reverted")
+      )
+    ),
+    search: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 50;
+
+    let logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .collect();
+
+    if (args.actionType) {
+      logs = logs.filter((l) => l.actionType === args.actionType);
+    }
+    if (args.accountId) {
+      logs = logs.filter((l) => l.accountId === args.accountId);
+    }
+    if (args.ruleId) {
+      logs = logs.filter((l) => l.ruleId === args.ruleId);
+    }
+    if (args.status) {
+      logs = logs.filter((l) => l.status === args.status);
+    }
+    if (args.search) {
+      const q = args.search.toLowerCase();
+      logs = logs.filter(
+        (l) =>
+          l.adName.toLowerCase().includes(q) ||
+          l.reason.toLowerCase().includes(q) ||
+          (l.campaignName && l.campaignName.toLowerCase().includes(q))
+      );
+    }
+
+    return logs.slice(0, limit);
+  },
+});
+
+/** Public mutation to revert a stopped ad action */
+export const revertActionPublic = mutation({
+  args: {
+    actionLogId: v.id("actionLogs"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const log = await ctx.db.get(args.actionLogId);
+    if (!log) {
+      return { success: false, reason: "not_found" };
+    }
+    if (log.userId !== args.userId) {
+      return { success: false, reason: "forbidden" };
+    }
+    if (log.status === "reverted") {
+      return { success: false, reason: "already_reverted" };
+    }
+    const elapsed = Date.now() - log.createdAt;
+    if (elapsed > 5 * 60 * 1000) {
+      return { success: false, reason: "timeout" };
+    }
+    if (log.actionType !== "stopped" && log.actionType !== "stopped_and_notified") {
+      return { success: false, reason: "not_stoppable" };
+    }
+    await ctx.db.patch(args.actionLogId, {
+      status: "reverted",
+      revertedAt: Date.now(),
+      revertedBy: "user",
+    });
+    return { success: true, reason: "ok" };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
 // Sprint 11 — Revert action
 // ═══════════════════════════════════════════════════════════
 

@@ -1637,4 +1637,289 @@ describe("ruleEngine", () => {
     expect(result.roi).toBe(0);
     expect(result.totalEvents).toBe(1);
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 19 — Logs page (getLogs, revertActionPublic)
+  // ═══════════════════════════════════════════════════════════
+
+  // S19-DoD#1: getLogs returns events for user
+  test("S19-DoD#1: getLogs returns events ordered desc", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Logs Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_log_1", adName: "First Event",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 1, cpl: 1000 },
+        savedAmount: 500, status: "success", createdAt: now - 60000,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_log_2", adName: "Second Event",
+        actionType: "notified",
+        reason: "CPL warning",
+        metricsSnapshot: { spent: 800, leads: 1, cpl: 800 },
+        savedAmount: 300, status: "success", createdAt: now,
+      });
+    });
+
+    const logs = await t.query(api.ruleEngine.getLogs, { userId });
+    expect(logs).toHaveLength(2);
+    // desc order: newest first
+    expect(logs[0].adName).toBe("Second Event");
+    expect(logs[1].adName).toBe("First Event");
+  });
+
+  // S19-DoD#2: getLogs filters by actionType
+  test("S19-DoD#2: getLogs filters by actionType", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Filter Type Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_ft_1", adName: "Stopped Ad",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 1, cpl: 1000 },
+        savedAmount: 500, status: "success", createdAt: now,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_ft_2", adName: "Notified Ad",
+        actionType: "notified",
+        reason: "CPL warning",
+        metricsSnapshot: { spent: 500, leads: 1, cpl: 500 },
+        savedAmount: 100, status: "success", createdAt: now,
+      });
+    });
+
+    const stopped = await t.query(api.ruleEngine.getLogs, { userId, actionType: "stopped" });
+    expect(stopped).toHaveLength(1);
+    expect(stopped[0].adName).toBe("Stopped Ad");
+  });
+
+  // S19-DoD#3: getLogs filters by status
+  test("S19-DoD#3: getLogs filters by status", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Filter Status Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_fs_1", adName: "Success Ad",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 1, cpl: 1000 },
+        savedAmount: 500, status: "success", createdAt: now,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_fs_2", adName: "Failed Ad",
+        actionType: "stopped",
+        reason: "API error",
+        metricsSnapshot: { spent: 500, leads: 0, cpl: 0 },
+        savedAmount: 0, status: "failed", createdAt: now,
+      });
+    });
+
+    const failed = await t.query(api.ruleEngine.getLogs, { userId, status: "failed" });
+    expect(failed).toHaveLength(1);
+    expect(failed[0].adName).toBe("Failed Ad");
+  });
+
+  // S19-DoD#4: getLogs search by adName/reason
+  test("S19-DoD#4: getLogs search matches adName and reason", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Search Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_s_1", adName: "Summer Campaign Ad",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 1, cpl: 1000 },
+        savedAmount: 500, status: "success", createdAt: now,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_s_2", adName: "Winter Campaign Ad",
+        actionType: "notified",
+        reason: "CTR low",
+        metricsSnapshot: { spent: 300, leads: 0, cpl: 0 },
+        savedAmount: 50, status: "success", createdAt: now,
+      });
+    });
+
+    // Search by name
+    const summer = await t.query(api.ruleEngine.getLogs, { userId, search: "Summer" });
+    expect(summer).toHaveLength(1);
+    expect(summer[0].adName).toBe("Summer Campaign Ad");
+
+    // Search by reason
+    const ctr = await t.query(api.ruleEngine.getLogs, { userId, search: "CTR" });
+    expect(ctr).toHaveLength(1);
+    expect(ctr[0].adName).toBe("Winter Campaign Ad");
+  });
+
+  // S19-DoD#5: getLogs returns empty for new user (empty state)
+  test("S19-DoD#5: getLogs returns empty for new user", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "nologs@test.com",
+      vkId: "nologs_user",
+      name: "No Logs User",
+    });
+
+    const logs = await t.query(api.ruleEngine.getLogs, { userId });
+    expect(logs).toHaveLength(0);
+  });
+
+  // S19-DoD#6: getLogs search returns empty for no match
+  test("S19-DoD#6: getLogs search returns empty for no match", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "No Match Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_nm", adName: "Some Ad",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 1, cpl: 1000 },
+        savedAmount: 500, status: "success", createdAt: now,
+      });
+    });
+
+    const logs = await t.query(api.ruleEngine.getLogs, { userId, search: "xyz123" });
+    expect(logs).toHaveLength(0);
+  });
+
+  // S19-DoD#7: revertActionPublic reverts a recent stopped action
+  test("S19-DoD#7: revertActionPublic reverts recent stopped action", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Revert Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: true, notify: false },
+      targetAccountIds: [accountId],
+    });
+
+    // Insert log with current time (within 5 min window)
+    let logId: string = "";
+    await t.run(async (ctx) => {
+      logId = (await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_revert", adName: "Revert Ad",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 1, cpl: 1000 },
+        savedAmount: 500, status: "success", createdAt: Date.now(),
+      })) as unknown as string;
+    });
+
+    const result = await t.mutation(api.ruleEngine.revertActionPublic, {
+      actionLogId: logId as any,
+      userId,
+    });
+    expect(result.success).toBe(true);
+
+    // Verify status changed
+    const logs = await t.query(api.ruleEngine.getLogs, { userId, status: "reverted" });
+    expect(logs).toHaveLength(1);
+    expect(logs[0].adName).toBe("Revert Ad");
+  });
+
+  // S19-DoD#8: revertActionPublic fails for old event (>5 min)
+  test("S19-DoD#8: revertActionPublic fails for old event (>5min)", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Old Revert Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: true, notify: false },
+      targetAccountIds: [accountId],
+    });
+
+    let logId: string = "";
+    await t.run(async (ctx) => {
+      logId = (await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_old_revert", adName: "Old Revert Ad",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 1, cpl: 1000 },
+        savedAmount: 500, status: "success",
+        createdAt: Date.now() - 6 * 60 * 1000, // 6 min ago
+      })) as unknown as string;
+    });
+
+    const result = await t.mutation(api.ruleEngine.revertActionPublic, {
+      actionLogId: logId as any,
+      userId,
+    });
+    expect(result.success).toBe(false);
+    expect(result.reason).toBe("timeout");
+  });
 });
