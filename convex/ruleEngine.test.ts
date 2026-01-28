@@ -624,4 +624,193 @@ describe("ruleEngine", () => {
     const allLogs = await t.query(api.ruleEngine.listActionLogs, { userId });
     expect(allLogs).toHaveLength(2);
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 13 — Savings Widget Queries
+  // ═══════════════════════════════════════════════════════════
+
+  // S13-DoD#1: getSavedToday — correct sum for today
+  test("S13-DoD#1: getSavedToday returns correct sum for today", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Savings Rule",
+      type: "cpl_limit",
+      value: 300,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create 3 action logs with different savedAmounts
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_s1",
+      adName: "Ad 1",
+      actionType: "stopped",
+      reason: "CPL high",
+      metricsSnapshot: { spent: 1000, leads: 2 },
+      savedAmount: 500,
+      status: "success",
+    });
+
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_s2",
+      adName: "Ad 2",
+      actionType: "notified",
+      reason: "CTR low",
+      metricsSnapshot: { spent: 800, leads: 1 },
+      savedAmount: 300,
+      status: "success",
+    });
+
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_s3",
+      adName: "Ad 3",
+      actionType: "stopped",
+      reason: "Budget exceeded",
+      metricsSnapshot: { spent: 2000, leads: 3 },
+      savedAmount: 1200,
+      status: "success",
+    });
+
+    const total = await t.query(api.ruleEngine.getSavedToday, { userId });
+    expect(total).toBe(2000); // 500 + 300 + 1200
+  });
+
+  // S13-DoD#2: getSavedHistory — returns 7 elements
+  test("S13-DoD#2: getSavedHistory returns 7 elements by default", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "History Rule",
+      type: "cpl_limit",
+      value: 300,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create one action log (today)
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_h1",
+      adName: "History Ad",
+      actionType: "stopped",
+      reason: "CPL high",
+      metricsSnapshot: { spent: 1000, leads: 2 },
+      savedAmount: 750,
+      status: "success",
+    });
+
+    const history = await t.query(api.ruleEngine.getSavedHistory, { userId });
+    expect(history).toHaveLength(7);
+
+    // Each element has date and amount
+    for (const entry of history) {
+      expect(entry.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(typeof entry.amount).toBe("number");
+    }
+
+    // Today's entry should have the savedAmount
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayEntry = history.find((h) => h.date === todayStr);
+    expect(todayEntry).toBeDefined();
+    expect(todayEntry!.amount).toBe(750);
+  });
+
+  // S13-DoD#9: Нет данных — новый пользователь → 0
+  test("S13-DoD#9: getSavedToday returns 0 for new user", async () => {
+    const t = convexTest(schema);
+    const { userId } = await createTestSetup(t);
+
+    const total = await t.query(api.ruleEngine.getSavedToday, { userId });
+    expect(total).toBe(0);
+  });
+
+  test("S13-DoD#9: getSavedHistory returns all zeros for new user", async () => {
+    const t = convexTest(schema);
+    const { userId } = await createTestSetup(t);
+
+    const history = await t.query(api.ruleEngine.getSavedHistory, { userId });
+    expect(history).toHaveLength(7);
+
+    for (const entry of history) {
+      expect(entry.amount).toBe(0);
+    }
+  });
+
+  // S13-DoD#10: Previous period = 0 → percentage handled gracefully
+  test("S13-DoD#10: getSavedHistory with data only in recent days", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Recent Rule",
+      type: "cpl_limit",
+      value: 300,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create today's action log
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId,
+      ruleId,
+      accountId,
+      adId: "ad_recent",
+      adName: "Recent Ad",
+      actionType: "stopped",
+      reason: "CPL high",
+      metricsSnapshot: { spent: 2000, leads: 4 },
+      savedAmount: 1000,
+      status: "success",
+    });
+
+    const history = await t.query(api.ruleEngine.getSavedHistory, { userId });
+
+    // Should have 7 entries, most are 0
+    expect(history).toHaveLength(7);
+
+    // Today should have data
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayEntry = history.find((h) => h.date === todayStr);
+    expect(todayEntry!.amount).toBe(1000);
+
+    // Earlier days should be 0 (first half = previous period)
+    const firstThree = history.slice(0, 3);
+    const firstThreeTotal = firstThree.reduce((s, d) => s + d.amount, 0);
+    expect(firstThreeTotal).toBe(0);
+  });
+
+  // S13: getSavedHistory with custom days param
+  test("S13: getSavedHistory respects custom days parameter", async () => {
+    const t = convexTest(schema);
+    const { userId } = await createTestSetup(t);
+
+    const history14 = await t.query(api.ruleEngine.getSavedHistory, {
+      userId,
+      days: 14,
+    });
+    expect(history14).toHaveLength(14);
+
+    const history3 = await t.query(api.ruleEngine.getSavedHistory, {
+      userId,
+      days: 3,
+    });
+    expect(history3).toHaveLength(3);
+  });
 });

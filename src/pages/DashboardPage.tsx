@@ -1,11 +1,154 @@
+import { useEffect, useRef, useState } from 'react';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Id } from '../../convex/_generated/dataModel';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
-import { LayoutDashboard, Loader2, Trash2, CheckCircle2, Building2 } from 'lucide-react';
+import { LayoutDashboard, Loader2, Trash2, CheckCircle2, Building2, TrendingUp, TrendingDown, Minus } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Link } from 'react-router-dom';
+
+/** Animated counter hook */
+function useAnimatedNumber(target: number, duration = 800) {
+  const [current, setCurrent] = useState(0);
+  const rafRef = useRef<number>(0);
+
+  useEffect(() => {
+    const start = current;
+    const diff = target - start;
+    if (diff === 0) return;
+    const startTime = performance.now();
+
+    const animate = (now: number) => {
+      const elapsed = now - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      // ease-out quad
+      const eased = 1 - (1 - progress) * (1 - progress);
+      setCurrent(Math.round(start + diff * eased));
+      if (progress < 1) {
+        rafRef.current = requestAnimationFrame(animate);
+      }
+    };
+
+    rafRef.current = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(rafRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, duration]);
+
+  return current;
+}
+
+/** Mini bar chart for 7-day savings */
+function SavingsChart({ data }: { data: { date: string; amount: number }[] }) {
+  const max = Math.max(...data.map((d) => d.amount), 1);
+
+  return (
+    <div className="flex items-end gap-1 h-16" data-testid="savings-chart">
+      {data.map((d) => {
+        const height = Math.max((d.amount / max) * 100, 4);
+        return (
+          <div
+            key={d.date}
+            className="flex-1 bg-primary/20 rounded-t relative group"
+            style={{ height: `${height}%` }}
+          >
+            <div
+              className="absolute bottom-0 left-0 right-0 bg-primary rounded-t transition-all"
+              style={{ height: `${height}%` }}
+            />
+            <div className="absolute -top-8 left-1/2 -translate-x-1/2 hidden group-hover:block bg-foreground text-background text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-10">
+              {d.amount.toLocaleString()}₽
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Savings Widget */
+function SavingsWidget({ userId }: { userId: Id<"users"> }) {
+  const savedToday = useQuery(api.ruleEngine.getSavedToday, { userId });
+  const savedHistory = useQuery(api.ruleEngine.getSavedHistory, { userId });
+
+  const todayValue = savedToday ?? 0;
+  const animatedValue = useAnimatedNumber(todayValue);
+
+  // Calculate percentage change vs previous 7 days
+  const historyData = savedHistory ?? [];
+  const thisWeekTotal = historyData.reduce((s, d) => s + d.amount, 0);
+
+  // For percentage change, we'd need previous week data.
+  // We'll compute based on the first half vs second half of available data.
+  const halfLen = Math.floor(historyData.length / 2);
+  const firstHalf = historyData.slice(0, halfLen).reduce((s, d) => s + d.amount, 0);
+  const secondHalf = historyData.slice(halfLen).reduce((s, d) => s + d.amount, 0);
+
+  let percentChange: number | null = null;
+  if (firstHalf > 0) {
+    percentChange = Math.round(((secondHalf - firstHalf) / firstHalf) * 100);
+  } else if (secondHalf > 0) {
+    percentChange = 100;
+  }
+
+  return (
+    <Card data-testid="savings-widget">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-lg">Экономия сегодня</CardTitle>
+        <CardDescription>Сумма сэкономленного бюджета</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-baseline gap-3">
+          <span className="text-4xl font-bold tabular-nums" data-testid="savings-amount">
+            {animatedValue.toLocaleString()} ₽
+          </span>
+          {percentChange !== null && (
+            <span
+              className={cn(
+                'flex items-center gap-0.5 text-sm font-medium',
+                percentChange > 0
+                  ? 'text-green-600'
+                  : percentChange < 0
+                    ? 'text-red-600'
+                    : 'text-muted-foreground'
+              )}
+              data-testid="savings-change"
+            >
+              {percentChange > 0 ? (
+                <TrendingUp className="w-4 h-4" />
+              ) : percentChange < 0 ? (
+                <TrendingDown className="w-4 h-4" />
+              ) : (
+                <Minus className="w-4 h-4" />
+              )}
+              {percentChange > 0 ? '+' : ''}
+              {percentChange}%
+            </span>
+          )}
+          {percentChange === null && thisWeekTotal === 0 && (
+            <span className="text-sm text-muted-foreground" data-testid="savings-change">—</span>
+          )}
+        </div>
+
+        {historyData.length > 0 && <SavingsChart data={historyData} />}
+
+        <div className="flex justify-between text-xs text-muted-foreground">
+          {historyData.length > 0 && (
+            <>
+              <span>
+                {new Date(historyData[0].date).toLocaleDateString('ru-RU', {
+                  day: 'numeric',
+                  month: 'short',
+                })}
+              </span>
+              <span>Сегодня</span>
+            </>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 export function DashboardPage() {
   const { user } = useAuth();
@@ -57,6 +200,9 @@ export function DashboardPage() {
           Выберите активный рекламный кабинет
         </p>
       </div>
+
+      {/* Savings Widget */}
+      {typedUserId && <SavingsWidget userId={typedUserId} />}
 
       {/* Content */}
       {isLoading ? (

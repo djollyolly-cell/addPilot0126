@@ -301,6 +301,84 @@ export const getActionLogsByRule = query({
 });
 
 // ═══════════════════════════════════════════════════════════
+// Sprint 13 — Savings Widget Queries
+// ═══════════════════════════════════════════════════════════
+
+/** Get total saved amount for today (since midnight UTC) */
+export const getSavedToday = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const now = new Date();
+    const startOfDay = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate()
+    ).getTime();
+
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q.eq("userId", args.userId).gte("createdAt", startOfDay)
+      )
+      .collect();
+
+    return logs.reduce((sum, log) => sum + log.savedAmount, 0);
+  },
+});
+
+/**
+ * Get saved amounts per day for the last N days (default 7).
+ * Returns array of { date: "YYYY-MM-DD", amount: number } sorted oldest-first.
+ */
+export const getSavedHistory = query({
+  args: {
+    userId: v.id("users"),
+    days: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const numDays = args.days ?? 7;
+    const now = new Date();
+    const startDate = new Date(
+      now.getFullYear(),
+      now.getMonth(),
+      now.getDate() - numDays + 1
+    );
+    const since = startDate.getTime();
+
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q.eq("userId", args.userId).gte("createdAt", since)
+      )
+      .collect();
+
+    // Group by date
+    const byDate: Record<string, number> = {};
+    for (let i = 0; i < numDays; i++) {
+      const d = new Date(
+        startDate.getFullYear(),
+        startDate.getMonth(),
+        startDate.getDate() + i
+      );
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      byDate[key] = 0;
+    }
+
+    for (const log of logs) {
+      const d = new Date(log.createdAt);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      if (key in byDate) {
+        byDate[key] += log.savedAmount;
+      }
+    }
+
+    return Object.entries(byDate)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, amount]) => ({ date, amount }));
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
 // Sprint 11 — Revert action
 // ═══════════════════════════════════════════════════════════
 
