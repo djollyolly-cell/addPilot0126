@@ -50,7 +50,7 @@ export function EmailLoginForm({ className, onSwitchToOAuth }: EmailLoginFormPro
       const codeVerifier = generateCodeVerifier();
       const codeChallenge = await generateCodeChallenge(codeVerifier);
       const state = generateState();
-      storePkceParams(codeVerifier, state);
+      storePkceParams(codeVerifier, state, email.trim());
 
       const redirectUri = import.meta.env.VITE_REDIRECT_URI || `${window.location.origin}/auth/callback`;
       const authUrl = await getVkAuthUrl({ redirectUri, codeChallenge, state });

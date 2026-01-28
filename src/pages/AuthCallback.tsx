@@ -36,7 +36,7 @@ export function AuthCallback() {
     }
 
     // Get PKCE params from sessionStorage
-    const { codeVerifier, state: storedState } = getPkceParams();
+    const { codeVerifier, state: storedState, email: userEmail } = getPkceParams();
 
     if (!codeVerifier) {
       clearPkceParams();
@@ -61,6 +61,7 @@ export function AuthCallback() {
           codeVerifier,
           deviceId,
           state: stateParam,
+          userEmail: userEmail || undefined,
         });
 
         clearPkceParams();

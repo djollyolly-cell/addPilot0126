@@ -48,6 +48,7 @@ export const exchangeCodeForToken = action({
     codeVerifier: v.string(),
     deviceId: v.string(),
     state: v.string(),
+    userEmail: v.optional(v.string()),
   },
   returns: v.object({
     success: v.boolean(),
@@ -104,7 +105,7 @@ export const exchangeCodeForToken = action({
 
     const accessToken = data.access_token;
     const userId = data.user_id;
-    const email = data.email;
+    const email = data.email || args.userEmail || null;
 
     // Get user info from VK API
     const userInfoParams = new URLSearchParams({

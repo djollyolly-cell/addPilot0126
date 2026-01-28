@@ -34,20 +34,26 @@ export function generateState(): string {
 
 const STORAGE_KEY_VERIFIER = 'vkid_code_verifier';
 const STORAGE_KEY_STATE = 'vkid_state';
+const STORAGE_KEY_EMAIL = 'vkid_user_email';
 
-export function storePkceParams(codeVerifier: string, state: string): void {
+export function storePkceParams(codeVerifier: string, state: string, email?: string): void {
   sessionStorage.setItem(STORAGE_KEY_VERIFIER, codeVerifier);
   sessionStorage.setItem(STORAGE_KEY_STATE, state);
+  if (email) {
+    sessionStorage.setItem(STORAGE_KEY_EMAIL, email);
+  }
 }
 
-export function getPkceParams(): { codeVerifier: string | null; state: string | null } {
+export function getPkceParams(): { codeVerifier: string | null; state: string | null; email: string | null } {
   return {
     codeVerifier: sessionStorage.getItem(STORAGE_KEY_VERIFIER),
     state: sessionStorage.getItem(STORAGE_KEY_STATE),
+    email: sessionStorage.getItem(STORAGE_KEY_EMAIL),
   };
 }
 
 export function clearPkceParams(): void {
   sessionStorage.removeItem(STORAGE_KEY_VERIFIER);
   sessionStorage.removeItem(STORAGE_KEY_STATE);
+  sessionStorage.removeItem(STORAGE_KEY_EMAIL);
 }
