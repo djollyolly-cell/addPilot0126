@@ -413,6 +413,54 @@ export const getActivityStats = query({
 });
 
 // ═══════════════════════════════════════════════════════════
+// Sprint 15 — Recent Events (Event Feed)
+// ═══════════════════════════════════════════════════════════
+
+/** Get recent action log events with optional filters */
+export const getRecentEvents = query({
+  args: {
+    userId: v.id("users"),
+    actionType: v.optional(
+      v.union(
+        v.literal("stopped"),
+        v.literal("notified"),
+        v.literal("stopped_and_notified")
+      )
+    ),
+    accountId: v.optional(v.id("adAccounts")),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 10;
+
+    let logs;
+    if (args.accountId) {
+      logs = await ctx.db
+        .query("actionLogs")
+        .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId!))
+        .order("desc")
+        .collect();
+      // Filter by userId (accountId index doesn't include userId)
+      logs = logs.filter((l) => l.userId === args.userId);
+    } else {
+      logs = await ctx.db
+        .query("actionLogs")
+        .withIndex("by_userId_date", (q) => q.eq("userId", args.userId))
+        .order("desc")
+        .collect();
+    }
+
+    // Apply actionType filter
+    if (args.actionType) {
+      logs = logs.filter((l) => l.actionType === args.actionType);
+    }
+
+    // Apply limit
+    return logs.slice(0, limit);
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
 // Sprint 11 — Revert action
 // ═══════════════════════════════════════════════════════════
 

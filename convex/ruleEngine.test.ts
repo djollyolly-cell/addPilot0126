@@ -921,4 +921,229 @@ describe("ruleEngine", () => {
     expect(accounts[0].status).toBe("error");
     expect(accounts[0].lastError).toBe("Token expired");
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 15 — Event Feed (getRecentEvents)
+  // ═══════════════════════════════════════════════════════════
+
+  // S15-DoD#1: getRecentEvents returns events with limit=10
+  test("S15-DoD#1: getRecentEvents returns events limited to 10", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "CPL Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create 12 action logs
+    for (let i = 0; i < 12; i++) {
+      await t.mutation(api.ruleEngine.createActionLogPublic, {
+        userId,
+        ruleId,
+        accountId,
+        adId: `ad_event_${i}`,
+        adName: `Ad ${i}`,
+        actionType: "notified",
+        reason: `CPL exceeded #${i}`,
+        metricsSnapshot: { spent: 1000, leads: 2, cpl: 500 },
+        savedAmount: 500,
+        status: "success",
+      });
+    }
+
+    const events = await t.query(api.ruleEngine.getRecentEvents, { userId });
+    expect(events).toHaveLength(10);
+  });
+
+  // S15-DoD#2: getRecentEvents filters by actionType
+  test("S15-DoD#2: getRecentEvents filters by actionType", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Mixed Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Create mixed action logs
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId, ruleId, accountId,
+      adId: "ad_s", adName: "Stopped Ad",
+      actionType: "stopped",
+      reason: "CPL exceeded",
+      metricsSnapshot: { spent: 1000, leads: 2, cpl: 500 },
+      savedAmount: 1000, status: "success",
+    });
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId, ruleId, accountId,
+      adId: "ad_n", adName: "Notified Ad",
+      actionType: "notified",
+      reason: "CPL warning",
+      metricsSnapshot: { spent: 800, leads: 2, cpl: 400 },
+      savedAmount: 500, status: "success",
+    });
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId, ruleId, accountId,
+      adId: "ad_sn", adName: "Stopped+Notified",
+      actionType: "stopped_and_notified",
+      reason: "CPL critical",
+      metricsSnapshot: { spent: 2000, leads: 1, cpl: 2000 },
+      savedAmount: 2000, status: "success",
+    });
+
+    const stopped = await t.query(api.ruleEngine.getRecentEvents, {
+      userId, actionType: "stopped",
+    });
+    expect(stopped).toHaveLength(1);
+    expect(stopped[0].actionType).toBe("stopped");
+
+    const notified = await t.query(api.ruleEngine.getRecentEvents, {
+      userId, actionType: "notified",
+    });
+    expect(notified).toHaveLength(1);
+    expect(notified[0].actionType).toBe("notified");
+  });
+
+  // S15-DoD#3: getRecentEvents filters by accountId
+  test("S15-DoD#3: getRecentEvents filters by accountId", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    // Create a second account
+    const accountId2 = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "RE002",
+      name: "Second Cabinet",
+      accessToken: "token_second",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Multi-account Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId, accountId2],
+    });
+
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId, ruleId, accountId,
+      adId: "ad_acc1", adName: "Ad from Cabinet 1",
+      actionType: "notified",
+      reason: "CPL warning",
+      metricsSnapshot: { spent: 1000, leads: 2, cpl: 500 },
+      savedAmount: 500, status: "success",
+    });
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId, ruleId, accountId: accountId2,
+      adId: "ad_acc2", adName: "Ad from Cabinet 2",
+      actionType: "stopped",
+      reason: "CPL exceeded",
+      metricsSnapshot: { spent: 2000, leads: 1, cpl: 2000 },
+      savedAmount: 1500, status: "success",
+    });
+
+    const acc1Events = await t.query(api.ruleEngine.getRecentEvents, {
+      userId, accountId,
+    });
+    expect(acc1Events).toHaveLength(1);
+    expect(acc1Events[0].adId).toBe("ad_acc1");
+
+    const acc2Events = await t.query(api.ruleEngine.getRecentEvents, {
+      userId, accountId: accountId2,
+    });
+    expect(acc2Events).toHaveLength(1);
+    expect(acc2Events[0].adId).toBe("ad_acc2");
+  });
+
+  // S15-DoD#4: getRecentEvents returns empty array for new user
+  test("S15-DoD#4: getRecentEvents returns empty for new user", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "noeventuser@test.com",
+      vkId: "noevent_user",
+      name: "No Events User",
+    });
+
+    const events = await t.query(api.ruleEngine.getRecentEvents, { userId });
+    expect(events).toHaveLength(0);
+  });
+
+  // S15-DoD#5: getRecentEvents with combined filters (actionType + accountId) returns empty when no match
+  test("S15-DoD#5: getRecentEvents combined filters return empty when no match", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const accountId2 = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "RE003",
+      name: "Third Cabinet",
+      accessToken: "token_third",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Combined Filter Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Only "notified" events on accountId
+    await t.mutation(api.ruleEngine.createActionLogPublic, {
+      userId, ruleId, accountId,
+      adId: "ad_only_notif", adName: "Notified Only",
+      actionType: "notified",
+      reason: "CPL info",
+      metricsSnapshot: { spent: 500, leads: 1, cpl: 500 },
+      savedAmount: 300, status: "success",
+    });
+
+    // Filter for "stopped" on accountId2 — should be empty
+    const events = await t.query(api.ruleEngine.getRecentEvents, {
+      userId, actionType: "stopped", accountId: accountId2,
+    });
+    expect(events).toHaveLength(0);
+  });
+
+  // S15-DoD#6: getRecentEvents respects custom limit
+  test("S15-DoD#6: getRecentEvents respects custom limit", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Limit Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    for (let i = 0; i < 5; i++) {
+      await t.mutation(api.ruleEngine.createActionLogPublic, {
+        userId, ruleId, accountId,
+        adId: `ad_lim_${i}`, adName: `Limit Ad ${i}`,
+        actionType: "notified",
+        reason: `Event #${i}`,
+        metricsSnapshot: { spent: 100, leads: 1, cpl: 100 },
+        savedAmount: 100, status: "success",
+      });
+    }
+
+    const events = await t.query(api.ruleEngine.getRecentEvents, {
+      userId, limit: 3,
+    });
+    expect(events).toHaveLength(3);
+  });
 });

@@ -4,7 +4,7 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Id } from '../../convex/_generated/dataModel';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
-import { LayoutDashboard, Loader2, Trash2, CheckCircle2, Building2, TrendingUp, TrendingDown, Minus, Zap, ShieldOff, Bell } from 'lucide-react';
+import { LayoutDashboard, Loader2, Trash2, CheckCircle2, Building2, TrendingUp, TrendingDown, Minus, Zap, ShieldOff, Bell, ListFilter, Clock, Inbox } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Link } from 'react-router-dom';
 
@@ -221,6 +221,147 @@ function HealthIndicator({ status }: { status: string }) {
   );
 }
 
+/** Action type label mapping */
+const ACTION_TYPE_LABELS: Record<string, string> = {
+  stopped: 'Остановлено',
+  notified: 'Уведомление',
+  stopped_and_notified: 'Остановлено + уведомление',
+};
+
+/** Event Feed — recent action logs with filters */
+function EventFeed({
+  userId,
+  accounts,
+}: {
+  userId: Id<"users">;
+  accounts: { _id: string; name: string }[] | undefined;
+}) {
+  const [filterType, setFilterType] = useState<string>('all');
+  const [filterAccount, setFilterAccount] = useState<string>('all');
+
+  const queryArgs: {
+    userId: Id<"users">;
+    actionType?: "stopped" | "notified" | "stopped_and_notified";
+    accountId?: Id<"adAccounts">;
+    limit?: number;
+  } = { userId, limit: 10 };
+
+  if (filterType !== 'all') {
+    queryArgs.actionType = filterType as "stopped" | "notified" | "stopped_and_notified";
+  }
+  if (filterAccount !== 'all') {
+    queryArgs.accountId = filterAccount as Id<"adAccounts">;
+  }
+
+  const events = useQuery(api.ruleEngine.getRecentEvents, queryArgs);
+
+  const actionIcon = (type: string) => {
+    switch (type) {
+      case 'stopped':
+        return <ShieldOff className="w-4 h-4 text-red-500" />;
+      case 'notified':
+        return <Bell className="w-4 h-4 text-blue-500" />;
+      case 'stopped_and_notified':
+        return <Zap className="w-4 h-4 text-amber-500" />;
+      default:
+        return <Zap className="w-4 h-4" />;
+    }
+  };
+
+  return (
+    <Card data-testid="event-feed">
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2">
+          <ListFilter className="w-5 h-5" />
+          Лента событий
+        </CardTitle>
+        <CardDescription>Последние действия автоматики</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Filters */}
+        <div className="flex gap-3" data-testid="event-filters">
+          <select
+            value={filterType}
+            onChange={(e) => setFilterType(e.target.value)}
+            className="px-3 py-1.5 border rounded-lg text-sm bg-background"
+            data-testid="filter-type"
+          >
+            <option value="all">Все типы</option>
+            <option value="stopped">Остановки</option>
+            <option value="notified">Уведомления</option>
+            <option value="stopped_and_notified">Остановки + уведомления</option>
+          </select>
+
+          <select
+            value={filterAccount}
+            onChange={(e) => setFilterAccount(e.target.value)}
+            className="px-3 py-1.5 border rounded-lg text-sm bg-background"
+            data-testid="filter-account"
+          >
+            <option value="all">Все кабинеты</option>
+            {(accounts ?? []).map((acc) => (
+              <option key={acc._id} value={acc._id}>
+                {acc.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Event list */}
+        {events === undefined ? (
+          <div className="flex justify-center py-8">
+            <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+          </div>
+        ) : events.length === 0 ? (
+          <div className="flex flex-col items-center py-8 text-muted-foreground gap-2">
+            <Inbox className="w-8 h-8" />
+            <p className="text-sm" data-testid="event-feed-empty">
+              {filterType !== 'all' || filterAccount !== 'all'
+                ? 'Ничего не найдено'
+                : 'Пока нет событий'}
+            </p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {events.map((event) => (
+              <div
+                key={event._id}
+                className="flex items-start gap-3 p-3 rounded-lg border border-border hover:bg-muted/30 transition-colors"
+                data-testid="event-item"
+              >
+                <div className="pt-0.5">{actionIcon(event.actionType)}</div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{event.adName}</p>
+                  <p className="text-xs text-muted-foreground truncate">{event.reason}</p>
+                  <div className="flex items-center gap-2 mt-1">
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                      {ACTION_TYPE_LABELS[event.actionType] ?? event.actionType}
+                    </span>
+                    {event.savedAmount > 0 && (
+                      <span className="text-xs text-green-600 font-medium">
+                        +{event.savedAmount.toLocaleString()} ₽
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-1 text-xs text-muted-foreground shrink-0">
+                  <Clock className="w-3 h-3" />
+                  {new Date(event.createdAt).toLocaleString('ru-RU', {
+                    day: 'numeric',
+                    month: 'short',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function DashboardPage() {
   const { user } = useAuth();
   const typedUserId = user?.userId as Id<"users"> | undefined;
@@ -277,6 +418,9 @@ export function DashboardPage() {
 
       {/* Activity Block */}
       {typedUserId && <ActivityBlock userId={typedUserId} />}
+
+      {/* Event Feed */}
+      {typedUserId && <EventFeed userId={typedUserId} accounts={accounts} />}
 
       {/* Content */}
       {isLoading ? (
