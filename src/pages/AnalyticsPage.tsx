@@ -1,10 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useCallback } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Id } from '../../convex/_generated/dataModel';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
-import { BarChart3, Loader2, TrendingUp, Inbox } from 'lucide-react';
+import { BarChart3, Loader2, TrendingUp, Inbox, Download, Image, Lock } from 'lucide-react';
 import { cn } from '../lib/utils';
 import {
   LineChart,
@@ -54,6 +54,53 @@ function getDateRange(preset: PeriodPreset, customStart: string, customEnd: stri
   };
 }
 
+/** Export chart area as PNG via canvas */
+function useExportPng(ref: React.RefObject<HTMLDivElement | null>) {
+  return useCallback(async () => {
+    const el = ref.current;
+    if (!el) return;
+    const svg = el.querySelector('svg');
+    if (!svg) return;
+
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new window.Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      const url = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'chart.png';
+      a.click();
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgData);
+  }, [ref]);
+}
+
+/** Export top-ads data as CSV */
+function exportCsv(
+  data: { adId: string; adName: string; totalSaved: number; totalSpent: number; triggers: number }[]
+) {
+  const header = 'ID объявления,Название,Сэкономлено (₽),Потрачено (₽),Срабатываний\n';
+  const rows = data
+    .map((d) => `${d.adId},"${d.adName}",${d.totalSaved},${d.totalSpent},${d.triggers}`)
+    .join('\n');
+  const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'top-ads.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function AnalyticsPage() {
   const { user } = useAuth();
   const userId = user?.userId as Id<"users"> | undefined;
@@ -62,6 +109,9 @@ export function AnalyticsPage() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [dateError, setDateError] = useState<string | null>(null);
+
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const handleExportPng = useExportPng(chartRef);
 
   const { startDate, endDate } = useMemo(
     () => getDateRange(period, customStart, customEnd),
@@ -110,6 +160,16 @@ export function AnalyticsPage() {
     userId ? { userId, startDate, endDate } : 'skip'
   );
 
+  const topAdsData = useQuery(
+    api.ruleEngine.getTopAds,
+    userId ? { userId, startDate, endDate } : 'skip'
+  );
+
+  const roiData = useQuery(
+    api.ruleEngine.getROI,
+    userId ? { userId, startDate, endDate } : 'skip'
+  );
+
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -118,10 +178,18 @@ export function AnalyticsPage() {
     );
   }
 
-  const isLoading = savingsData === undefined || typeData === undefined || triggerData === undefined;
+  const isLoading =
+    savingsData === undefined ||
+    typeData === undefined ||
+    triggerData === undefined ||
+    topAdsData === undefined ||
+    roiData === undefined;
+
   const hasData = savingsData && savingsData.some((d) => d.amount > 0);
   const hasTypeData = typeData && typeData.some((d) => d.count > 0);
   const hasTriggerData = triggerData && triggerData.length > 0;
+  const hasTopAds = topAdsData && topAdsData.length > 0;
+  const isFreemium = user.subscriptionTier === 'freemium';
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6" data-testid="analytics-page">
@@ -195,18 +263,70 @@ export function AnalyticsPage() {
         </div>
       ) : (
         <div className="space-y-6">
+          {/* ROI Widget */}
+          <Card data-testid="roi-widget">
+            <CardHeader>
+              <CardTitle className="text-lg">ROI автоматизации</CardTitle>
+              <CardDescription>Отношение сэкономленного бюджета к потраченному</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isFreemium ? (
+                <div className="flex items-center gap-3 py-4 text-muted-foreground">
+                  <Lock className="w-5 h-5" />
+                  <p className="text-sm">Оформите подписку для доступа к ROI-аналитике</p>
+                </div>
+              ) : roiData.totalEvents > 0 ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums">{roiData.roi}%</p>
+                    <p className="text-xs text-muted-foreground">ROI</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums">{roiData.totalSaved.toLocaleString()} ₽</p>
+                    <p className="text-xs text-muted-foreground">Сэкономлено</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums">{roiData.totalSpent.toLocaleString()} ₽</p>
+                    <p className="text-xs text-muted-foreground">Потрачено</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums">{roiData.totalEvents}</p>
+                    <p className="text-xs text-muted-foreground">Событий</p>
+                  </div>
+                </div>
+              ) : (
+                <EmptyChart message="Нет данных за период" />
+              )}
+            </CardContent>
+          </Card>
+
           {/* Line chart — savings over time */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-lg flex items-center gap-2">
-                <TrendingUp className="w-5 h-5" />
-                Экономия за период
-              </CardTitle>
-              <CardDescription>Сумма сэкономленного бюджета по дням</CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5" />
+                    Экономия за период
+                  </CardTitle>
+                  <CardDescription>Сумма сэкономленного бюджета по дням</CardDescription>
+                </div>
+                {hasData && (
+                  <button
+                    type="button"
+                    onClick={handleExportPng}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border hover:bg-muted transition-colors"
+                    data-testid="export-png"
+                  >
+                    <Image className="w-3.5 h-3.5" />
+                    PNG
+                  </button>
+                )}
+              </div>
             </CardHeader>
             <CardContent>
               {hasData ? (
-                <div data-testid="savings-line-chart" className="h-64">
+                <div ref={chartRef} data-testid="savings-line-chart" className="h-64">
                   <ResponsiveContainer width="100%" height="100%">
                     <LineChart data={savingsData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
@@ -305,6 +425,67 @@ export function AnalyticsPage() {
                       <Legend />
                     </PieChart>
                   </ResponsiveContainer>
+                </div>
+              ) : (
+                <EmptyChart message="Нет данных за период" />
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Top-10 Ads Table */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg">Топ-10 объявлений</CardTitle>
+                  <CardDescription>По сумме сэкономленного бюджета</CardDescription>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => hasTopAds && exportCsv(topAdsData!)}
+                  disabled={!hasTopAds}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+                    hasTopAds
+                      ? 'hover:bg-muted'
+                      : 'opacity-50 cursor-not-allowed'
+                  )}
+                  data-testid="export-csv"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  CSV
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {hasTopAds ? (
+                <div className="overflow-x-auto" data-testid="top-ads-table">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-muted-foreground">
+                        <th className="pb-2 font-medium">#</th>
+                        <th className="pb-2 font-medium">Объявление</th>
+                        <th className="pb-2 font-medium text-right">Сэкономлено</th>
+                        <th className="pb-2 font-medium text-right">Потрачено</th>
+                        <th className="pb-2 font-medium text-right">Срабатываний</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {topAdsData!.map((ad, i) => (
+                        <tr key={ad.adId} className="border-b last:border-0">
+                          <td className="py-2.5 text-muted-foreground">{i + 1}</td>
+                          <td className="py-2.5 font-medium truncate max-w-[200px]">{ad.adName}</td>
+                          <td className="py-2.5 text-right text-green-600">
+                            {ad.totalSaved.toLocaleString()} ₽
+                          </td>
+                          <td className="py-2.5 text-right">
+                            {ad.totalSpent.toLocaleString()} ₽
+                          </td>
+                          <td className="py-2.5 text-right">{ad.triggers}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
               ) : (
                 <EmptyChart message="Нет данных за период" />

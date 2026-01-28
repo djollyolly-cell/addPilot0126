@@ -1408,4 +1408,233 @@ describe("ruleEngine", () => {
       expect(entry.amount).toBe(0);
     }
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 18 — Analytics tables & export (getTopAds, getROI)
+  // ═══════════════════════════════════════════════════════════
+
+  // S18-DoD#1: getTopAds returns top ads sorted by savedAmount desc
+  test("S18-DoD#1: getTopAds returns ads sorted by savedAmount", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "TopAds Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_low", adName: "Low Saver",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 500, leads: 1, cpl: 500 },
+        savedAmount: 100, status: "success", createdAt: now,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_high", adName: "High Saver",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 2000, leads: 1, cpl: 2000 },
+        savedAmount: 900, status: "success", createdAt: now,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_mid", adName: "Mid Saver",
+        actionType: "notified",
+        reason: "CPL warning",
+        metricsSnapshot: { spent: 1000, leads: 2, cpl: 500 },
+        savedAmount: 400, status: "success", createdAt: now,
+      });
+    });
+
+    const data = await t.query(api.ruleEngine.getTopAds, {
+      userId,
+      startDate: now - 86400000,
+      endDate: now + 86400000,
+    });
+
+    expect(data).toHaveLength(3);
+    // Sorted desc by totalSaved
+    expect(data[0].adName).toBe("High Saver");
+    expect(data[0].totalSaved).toBe(900);
+    expect(data[1].adName).toBe("Mid Saver");
+    expect(data[1].totalSaved).toBe(400);
+    expect(data[2].adName).toBe("Low Saver");
+    expect(data[2].totalSaved).toBe(100);
+  });
+
+  // S18-DoD#2: getTopAds respects limit parameter
+  test("S18-DoD#2: getTopAds respects limit parameter", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Limit TopAds Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 5; i++) {
+        await ctx.db.insert("actionLogs", {
+          userId, ruleId, accountId,
+          adId: `ad_top_${i}`, adName: `Ad ${i}`,
+          actionType: "stopped",
+          reason: "CPL exceeded",
+          metricsSnapshot: { spent: 100 * (i + 1), leads: 1, cpl: 100 * (i + 1) },
+          savedAmount: 50 * (i + 1), status: "success", createdAt: now,
+        });
+      }
+    });
+
+    const data = await t.query(api.ruleEngine.getTopAds, {
+      userId,
+      startDate: now - 86400000,
+      endDate: now + 86400000,
+      limit: 2,
+    });
+
+    expect(data).toHaveLength(2);
+    // Top 2 by savedAmount: Ad 4 (250) and Ad 3 (200)
+    expect(data[0].totalSaved).toBe(250);
+    expect(data[1].totalSaved).toBe(200);
+  });
+
+  // S18-DoD#3: getROI returns correct ROI calculation
+  test("S18-DoD#3: getROI returns correct ROI calculation", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "ROI Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_roi_1", adName: "ROI Ad 1",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 1000, leads: 2, cpl: 500 },
+        savedAmount: 500, status: "success", createdAt: now,
+      });
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_roi_2", adName: "ROI Ad 2",
+        actionType: "stopped",
+        reason: "CPL exceeded",
+        metricsSnapshot: { spent: 2000, leads: 1, cpl: 2000 },
+        savedAmount: 1000, status: "success", createdAt: now,
+      });
+    });
+
+    const result = await t.query(api.ruleEngine.getROI, {
+      userId,
+      startDate: now - 86400000,
+      endDate: now + 86400000,
+    });
+
+    expect(result.totalSaved).toBe(1500);
+    expect(result.totalSpent).toBe(3000);
+    // ROI = (1500 / 3000) * 100 = 50%
+    expect(result.roi).toBe(50);
+    expect(result.totalEvents).toBe(2);
+  });
+
+  // S18-DoD#4: getTopAds returns empty array for new user
+  test("S18-DoD#4: getTopAds returns empty for new user", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "notopads@test.com",
+      vkId: "notopads_user",
+      name: "No TopAds User",
+    });
+
+    const now = Date.now();
+    const data = await t.query(api.ruleEngine.getTopAds, {
+      userId,
+      startDate: now - 7 * 86400000,
+      endDate: now,
+    });
+
+    expect(data).toHaveLength(0);
+  });
+
+  // S18-DoD#5: getROI returns zeros for new user
+  test("S18-DoD#5: getROI returns zeros for new user", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "noroi@test.com",
+      vkId: "noroi_user",
+      name: "No ROI User",
+    });
+
+    const now = Date.now();
+    const result = await t.query(api.ruleEngine.getROI, {
+      userId,
+      startDate: now - 7 * 86400000,
+      endDate: now,
+    });
+
+    expect(result.totalSaved).toBe(0);
+    expect(result.totalSpent).toBe(0);
+    expect(result.roi).toBe(0);
+    expect(result.totalEvents).toBe(0);
+  });
+
+  // S18-DoD#6: getROI returns roi=0 when totalSpent is 0
+  test("S18-DoD#6: getROI returns roi=0 when totalSpent=0", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestSetup(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Zero Spent Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const now = Date.now();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("actionLogs", {
+        userId, ruleId, accountId,
+        adId: "ad_zero_spent", adName: "Zero Spent Ad",
+        actionType: "notified",
+        reason: "CPL warning",
+        metricsSnapshot: { spent: 0, leads: 0, cpl: 0 },
+        savedAmount: 100, status: "success", createdAt: now,
+      });
+    });
+
+    const result = await t.query(api.ruleEngine.getROI, {
+      userId,
+      startDate: now - 86400000,
+      endDate: now + 86400000,
+    });
+
+    expect(result.totalSaved).toBe(100);
+    expect(result.totalSpent).toBe(0);
+    expect(result.roi).toBe(0);
+    expect(result.totalEvents).toBe(1);
+  });
 });

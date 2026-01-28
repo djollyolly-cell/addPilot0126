@@ -587,6 +587,94 @@ export const getAnalyticsTriggersByRule = query({
 });
 
 // ═══════════════════════════════════════════════════════════
+// Sprint 18 — Top-10 Ads & ROI
+// ═══════════════════════════════════════════════════════════
+
+/** Get top N ads by savedAmount within date range */
+export const getTopAds = query({
+  args: {
+    userId: v.id("users"),
+    startDate: v.number(),
+    endDate: v.number(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const limit = args.limit ?? 10;
+
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q
+          .eq("userId", args.userId)
+          .gte("createdAt", args.startDate)
+          .lte("createdAt", args.endDate)
+      )
+      .collect();
+
+    // Aggregate by adId
+    const byAd: Record<
+      string,
+      { adName: string; totalSaved: number; totalSpent: number; triggers: number }
+    > = {};
+
+    for (const log of logs) {
+      if (!byAd[log.adId]) {
+        byAd[log.adId] = {
+          adName: log.adName,
+          totalSaved: 0,
+          totalSpent: 0,
+          triggers: 0,
+        };
+      }
+      byAd[log.adId].totalSaved += log.savedAmount;
+      byAd[log.adId].totalSpent += log.metricsSnapshot.spent;
+      byAd[log.adId].triggers += 1;
+    }
+
+    return Object.entries(byAd)
+      .map(([adId, data]) => ({ adId, ...data }))
+      .sort((a, b) => b.totalSaved - a.totalSaved)
+      .slice(0, limit);
+  },
+});
+
+/** Get ROI metrics: total saved, total spent, ratio */
+export const getROI = query({
+  args: {
+    userId: v.id("users"),
+    startDate: v.number(),
+    endDate: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q
+          .eq("userId", args.userId)
+          .gte("createdAt", args.startDate)
+          .lte("createdAt", args.endDate)
+      )
+      .collect();
+
+    let totalSaved = 0;
+    let totalSpent = 0;
+    for (const log of logs) {
+      totalSaved += log.savedAmount;
+      totalSpent += log.metricsSnapshot.spent;
+    }
+
+    const roi = totalSpent > 0 ? (totalSaved / totalSpent) * 100 : 0;
+
+    return {
+      totalSaved,
+      totalSpent,
+      roi: Math.round(roi * 100) / 100,
+      totalEvents: logs.length,
+    };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
 // Sprint 11 — Revert action
 // ═══════════════════════════════════════════════════════════
 
