@@ -460,4 +460,115 @@ describe("adAccounts", () => {
       expect(adId).toBeDefined();
     });
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 21 — Settings: API tab queries
+  // ═══════════════════════════════════════════════════════════
+
+  describe("getSyncErrors (S21)", () => {
+    // S21-DoD#8: Sync errors table shows accounts with lastError
+    test("S21-DoD#8: returns accounts with lastError set", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      // Upgrade to start to allow multiple accounts
+      await t.mutation(api.users.updateTier, { userId, tier: "start" });
+
+      const acc1 = await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "S21_001",
+        name: "Кабинет OK",
+        accessToken: "token_ok",
+      });
+      const acc2 = await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "S21_002",
+        name: "Кабинет Error",
+        accessToken: "token_err",
+      });
+
+      // Set error on second account
+      await t.mutation(api.adAccounts.updateStatus, {
+        accountId: acc2,
+        status: "error",
+        lastError: "Токен VK Ads истёк",
+      });
+
+      const errors = await t.query(api.adAccounts.getSyncErrors, { userId });
+      expect(errors).toHaveLength(1);
+      expect(errors[0].name).toBe("Кабинет Error");
+      expect(errors[0].lastError).toBe("Токен VK Ads истёк");
+    });
+
+    // S21-DoD#12: Empty sync errors — "Всё работает"
+    test("S21-DoD#12: returns empty array when no errors", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "S21_003",
+        name: "Кабинет OK",
+        accessToken: "token_ok",
+      });
+
+      const errors = await t.query(api.adAccounts.getSyncErrors, { userId });
+      expect(errors).toHaveLength(0);
+    });
+
+    test("S21: returns empty array for user with no accounts", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      const errors = await t.query(api.adAccounts.getSyncErrors, { userId });
+      expect(errors).toEqual([]);
+    });
+  });
+
+  describe("getVkApiStatus (S21)", () => {
+    // S21-DoD#7: VK status "Активно" when token present and not expired
+    test("S21-DoD#7: returns connected=true when user has VK token", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      // Simulate storing a VK Ads token
+      await t.run(async (ctx) => {
+        await ctx.db.patch(userId, {
+          vkAdsAccessToken: "valid_token",
+          vkAdsTokenExpiresAt: Date.now() + 3600000, // expires in 1h
+        });
+      });
+
+      const status = await t.query(api.adAccounts.getVkApiStatus, { userId });
+      expect(status.connected).toBe(true);
+      expect(status.expired).toBe(false);
+    });
+
+    // S21-DoD#13: Token expired — "Переавторизуйтесь"
+    test("S21-DoD#13: returns expired=true when token is expired", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      // Simulate expired VK Ads token
+      await t.run(async (ctx) => {
+        await ctx.db.patch(userId, {
+          vkAdsAccessToken: "expired_token",
+          vkAdsTokenExpiresAt: Date.now() - 3600000, // expired 1h ago
+        });
+      });
+
+      const status = await t.query(api.adAccounts.getVkApiStatus, { userId });
+      expect(status.connected).toBe(true);
+      expect(status.expired).toBe(true);
+    });
+
+    test("S21: returns connected=false when no token", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      const status = await t.query(api.adAccounts.getVkApiStatus, { userId });
+      expect(status.connected).toBe(false);
+      expect(status.expired).toBe(false);
+    });
+  });
 });

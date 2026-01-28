@@ -562,3 +562,49 @@ export const updateSyncTime = mutation({
     });
   },
 });
+
+// ═══════════════════════════════════════════════════════════
+// Sprint 21 — Settings: API tab queries
+// ═══════════════════════════════════════════════════════════
+
+/** Get sync errors — accounts with lastError set */
+export const getSyncErrors = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const accounts = await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    return accounts
+      .filter((a) => a.lastError)
+      .map((a) => ({
+        _id: a._id,
+        name: a.name,
+        status: a.status,
+        lastError: a.lastError!,
+        lastSyncAt: a.lastSyncAt,
+      }));
+  },
+});
+
+/** Get VK API status for user */
+export const getVkApiStatus = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return { connected: false, expired: false };
+
+    const hasToken = !!user.vkAdsAccessToken;
+    const expired = user.vkAdsTokenExpiresAt
+      ? user.vkAdsTokenExpiresAt < Date.now()
+      : false;
+
+    return {
+      connected: hasToken,
+      expired: hasToken && expired,
+      tokenExpiresAt: user.vkAdsTokenExpiresAt,
+      lastSyncAt: undefined as number | undefined,
+    };
+  },
+});
