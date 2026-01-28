@@ -131,6 +131,19 @@ export const disconnect = mutation({
       await ctx.db.delete(campaign._id);
     }
 
+    // Clear activeAccountId if this was the active account
+    const settings = await ctx.db
+      .query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .first();
+
+    if (settings && settings.activeAccountId === args.accountId) {
+      await ctx.db.patch(settings._id, {
+        activeAccountId: undefined,
+        updatedAt: Date.now(),
+      });
+    }
+
     // Delete the account itself
     await ctx.db.delete(args.accountId);
 

@@ -22,7 +22,7 @@ interface AvailableAccount {
 export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnectWizardProps) {
   const typedUserId = userId as Id<"users">;
 
-  const hasCredentials = useQuery(api.users.hasVkAdsCredentials, { userId: typedUserId });
+  const savedCredentials = useQuery(api.users.getVkAdsCredentialsForFrontend, { userId: typedUserId });
 
   const saveCredentials = useMutation(api.users.saveVkAdsCredentials);
   const fetchAvailableAccounts = useAction(api.adAccounts.fetchAvailableAccounts);
@@ -38,12 +38,14 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [connectingSelected, setConnectingSelected] = useState(false);
 
-  // If user already has credentials, skip to step 2 automatically
+  // Pre-fill credentials from DB and skip to step 2 if they exist
   useEffect(() => {
-    if (hasCredentials === true && step === 1) {
+    if (savedCredentials && step === 1) {
+      setClientId(savedCredentials.clientId);
+      setClientSecret(savedCredentials.clientSecret);
       setStep(2);
     }
-  }, [hasCredentials, step]);
+  }, [savedCredentials, step]);
 
   // Step 2: auto-fetch accounts when entering this step
   useEffect(() => {

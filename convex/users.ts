@@ -505,6 +505,23 @@ export const hasVkAdsCredentials = query({
   },
 });
 
+// Get VK Ads credentials for frontend (pre-fill wizard)
+export const getVkAdsCredentialsForFrontend = query({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user || !user.vkAdsClientId || !user.vkAdsClientSecret) {
+      return null;
+    }
+    return {
+      clientId: user.vkAdsClientId,
+      clientSecret: user.vkAdsClientSecret,
+    };
+  },
+});
+
 // Delete user and all related data
 export const deleteUser = mutation({
   args: {

@@ -4,6 +4,7 @@ import { LoginPage } from './pages/LoginPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { AccountsPage } from './pages/AccountsPage';
 import { RulesPage } from './pages/RulesPage';
+import { DashboardPage } from './pages/DashboardPage';
 import { AuthCallback } from './pages/AuthCallback';
 import { AdsCallback } from './pages/AdsCallback';
 import { TelegramSettingsPage } from './pages/TelegramSettingsPage';
@@ -39,7 +40,7 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (isAuthenticated) {
-    return <Navigate to="/profile" replace />;
+    return <Navigate to="/dashboard" replace />;
   }
 
   return <>{children}</>;
@@ -66,7 +67,8 @@ function App() {
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/profile" replace />} />
+        <Route index element={<Navigate to="/dashboard" replace />} />
+        <Route path="dashboard" element={<DashboardPage />} />
         <Route path="profile" element={<ProfilePage />} />
         <Route path="accounts" element={<AccountsPage />} />
         <Route path="rules" element={<RulesPage />} />

@@ -19,6 +19,7 @@ import type * as ruleEngine from "../ruleEngine.js";
 import type * as rules from "../rules.js";
 import type * as syncMetrics from "../syncMetrics.js";
 import type * as telegram from "../telegram.js";
+import type * as userSettings from "../userSettings.js";
 import type * as users from "../users.js";
 import type * as vkApi from "../vkApi.js";
 
@@ -40,6 +41,7 @@ declare const fullApi: ApiFromModules<{
   rules: typeof rules;
   syncMetrics: typeof syncMetrics;
   telegram: typeof telegram;
+  userSettings: typeof userSettings;
   users: typeof users;
   vkApi: typeof vkApi;
 }>;

@@ -238,6 +238,7 @@ export default defineSchema({
     digestEnabled: v.boolean(),
     digestTime: v.string(),
     language: v.string(),
+    activeAccountId: v.optional(v.id("adAccounts")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
