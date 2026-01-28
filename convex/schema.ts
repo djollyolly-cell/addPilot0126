@@ -221,6 +221,14 @@ export default defineSchema({
   })
     .index("by_email", ["email"]),
 
+  telegramLinks: defineTable({
+    userId: v.id("users"),
+    token: v.string(),
+    createdAt: v.number(),
+  })
+    .index("by_token", ["token"])
+    .index("by_userId", ["userId"]),
+
   userSettings: defineTable({
     userId: v.id("users"),
     quietHoursEnabled: v.boolean(),

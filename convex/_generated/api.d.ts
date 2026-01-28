@@ -13,10 +13,12 @@ import type * as auth from "../auth.js";
 import type * as authEmail from "../authEmail.js";
 import type * as authInternal from "../authInternal.js";
 import type * as crons from "../crons.js";
+import type * as http from "../http.js";
 import type * as metrics from "../metrics.js";
 import type * as ruleEngine from "../ruleEngine.js";
 import type * as rules from "../rules.js";
 import type * as syncMetrics from "../syncMetrics.js";
+import type * as telegram from "../telegram.js";
 import type * as users from "../users.js";
 import type * as vkApi from "../vkApi.js";
 
@@ -32,10 +34,12 @@ declare const fullApi: ApiFromModules<{
   authEmail: typeof authEmail;
   authInternal: typeof authInternal;
   crons: typeof crons;
+  http: typeof http;
   metrics: typeof metrics;
   ruleEngine: typeof ruleEngine;
   rules: typeof rules;
   syncMetrics: typeof syncMetrics;
+  telegram: typeof telegram;
   users: typeof users;
   vkApi: typeof vkApi;
 }>;
