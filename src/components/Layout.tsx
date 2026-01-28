@@ -22,14 +22,23 @@ const navigation = [
   { name: 'Настройки', href: '/settings', icon: Settings },
 ];
 
+/** Bottom nav shows 5 key items on mobile */
+const bottomNavItems = [
+  { name: 'Дашборд', href: '/dashboard', icon: LayoutDashboard },
+  { name: 'Кабинеты', href: '/accounts', icon: Building2 },
+  { name: 'Правила', href: '/rules', icon: ListChecks },
+  { name: 'Аналитика', href: '/analytics', icon: BarChart3 },
+  { name: 'Настройки', href: '/settings', icon: Settings },
+];
+
 export function Layout() {
   const { user, logout } = useAuth();
   const location = useLocation();
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Sidebar */}
-      <aside className="fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border">
+      {/* Sidebar — hidden on mobile, visible on md+ */}
+      <aside className="hidden md:block fixed inset-y-0 left-0 z-50 w-64 bg-card border-r border-border">
         {/* Logo */}
         <div className="flex items-center gap-2 px-6 py-4 border-b border-border">
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
@@ -104,12 +113,41 @@ export function Layout() {
         </div>
       </aside>
 
-      {/* Main content */}
-      <main className="pl-64">
-        <div className="p-8">
+      {/* Main content — no left padding on mobile, pl-64 on md+ */}
+      <main className="md:pl-64 pb-20 md:pb-0">
+        <div className="p-4 md:p-8">
           <Outlet />
         </div>
       </main>
+
+      {/* Bottom navigation — visible on mobile only */}
+      <nav
+        data-testid="bottom-nav"
+        className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-card border-t border-border"
+      >
+        <div className="flex items-center justify-around h-16">
+          {bottomNavItems.map((item) => {
+            const isActive =
+              location.pathname === item.href ||
+              (item.href === '/settings' && location.pathname.startsWith('/settings'));
+            return (
+              <Link
+                key={item.name}
+                to={item.href}
+                className={cn(
+                  'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors',
+                  isActive
+                    ? 'text-primary'
+                    : 'text-muted-foreground'
+                )}
+              >
+                <item.icon className="w-5 h-5" />
+                <span className="text-[10px] font-medium leading-none">{item.name}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
     </div>
   );
 }

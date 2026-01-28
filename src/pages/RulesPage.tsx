@@ -134,11 +134,11 @@ export function RulesPage() {
   const editingRule = editingRuleId ? rules?.find((r) => r._id === editingRuleId) : undefined;
 
   return (
-    <div className="max-w-6xl mx-auto p-6 space-y-6" data-testid="rules-page">
+    <div className="max-w-6xl mx-auto space-y-6" data-testid="rules-page">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
+          <h1 className="text-xl sm:text-2xl font-bold text-foreground flex items-center gap-2">
             <ListChecks className="w-7 h-7" />
             Правила автоматизации
           </h1>
@@ -500,7 +500,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
           <label className="block text-sm font-medium">Условие</label>
 
           {/* Type selector */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {(Object.keys(RULE_TYPE_LABELS) as RuleType[]).map((t) => (
               <button
                 key={t}

@@ -116,7 +116,7 @@ export function LoginPage() {
           </Card>
 
           {/* Features */}
-          <div className="mt-8 grid grid-cols-3 gap-4">
+          <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
             <FeatureCard
               icon={Shield}
               title="Защита"

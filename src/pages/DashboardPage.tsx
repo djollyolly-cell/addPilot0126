@@ -179,7 +179,7 @@ function ActivityBlock({ userId }: { userId: Id<"users"> }) {
   ];
 
   return (
-    <div className="grid grid-cols-3 gap-4" data-testid="activity-block">
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" data-testid="activity-block">
       {items.map((item) => (
         <Card key={item.label}>
           <CardContent className="flex items-center gap-3 p-4">
@@ -279,7 +279,7 @@ function EventFeed({
       </CardHeader>
       <CardContent className="space-y-4">
         {/* Filters */}
-        <div className="flex gap-3" data-testid="event-filters">
+        <div className="flex flex-wrap gap-3" data-testid="event-filters">
           <select
             value={filterType}
             onChange={(e) => setFilterType(e.target.value)}
@@ -401,7 +401,7 @@ export function DashboardPage() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto p-6 space-y-6" data-testid="dashboard-page">
+    <div className="max-w-3xl mx-auto space-y-6" data-testid="dashboard-page">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
