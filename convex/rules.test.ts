@@ -826,4 +826,224 @@ describe("rules", () => {
       })
     ).rejects.toThrow("Лимит правил");
   });
+
+  // ═══════════════════════════════════════════════════════════
+  // Sprint 16 — Full Rules UI (backend scenarios)
+  // ═══════════════════════════════════════════════════════════
+
+  // S16-DoD#1: rules.list returns all rules for user (two-column list data)
+  test("S16-DoD#1: rules.list returns all user rules for list panel", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    await t.mutation(api.rules.create, {
+      userId,
+      name: "Rule A",
+      type: "cpl_limit",
+      value: 300,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+    await t.mutation(api.rules.create, {
+      userId,
+      name: "Rule B",
+      type: "min_ctr",
+      value: 1.5,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const rules = await t.query(api.rules.list, { userId });
+    expect(rules).toHaveLength(2);
+    expect(rules.map((r) => r.name)).toContain("Rule A");
+    expect(rules.map((r) => r.name)).toContain("Rule B");
+  });
+
+  // S16-DoD#3: rules.update updates name and value (editor save)
+  test("S16-DoD#3: rules.update updates name and value", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Original Name",
+      type: "cpl_limit",
+      value: 500,
+      actions: defaultActions,
+      targetAccountIds: [accountId],
+    });
+
+    await t.mutation(api.rules.update, {
+      ruleId,
+      userId,
+      name: "Updated Name",
+      value: 700,
+    });
+
+    const updated = await t.query(api.rules.get, { ruleId });
+    expect(updated?.name).toBe("Updated Name");
+    expect(updated?.conditions.value).toBe(700);
+  });
+
+  // S16-DoD#4: rules.update updates actions (editor form actions)
+  test("S16-DoD#4: rules.update updates actions", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Action Update Rule",
+      type: "budget_limit",
+      value: 1000,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    await t.mutation(api.rules.update, {
+      ruleId,
+      userId,
+      actions: { stopAd: true, notify: true },
+    });
+
+    const updated = await t.query(api.rules.get, { ruleId });
+    expect(updated?.actions.stopAd).toBe(true);
+    expect(updated?.actions.notify).toBe(true);
+  });
+
+  // S16-DoD#5: validation rejects negative value
+  test("S16-DoD#5: create rejects negative value", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    await expect(
+      t.mutation(api.rules.create, {
+        userId,
+        name: "Negative Rule",
+        type: "cpl_limit",
+        value: -100,
+        actions: { stopAd: false, notify: true },
+        targetAccountIds: [accountId],
+      })
+    ).rejects.toThrow("Значение должно быть больше 0");
+  });
+
+  // S16-DoD#6: update rejects negative value
+  test("S16-DoD#6: update rejects negative value", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Will Update",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    await expect(
+      t.mutation(api.rules.update, {
+        ruleId,
+        userId,
+        value: -100,
+      })
+    ).rejects.toThrow("Значение должно быть больше 0");
+  });
+
+  // S16-DoD#8: empty state — new user has 0 rules
+  test("S16-DoD#8: new user has empty rules list", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "norules@test.com",
+      vkId: "norules_user",
+      name: "No Rules User",
+    });
+
+    const rules = await t.query(api.rules.list, { userId });
+    expect(rules).toHaveLength(0);
+  });
+
+  // S16-DoD#9: freemium user — limit is 2, third rule rejected
+  test("S16-DoD#9: freemium limit — 3rd rule rejected", async () => {
+    const t = convexTest(schema);
+    const userId = await t.mutation(api.users.create, {
+      email: "freelimit@test.com",
+      vkId: "freelimit_user",
+      name: "Freemium Limit User",
+    });
+    // Stay on freemium tier (default)
+
+    const accountId = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "FL001",
+      name: "Free Cabinet",
+      accessToken: "token_free",
+    });
+
+    // Create 2 rules (freemium limit)
+    await t.mutation(api.rules.create, {
+      userId,
+      name: "Free Rule 1",
+      type: "cpl_limit",
+      value: 100,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+    await t.mutation(api.rules.create, {
+      userId,
+      name: "Free Rule 2",
+      type: "min_ctr",
+      value: 2,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // 3rd rule should be rejected
+    await expect(
+      t.mutation(api.rules.create, {
+        userId,
+        name: "Free Rule 3",
+        type: "budget_limit",
+        value: 500,
+        actions: { stopAd: false, notify: true },
+        targetAccountIds: [accountId],
+      })
+    ).rejects.toThrow("Лимит правил");
+
+    // getLimits confirms usage = 2
+    const limits = await t.query(api.users.getLimits, { userId });
+    expect(limits.usage.rules).toBe(2);
+    expect(limits.limits.rules).toBe(2);
+  });
+
+  // S16-DoD#10: rules.update updates target accounts
+  test("S16-DoD#10: rules.update updates target accounts", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const accountId2 = await t.mutation(api.adAccounts.connect, {
+      userId,
+      vkAccountId: "R002",
+      name: "Second Cabinet",
+      accessToken: "token_second",
+    });
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Target Update Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    await t.mutation(api.rules.update, {
+      ruleId,
+      userId,
+      targetAccountIds: [accountId, accountId2],
+    });
+
+    const updated = await t.query(api.rules.get, { ruleId });
+    expect(updated?.targetAccountIds).toHaveLength(2);
+  });
 });
