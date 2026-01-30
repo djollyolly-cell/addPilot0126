@@ -95,7 +95,7 @@ self.addEventListener('fetch', (event) => {
 
 // ─── Push notifications ────────────────────────────────────
 self.addEventListener('push', (event) => {
-  let data = { title: 'AdPilot', body: 'Новое уведомление' };
+  let data = { title: 'AddPilot', body: 'Новое уведомление' };
 
   if (event.data) {
     try {

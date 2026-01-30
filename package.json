@@ -1,7 +1,7 @@
 {
   "name": "adpilot",
   "version": "1.0.0",
-  "description": "AdPilot - Automated assistant for VK Ads targetologists",
+  "description": "AddPilot - Automated assistant for VK Ads targetologists",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -36,10 +36,12 @@
     "convex": "^1.31.6",
     "date-fns": "^3.6.0",
     "lucide-react": "^0.424.0",
+    "nodemailer": "^7.0.13",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.26.0",
     "recharts": "^2.12.7",
+    "resend": "^6.9.1",
     "tailwind-merge": "^2.4.0",
     "tailwindcss-animate": "^1.0.7",
     "zod": "^3.23.8"
@@ -49,6 +51,7 @@
     "@testing-library/jest-dom": "^6.4.8",
     "@testing-library/react": "^16.0.0",
     "@types/node": "^22.0.0",
+    "@types/nodemailer": "^7.0.9",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useAction, useMutation, useQuery } from 'convex/react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
@@ -43,7 +44,7 @@ const TIER_COLORS: Record<string, string> = {
   pro: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
 };
 
-const BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || 'AdPilotBot';
+const BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || 'AddPilotBot';
 
 export function SettingsPage() {
   const { user } = useAuth();
@@ -127,8 +128,41 @@ export function SettingsPage() {
    ═══════════════════════════════════════════════════════════ */
 
 function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['user']> }) {
+  const navigate = useNavigate();
+
   return (
     <div data-testid="profile-tab" className="space-y-6">
+      {/* Upgrade Banner */}
+      <div
+        onClick={() => navigate('/pricing')}
+        className="flex items-center justify-between p-4 rounded-xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent border border-primary/20 cursor-pointer hover:border-primary/40 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="p-2 rounded-lg bg-primary/10">
+            <Crown className="w-6 h-6 text-primary" />
+          </div>
+          <div>
+            <p className="font-semibold">
+              {user.subscriptionTier === 'freemium'
+                ? 'Перейти на платный тариф'
+                : user.subscriptionTier === 'start'
+                ? 'Перейти на Pro'
+                : 'Управление тарифом'}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {user.subscriptionTier === 'freemium'
+                ? 'Больше кабинетов, правил и возможностей'
+                : user.subscriptionTier === 'start'
+                ? 'До 10 кабинетов, безлимитные правила, API'
+                : 'Посмотреть все тарифы и опции'}
+            </p>
+          </div>
+        </div>
+        <Button variant="default" size="sm" className="shrink-0">
+          {user.subscriptionTier === 'pro' ? 'Тарифы' : 'Улучшить'}
+        </Button>
+      </div>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Personal info */}
         <Card>
@@ -189,6 +223,7 @@ function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['us
             <div className="flex items-center justify-between">
               <span className="text-sm text-muted-foreground">Тариф</span>
               <span
+                data-testid="subscription-tier"
                 className={cn(
                   'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium',
                   TIER_COLORS[user.subscriptionTier] || TIER_COLORS.freemium
@@ -211,13 +246,24 @@ function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['us
                 </span>
               </div>
             )}
-            {user.subscriptionTier === 'freemium' && (
-              <div className="pt-3 border-t">
-                <button className="w-full px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors">
+            <div className="pt-3 border-t space-y-2">
+              {user.subscriptionTier === 'freemium' ? (
+                <button
+                  onClick={() => navigate('/pricing')}
+                  className="w-full px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+                >
                   Перейти на Start — 990 ₽/мес
                 </button>
-              </div>
-            )}
+              ) : (
+                <button
+                  onClick={() => navigate('/pricing')}
+                  className="w-full px-4 py-2 border border-primary text-primary rounded-lg text-sm font-medium hover:bg-primary/5 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Crown className="w-4 h-4" />
+                  Изменить тариф
+                </button>
+              )}
+            </div>
           </CardContent>
         </Card>
 
@@ -337,7 +383,7 @@ function TelegramTab({ userId }: { userId: Id<'users'> }) {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="text-lg">Статус подключения</CardTitle>
-              <CardDescription>Telegram-бот AdPilot</CardDescription>
+              <CardDescription>Telegram-бот AddPilot</CardDescription>
             </div>
             {connectionStatus?.connected ? (
               <Badge variant="success" className="gap-1">

@@ -1,6 +1,6 @@
 /**
  * Playwright Configuration
- * E2E Testing for AdPilot
+ * E2E Testing for AddPilot
  */
 
 import { defineConfig, devices } from '@playwright/test';

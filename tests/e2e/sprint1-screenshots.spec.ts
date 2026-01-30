@@ -6,7 +6,7 @@ test.describe('Sprint 1 - Screenshots for DoD', () => {
     await page.waitForLoadState('networkidle');
 
     // Check page loads
-    await expect(page).toHaveTitle(/AdPilot/);
+    await expect(page).toHaveTitle(/AddPilot/);
 
     // Screenshot
     await page.screenshot({ path: 'screenshots/s1-login.png', fullPage: true });

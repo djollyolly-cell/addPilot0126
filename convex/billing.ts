@@ -108,7 +108,7 @@ export const createBepaidCheckout = action({
         order: {
           amount: amountInCents,
           currency: "BYN",
-          description: `AdPilot ${tierInfo.name}`,
+          description: `AddPilot ${tierInfo.name}`,
           tracking_id: orderId,
         },
         customer: {

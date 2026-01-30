@@ -10,6 +10,7 @@ import {
   LogOut,
   User,
   Wallet,
+  Crown,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -19,6 +20,7 @@ const navigation = [
   { name: 'Правила', href: '/rules', icon: ListChecks },
   { name: 'Аналитика', href: '/analytics', icon: BarChart3 },
   { name: 'Логи', href: '/logs', icon: ScrollText },
+  { name: 'Тарифы', href: '/pricing', icon: Crown },
   { name: 'Настройки', href: '/settings', icon: Settings },
 ];
 
@@ -44,7 +46,7 @@ export function Layout() {
           <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
             <Wallet className="w-5 h-5 text-primary-foreground" />
           </div>
-          <span className="text-xl font-bold">AdPilot</span>
+          <span className="text-xl font-bold">AddPilot</span>
         </div>
 
         {/* Navigation */}

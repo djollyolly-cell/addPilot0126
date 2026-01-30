@@ -1,6 +1,6 @@
 {
-  "name": "AdPilot — Защита рекламного бюджета",
-  "short_name": "AdPilot",
+  "name": "AddPilot — Защита рекламного бюджета",
+  "short_name": "AddPilot",
   "description": "Автоматизированный ассистент для таргетологов VK Ads",
   "start_url": "/dashboard",
   "display": "standalone",

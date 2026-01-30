@@ -15,7 +15,7 @@ test.describe('Smoke Tests', () => {
     const loadTime = Date.now() - startTime;
 
     expect(loadTime).toBeLessThan(2000);
-    await expect(page).toHaveTitle(/AdPilot/);
+    await expect(page).toHaveTitle(/AddPilot/);
 
     await page.screenshot({ path: 'screenshots/smoke-home.png' });
   });

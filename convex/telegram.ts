@@ -610,7 +610,7 @@ export const handleWebhook = internalAction({
           // Send confirmation
           await ctx.runAction(internal.telegram.sendMessage, {
             chatId,
-            text: "\u2705 <b>\u041F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u043E!</b>\n\nAdPilot \u0431\u0443\u0434\u0435\u0442 \u043E\u0442\u043F\u0440\u0430\u0432\u043B\u044F\u0442\u044C \u0443\u0432\u0435\u0434\u043E\u043C\u043B\u0435\u043D\u0438\u044F \u0432 \u044D\u0442\u043E\u0442 \u0447\u0430\u0442.",
+            text: "✅ <b>Подключено!</b>\n\nAddPilot будет отправлять уведомления в этот чат.",
           });
 
           return { ok: true, linked: true };
@@ -620,7 +620,7 @@ export const handleWebhook = internalAction({
       // /start without valid token or bare /start
       await ctx.runAction(internal.telegram.sendMessage, {
         chatId,
-        text: "\uD83D\uDC4B \u041F\u0440\u0438\u0432\u0435\u0442! \u0418\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439\u0442\u0435 \u0441\u0441\u044B\u043B\u043A\u0443 \u0438\u0437 \u043B\u0438\u0447\u043D\u043E\u0433\u043E \u043A\u0430\u0431\u0438\u043D\u0435\u0442\u0430 AdPilot \u0434\u043B\u044F \u043F\u043E\u0434\u043A\u043B\u044E\u0447\u0435\u043D\u0438\u044F \u0431\u043E\u0442\u0430.",
+        text: "👋 Привет! Используйте ссылку из личного кабинета AddPilot для подключения бота.",
       });
 
       return { ok: true, linked: false };
@@ -1225,5 +1225,59 @@ export const sendDailyDigest = internalAction({
     }
 
     return { sent: sentCount };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
+// Webhook Setup
+// ═══════════════════════════════════════════════════════════
+
+/** Set up Telegram webhook (run once) */
+export const setupWebhook = action({
+  args: {
+    siteUrl: v.string(), // e.g., "https://resilient-terrier-567.convex.site"
+  },
+  handler: async (_ctx, args) => {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+      return { success: false, error: "TELEGRAM_BOT_TOKEN not configured" };
+    }
+
+    const webhookUrl = `${args.siteUrl}/telegram`;
+
+    const response = await fetch(
+      `${TELEGRAM_API_BASE}${botToken}/setWebhook`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: webhookUrl }),
+      }
+    );
+
+    const result = await response.json();
+
+    if (!response.ok || !result.ok) {
+      return { success: false, error: result.description || "Failed to set webhook" };
+    }
+
+    return { success: true, webhookUrl };
+  },
+});
+
+/** Get current webhook info */
+export const getWebhookInfo = action({
+  args: {},
+  handler: async () => {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) {
+      return { success: false, error: "TELEGRAM_BOT_TOKEN not configured" };
+    }
+
+    const response = await fetch(
+      `${TELEGRAM_API_BASE}${botToken}/getWebhookInfo`
+    );
+
+    const result = await response.json();
+    return result;
   },
 });

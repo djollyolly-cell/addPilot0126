@@ -21,7 +21,7 @@ export function LoginPage() {
           <div className="w-10 h-10 bg-primary rounded-lg flex items-center justify-center">
             <Wallet className="w-6 h-6 text-primary-foreground" />
           </div>
-          <span className="text-2xl font-bold text-foreground">AdPilot</span>
+          <span className="text-2xl font-bold text-foreground">AddPilot</span>
         </div>
       </header>
 
@@ -32,7 +32,7 @@ export function LoginPage() {
             <CardHeader className="text-center">
               <CardTitle className="text-2xl">Добро пожаловать</CardTitle>
               <CardDescription>
-                AdPilot сохраняет ваш бюджет, пока вы спите
+                AddPilot сохраняет ваш бюджет, пока вы спите
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
@@ -138,7 +138,7 @@ export function LoginPage() {
 
       {/* Footer */}
       <footer className="p-6 text-center text-sm text-muted-foreground">
-        © 2026 AdPilot. Все права защищены.
+        © 2026 AddPilot. Все права защищены.
       </footer>
     </div>
   );

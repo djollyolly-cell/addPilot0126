@@ -1,6 +1,6 @@
 /**
  * Vitest Configuration
- * Unit and Integration Testing for AdPilot
+ * Unit and Integration Testing for AddPilot
  */
 
 import { defineConfig } from 'vitest/config';

@@ -66,8 +66,8 @@ describe("telegram", () => {
   });
 
   test("buildBotLink creates correct deep link URL", () => {
-    const url = buildBotLink("AdPilotBot", "mytoken123");
-    expect(url).toBe("https://t.me/AdPilotBot?start=mytoken123");
+    const url = buildBotLink("Addpilot_bot", "mytoken123");
+    expect(url).toBe("https://t.me/Addpilot_bot?start=mytoken123");
   });
 
   // ═══════════════════════════════════════════════════════════
@@ -167,8 +167,8 @@ describe("telegram", () => {
     expect(savedToken).toBe(token);
 
     // Bot link is correct
-    const link = buildBotLink("AdPilotBot", token);
-    expect(link).toContain("t.me/AdPilotBot?start=");
+    const link = buildBotLink("Addpilot_bot", token);
+    expect(link).toContain("t.me/Addpilot_bot?start=");
     expect(link).toContain(token);
   });
 

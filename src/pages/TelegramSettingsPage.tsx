@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { Id } from "../../convex/_generated/dataModel";
 
-const BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || "AdPilotBot";
+const BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || "Addpilot_bot";
 
 export function TelegramSettingsPage() {
   const { user } = useAuth();
@@ -114,7 +114,7 @@ export function TelegramSettingsPage() {
           <div className="flex items-center justify-between">
             <div>
               <CardTitle className="text-lg">Статус подключения</CardTitle>
-              <CardDescription>Telegram-бот AdPilot</CardDescription>
+              <CardDescription>Telegram-бот AddPilot</CardDescription>
             </div>
             {connectionStatus?.connected ? (
               <Badge variant="success" className="gap-1">
