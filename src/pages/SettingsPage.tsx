@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useAction, useMutation, useQuery } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
@@ -16,7 +16,6 @@ import {
   CreditCard,
   Crown,
   CheckCircle2,
-  XCircle,
   Receipt,
   MessageCircle,
   Moon,
@@ -205,8 +204,8 @@ function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['us
           </CardContent>
         </Card>
 
-        {/* Password change form */}
-        <PasswordChangeForm email={user.email} />
+        {/* Security info */}
+        <SecurityInfoCard />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -726,137 +725,44 @@ function ApiTab({ userId }: { userId: Id<'users'> }) {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   Password Change Form (Sprint 20)
+   Security Info Card (VK OAuth - no local password)
    ═══════════════════════════════════════════════════════════ */
 
-function PasswordChangeForm({ email }: { email: string }) {
-  const changePassword = useAction(api.authEmail.changePassword);
-  const [oldPassword, setOldPassword] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-  const [loading, setLoading] = useState(false);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setSuccess(false);
-
-    if (newPassword !== confirmPassword) {
-      setError('Пароли не совпадают');
-      return;
-    }
-
-    if (newPassword.length < 6) {
-      setError('Новый пароль должен быть не менее 6 символов');
-      return;
-    }
-
-    setLoading(true);
-    try {
-      const result = await changePassword({
-        email,
-        oldPassword,
-        newPassword,
-      });
-      if (result.success) {
-        setSuccess(true);
-        setOldPassword('');
-        setNewPassword('');
-        setConfirmPassword('');
-      } else {
-        setError(result.error || 'Ошибка смены пароля');
-      }
-    } catch {
-      setError('Произошла ошибка');
-    } finally {
-      setLoading(false);
-    }
-  };
-
+function SecurityInfoCard() {
   return (
-    <Card data-testid="password-form">
+    <Card data-testid="security-info">
       <CardHeader>
         <CardTitle className="text-lg flex items-center gap-2">
           <Lock className="w-5 h-5" />
-          Смена пароля
+          Безопасность
         </CardTitle>
-        <CardDescription>Изменить пароль учётной записи VK</CardDescription>
+        <CardDescription>Управление доступом к аккаунту</CardDescription>
       </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
+      <CardContent className="space-y-4">
+        <div className="flex items-start gap-3 p-4 rounded-lg bg-blue-50 dark:bg-blue-900/20">
+          <CheckCircle2 className="w-5 h-5 text-blue-600 mt-0.5 shrink-0" />
           <div>
-            <label className="text-sm font-medium mb-1 block">Текущий пароль</label>
-            <input
-              data-testid="old-password"
-              type="password"
-              value={oldPassword}
-              onChange={(e) => setOldPassword(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
-              placeholder="Введите текущий пароль"
-              required
-            />
+            <p className="font-medium text-blue-900 dark:text-blue-100">Вход через VK ID</p>
+            <p className="text-sm text-blue-700 dark:text-blue-300 mt-1">
+              Ваш аккаунт защищён авторизацией VK. Пароль хранится в VK, а не в AddPilot.
+            </p>
           </div>
-          <div>
-            <label className="text-sm font-medium mb-1 block">Новый пароль</label>
-            <input
-              data-testid="new-password"
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
-              placeholder="Не менее 6 символов"
-              required
-            />
-          </div>
-          <div>
-            <label className="text-sm font-medium mb-1 block">Подтверждение пароля</label>
-            <input
-              data-testid="confirm-password"
-              type="password"
-              value={confirmPassword}
-              onChange={(e) => setConfirmPassword(e.target.value)}
-              className="w-full px-3 py-2 rounded-md border border-input bg-background text-sm"
-              placeholder="Повторите новый пароль"
-              required
-            />
-          </div>
+        </div>
 
-          {error && (
-            <div data-testid="password-error" className="flex items-center gap-2 text-sm text-red-600 bg-red-50 dark:bg-red-900/20 px-3 py-2 rounded-md">
-              <XCircle className="w-4 h-4 shrink-0" />
-              {error}
-            </div>
-          )}
-
-          {success && (
-            <div data-testid="password-success" className="flex items-center gap-2 text-sm text-green-600 bg-green-50 dark:bg-green-900/20 px-3 py-2 rounded-md">
-              <CheckCircle2 className="w-4 h-4 shrink-0" />
-              Пароль успешно изменён
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={loading || !oldPassword || !newPassword || !confirmPassword}
-            className={cn(
-              'w-full px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-              loading || !oldPassword || !newPassword || !confirmPassword
-                ? 'bg-muted text-muted-foreground cursor-not-allowed'
-                : 'bg-primary text-primary-foreground hover:bg-primary/90'
-            )}
+        <div className="space-y-2">
+          <p className="text-sm text-muted-foreground">
+            Для изменения пароля или настроек безопасности:
+          </p>
+          <a
+            href="https://id.vk.com/account/#/security"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
           >
-            {loading ? (
-              <span className="flex items-center justify-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Проверка...
-              </span>
-            ) : (
-              'Сменить пароль'
-            )}
-          </button>
-        </form>
+            <ExternalLink className="w-4 h-4" />
+            Настройки безопасности VK
+          </a>
+        </div>
       </CardContent>
     </Card>
   );
