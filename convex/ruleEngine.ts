@@ -1078,7 +1078,7 @@ export const checkAllRules = internalAction({
                   );
                 } catch (notifErr) {
                   console.error(
-                    `[ruleEngine] Failed to send notification for rule ${rule._id}:`,
+                    `[ruleEngine] Failed to send TG notification for rule ${rule._id}:`,
                     notifErr instanceof Error ? notifErr.message : notifErr
                   );
                 }
