@@ -32,10 +32,33 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const SESSION_KEY = 'adpilot_session';
+const SESSION_TIMESTAMP_KEY = 'adpilot_session_ts';
+const SESSION_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days (matches server)
+
+// Check if session is expired on client side
+function isSessionExpired(): boolean {
+  const timestamp = localStorage.getItem(SESSION_TIMESTAMP_KEY);
+  if (!timestamp) return false;
+  return Date.now() - parseInt(timestamp, 10) > SESSION_MAX_AGE_MS;
+}
+
+// Clear all auth-related data from storage
+function clearAuthStorage() {
+  localStorage.removeItem(SESSION_KEY);
+  localStorage.removeItem(SESSION_TIMESTAMP_KEY);
+  // Clear any PKCE params that might be lingering
+  sessionStorage.removeItem('pkce_code_verifier');
+  sessionStorage.removeItem('pkce_state');
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [sessionToken, setSessionToken] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
+      // Check for expired session on load
+      if (isSessionExpired()) {
+        clearAuthStorage();
+        return null;
+      }
       return localStorage.getItem(SESSION_KEY);
     }
     return null;
@@ -55,6 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const setSession = (token: string) => {
     localStorage.setItem(SESSION_KEY, token);
+    localStorage.setItem(SESSION_TIMESTAMP_KEY, Date.now().toString());
     setSessionToken(token);
   };
 
@@ -88,19 +112,39 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = async () => {
     if (sessionToken) {
-      await logoutMutation({ token: sessionToken });
-      localStorage.removeItem(SESSION_KEY);
-      setSessionToken(null);
+      try {
+        await logoutMutation({ token: sessionToken });
+      } catch {
+        // Ignore errors during logout (session might already be invalid)
+      }
     }
+    clearAuthStorage();
+    setSessionToken(null);
   };
 
   // Clear invalid session
   useEffect(() => {
     if (sessionToken && user === null) {
-      localStorage.removeItem(SESSION_KEY);
+      clearAuthStorage();
       setSessionToken(null);
     }
   }, [sessionToken, user]);
+
+  // Sync logout across browser tabs
+  useEffect(() => {
+    const handleStorageChange = (e: StorageEvent) => {
+      if (e.key === SESSION_KEY && e.newValue === null) {
+        // Another tab logged out
+        setSessionToken(null);
+      } else if (e.key === SESSION_KEY && e.newValue && !sessionToken) {
+        // Another tab logged in
+        setSessionToken(e.newValue);
+      }
+    };
+
+    window.addEventListener('storage', handleStorageChange);
+    return () => window.removeEventListener('storage', handleStorageChange);
+  }, [sessionToken]);
 
   return (
     <AuthContext.Provider
