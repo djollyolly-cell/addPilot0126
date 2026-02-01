@@ -20,7 +20,25 @@ export const getVkAuthUrl = action({
     codeChallenge: v.string(),
     state: v.string(),
   },
-  handler: async (_, args) => {
+  handler: async (ctx, args) => {
+    // Rate limiting by state (unique per request)
+    const rateLimitKey = `oauth_auth:${args.state.slice(0, 16)}`;
+    const rateCheck = await ctx.runQuery(internal.rateLimit.checkRateLimit, {
+      key: rateLimitKey,
+      type: "oauth_auth_url",
+    });
+
+    if (!rateCheck.allowed) {
+      throw new Error(
+        `Rate limit exceeded. Try again in ${Math.ceil((rateCheck.retryAfterMs || 60000) / 1000)} seconds.`
+      );
+    }
+
+    await ctx.runMutation(internal.rateLimit.recordAttempt, {
+      key: rateLimitKey,
+      type: "oauth_auth_url",
+    });
+
     const clientId = process.env.VK_CLIENT_ID;
     if (!clientId) {
       throw new Error("VK_CLIENT_ID is not configured");
@@ -72,6 +90,24 @@ export const exchangeCodeForToken = action({
       email: string;
     };
   }> => {
+    // Rate limiting by deviceId (5 attempts per minute)
+    const rateLimitKey = `oauth_exchange:${args.deviceId}`;
+    const rateCheck = await ctx.runQuery(internal.rateLimit.checkRateLimit, {
+      key: rateLimitKey,
+      type: "oauth_exchange",
+    });
+
+    if (!rateCheck.allowed) {
+      throw new Error(
+        `Too many login attempts. Try again in ${Math.ceil((rateCheck.retryAfterMs || 60000) / 1000)} seconds.`
+      );
+    }
+
+    await ctx.runMutation(internal.rateLimit.recordAttempt, {
+      key: rateLimitKey,
+      type: "oauth_exchange",
+    });
+
     const clientId = process.env.VK_CLIENT_ID;
     const clientSecret = process.env.VK_CLIENT_SECRET;
 

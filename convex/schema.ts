@@ -221,6 +221,15 @@ export default defineSchema({
   })
     .index("by_email", ["email"]),
 
+  // Universal rate limiting for OAuth, API calls, etc.
+  rateLimits: defineTable({
+    key: v.string(), // "oauth:deviceId:xxx" or "api:userId:xxx"
+    attempts: v.number(),
+    lastAttemptAt: v.number(),
+    blockedUntil: v.optional(v.number()),
+  })
+    .index("by_key", ["key"]),
+
   telegramLinks: defineTable({
     userId: v.id("users"),
     token: v.string(),
