@@ -646,7 +646,6 @@ export const processExpiredSubscriptions = internalAction({
   args: {},
   handler: async (ctx): Promise<{ processed: number }> => {
     // First handle expired subscriptions
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const expiredResult: { processed: number } = await ctx.runMutation(
       internal.billing.handleExpiredSubscriptions,
       {}

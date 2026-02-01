@@ -182,7 +182,7 @@ export const getDailyByAd = query({
     dateTo: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    let q = ctx.db
+    const q = ctx.db
       .query("metricsDaily")
       .withIndex("by_adId_date", (q) => q.eq("adId", args.adId));
 
