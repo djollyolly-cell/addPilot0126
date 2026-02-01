@@ -11,6 +11,7 @@ import { TelegramSettingsPage } from './pages/TelegramSettingsPage';
 import { AnalyticsPage } from './pages/AnalyticsPage';
 import { LogsPage } from './pages/LogsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { PricingPage } from './pages/PricingPage';
 import { useAuth } from './lib/useAuth';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -79,6 +80,7 @@ function App() {
         <Route path="logs" element={<LogsPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/telegram" element={<TelegramSettingsPage />} />
+        <Route path="pricing" element={<PricingPage />} />
       </Route>
       <Route path="*" element={<Navigate to="/login" replace />} />
     </Routes>

@@ -1,0 +1,575 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { TIERS, formatExpiryNotification } from "./billing";
+
+// Mock database context
+const createMockDb = () => {
+  const users = new Map<string, any>();
+
+  return {
+    get: vi.fn(async (id: string) => users.get(id)),
+    patch: vi.fn(async (id: string, data: any) => {
+      const user = users.get(id);
+      if (user) {
+        Object.assign(user, data);
+      }
+    }),
+    insert: vi.fn(async (table: string, data: any) => {
+      const id = `test_${Date.now()}`;
+      if (table === "users") {
+        users.set(id, { ...data, _id: id });
+      }
+      return id;
+    }),
+    _setUser: (id: string, user: any) => users.set(id, { ...user, _id: id }),
+    _getUser: (id: string) => users.get(id),
+  };
+};
+
+describe("Billing - TIERS", () => {
+  it("should have correct tier structure", () => {
+    expect(TIERS.freemium.price).toBe(0);
+    expect(TIERS.freemium.accountsLimit).toBe(1);
+    expect(TIERS.freemium.rulesLimit).toBe(3);
+
+    expect(TIERS.start.price).toBe(990);
+    expect(TIERS.start.accountsLimit).toBe(3);
+    expect(TIERS.start.rulesLimit).toBe(10);
+
+    expect(TIERS.pro.price).toBe(2490);
+    expect(TIERS.pro.accountsLimit).toBe(10);
+    expect(TIERS.pro.rulesLimit).toBe(-1); // unlimited
+  });
+
+  it("should have features for each tier", () => {
+    expect(TIERS.freemium.features.length).toBeGreaterThan(0);
+    expect(TIERS.start.features.length).toBeGreaterThan(0);
+    expect(TIERS.pro.features.length).toBeGreaterThan(0);
+  });
+});
+
+describe("Billing - handlePaymentWebhook", () => {
+  let mockDb: ReturnType<typeof createMockDb>;
+
+  beforeEach(() => {
+    mockDb = createMockDb();
+  });
+
+  const handlePaymentWebhook = async (
+    ctx: { db: any },
+    args: { event: string; userId: string; tier: "start" | "pro"; paymentId: string }
+  ) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      return { success: false, error: "User not found" };
+    }
+
+    if (args.event === "payment.succeeded") {
+      const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+      await ctx.db.patch(args.userId, {
+        subscriptionTier: args.tier,
+        subscriptionExpiresAt: expiresAt,
+        updatedAt: Date.now(),
+      });
+      return { success: true, tier: args.tier, expiresAt };
+    }
+
+    if (args.event === "payment.failed") {
+      return { success: false, error: "Payment failed" };
+    }
+
+    return { success: false, error: "Unknown event" };
+  };
+
+  it("should update tier on payment.succeeded webhook", async () => {
+    const userId = "user_123";
+    mockDb._setUser(userId, {
+      email: "test@example.com",
+      subscriptionTier: "freemium",
+      subscriptionExpiresAt: undefined,
+    });
+
+    const result = await handlePaymentWebhook(
+      { db: mockDb },
+      {
+        event: "payment.succeeded",
+        userId,
+        tier: "start",
+        paymentId: "pay_123",
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.tier).toBe("start");
+    expect(result.expiresAt).toBeDefined();
+
+    const user = mockDb._getUser(userId);
+    expect(user.subscriptionTier).toBe("start");
+    expect(user.subscriptionExpiresAt).toBeDefined();
+  });
+
+  it("should return error on payment.failed webhook", async () => {
+    const userId = "user_456";
+    mockDb._setUser(userId, {
+      email: "test@example.com",
+      subscriptionTier: "freemium",
+    });
+
+    const result = await handlePaymentWebhook(
+      { db: mockDb },
+      {
+        event: "payment.failed",
+        userId,
+        tier: "pro",
+        paymentId: "pay_456",
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("Payment failed");
+  });
+
+  it("should return error for non-existent user", async () => {
+    const result = await handlePaymentWebhook(
+      { db: mockDb },
+      {
+        event: "payment.succeeded",
+        userId: "nonexistent",
+        tier: "start",
+        paymentId: "pay_789",
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe("User not found");
+  });
+});
+
+describe("Billing - Payment processing", () => {
+  let mockDb: ReturnType<typeof createMockDb>;
+
+  beforeEach(() => {
+    mockDb = createMockDb();
+  });
+
+  const processPayment = async (
+    ctx: { db: any },
+    args: { userId: string; tier: "start" | "pro"; cardNumber: string }
+  ) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const cardLast4 = args.cardNumber.slice(-4);
+
+    // Declined card
+    if (args.cardNumber.startsWith("4000000000000002")) {
+      return {
+        success: false,
+        error: "Карта отклонена. Попробуйте другую карту.",
+      };
+    }
+
+    // Success card
+    if (!args.cardNumber.startsWith("4242424242424242") && !args.cardNumber.startsWith("4000")) {
+      return {
+        success: false,
+        error: "Неверный номер карты",
+      };
+    }
+
+    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+
+    await ctx.db.patch(args.userId, {
+      subscriptionTier: args.tier,
+      subscriptionExpiresAt: expiresAt,
+      updatedAt: Date.now(),
+    });
+
+    return {
+      success: true,
+      tier: args.tier,
+      expiresAt,
+      cardLast4,
+    };
+  };
+
+  it("should process successful payment with test card 4242", async () => {
+    const userId = "user_test";
+    mockDb._setUser(userId, {
+      email: "test@example.com",
+      subscriptionTier: "freemium",
+    });
+
+    const result = await processPayment(
+      { db: mockDb },
+      {
+        userId,
+        tier: "start",
+        cardNumber: "4242424242424242",
+      }
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.tier).toBe("start");
+    expect(result.cardLast4).toBe("4242");
+
+    const user = mockDb._getUser(userId);
+    expect(user.subscriptionTier).toBe("start");
+  });
+
+  it("should decline payment with declined test card", async () => {
+    const userId = "user_declined";
+    mockDb._setUser(userId, {
+      email: "test@example.com",
+      subscriptionTier: "freemium",
+    });
+
+    const result = await processPayment(
+      { db: mockDb },
+      {
+        userId,
+        tier: "pro",
+        cardNumber: "4000000000000002",
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("отклонена");
+  });
+
+  it("should reject invalid card number", async () => {
+    const userId = "user_invalid";
+    mockDb._setUser(userId, {
+      email: "test@example.com",
+      subscriptionTier: "freemium",
+    });
+
+    const result = await processPayment(
+      { db: mockDb },
+      {
+        userId,
+        tier: "start",
+        cardNumber: "1234567890123456",
+      }
+    );
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("Неверный номер карты");
+  });
+});
+
+describe("Billing - Subscription check", () => {
+  it("should identify expired subscription", () => {
+    const now = Date.now();
+    const expiredAt = now - 1000; // 1 second ago
+
+    const isExpired = expiredAt < now;
+    expect(isExpired).toBe(true);
+  });
+
+  it("should identify active subscription", () => {
+    const now = Date.now();
+    const expiresAt = now + 30 * 24 * 60 * 60 * 1000; // 30 days from now
+
+    const isExpired = expiresAt < now;
+    expect(isExpired).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// Sprint 25 — Expiry Notifications & Limit Updates
+// ═══════════════════════════════════════════════════════════
+
+describe("Sprint 25 - formatExpiryNotification", () => {
+  it("S25-DoD#1: should format 7-day expiry notification", () => {
+    const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+    const message = formatExpiryNotification(7, "Start", expiresAt);
+
+    expect(message).toContain("7 дней");
+    expect(message).toContain("Start");
+    expect(message).toContain("Продлить подписку");
+  });
+
+  it("S25-DoD#2: should format 1-day expiry notification", () => {
+    const expiresAt = Date.now() + 1 * 24 * 60 * 60 * 1000;
+    const message = formatExpiryNotification(1, "Pro", expiresAt);
+
+    expect(message).toContain("завтра");
+    expect(message).toContain("Pro");
+    expect(message).toContain("деактивированы");
+  });
+
+  it("should return empty string for invalid days", () => {
+    const expiresAt = Date.now() + 5 * 24 * 60 * 60 * 1000;
+    const message = formatExpiryNotification(5, "Start", expiresAt);
+
+    expect(message).toBe("");
+  });
+});
+
+describe("Sprint 25 - updateLimitsOnDowngrade", () => {
+  let mockDb: ReturnType<typeof createMockDb>;
+  let accounts: Map<string, any>;
+  let rules: Map<string, any>;
+
+  const createMockDbWithAccounts = () => {
+    const users = new Map<string, any>();
+    accounts = new Map<string, any>();
+    rules = new Map<string, any>();
+
+    return {
+      get: vi.fn(async (id: string) => users.get(id) || accounts.get(id)),
+      patch: vi.fn(async (id: string, data: any) => {
+        if (accounts.has(id)) {
+          Object.assign(accounts.get(id), data);
+        }
+        if (rules.has(id)) {
+          Object.assign(rules.get(id), data);
+        }
+        if (users.has(id)) {
+          Object.assign(users.get(id), data);
+        }
+      }),
+      query: vi.fn((table: string) => ({
+        withIndex: vi.fn(() => ({
+          collect: vi.fn(async () => {
+            if (table === "adAccounts") {
+              return Array.from(accounts.values());
+            }
+            if (table === "rules") {
+              return Array.from(rules.values());
+            }
+            return [];
+          }),
+        })),
+      })),
+      _setUser: (id: string, user: any) => users.set(id, { ...user, _id: id }),
+      _addAccount: (id: string, acc: any) => accounts.set(id, { ...acc, _id: id }),
+      _addRule: (id: string, rule: any) => rules.set(id, { ...rule, _id: id }),
+    };
+  };
+
+  beforeEach(() => {
+    mockDb = createMockDbWithAccounts();
+  });
+
+  // Simulate updateLimitsOnDowngrade logic
+  const updateLimitsOnDowngrade = async (
+    ctx: { db: any },
+    args: { userId: string; newTier: "freemium" | "start" | "pro" }
+  ) => {
+    const newLimit = TIERS[args.newTier].accountsLimit;
+
+    const allAccounts = await ctx.db.query("adAccounts")
+      .withIndex("by_userId")
+      .collect();
+
+    const activeAccounts = allAccounts
+      .filter((a: any) => a.status === "active" && a.userId === args.userId)
+      .sort((a: any, b: any) => a.createdAt - b.createdAt);
+
+    const accountsToDeactivate = activeAccounts.slice(newLimit);
+    const deactivatedIds: string[] = [];
+
+    for (const account of accountsToDeactivate) {
+      await ctx.db.patch(account._id, { status: "paused" });
+      deactivatedIds.push(account._id);
+    }
+
+    // Also deactivate excess rules
+    const rulesLimit = TIERS[args.newTier].rulesLimit === -1 ? Infinity : TIERS[args.newTier].rulesLimit;
+
+    const allRules = await ctx.db.query("rules")
+      .withIndex("by_userId")
+      .collect();
+
+    const activeRules = allRules
+      .filter((r: any) => r.isActive && r.userId === args.userId)
+      .sort((a: any, b: any) => a.createdAt - b.createdAt);
+
+    const rulesToDeactivate = activeRules.slice(rulesLimit);
+    const deactivatedRuleIds: string[] = [];
+
+    for (const rule of rulesToDeactivate) {
+      await ctx.db.patch(rule._id, { isActive: false });
+      deactivatedRuleIds.push(rule._id);
+    }
+
+    return {
+      accountsDeactivated: deactivatedIds.length,
+      rulesDeactivated: deactivatedRuleIds.length,
+    };
+  };
+
+  it("S25-DoD#3: start→freemium should deactivate 2 of 3 accounts", async () => {
+    const userId = "user_downgrade";
+    mockDb._setUser(userId, { subscriptionTier: "start" });
+
+    // Add 3 active accounts
+    mockDb._addAccount("acc_1", { userId, status: "active", createdAt: 1000 });
+    mockDb._addAccount("acc_2", { userId, status: "active", createdAt: 2000 });
+    mockDb._addAccount("acc_3", { userId, status: "active", createdAt: 3000 });
+
+    const result = await updateLimitsOnDowngrade(
+      { db: mockDb },
+      { userId, newTier: "freemium" }
+    );
+
+    expect(result.accountsDeactivated).toBe(2); // freemium limit is 1
+    expect(accounts.get("acc_1").status).toBe("active"); // oldest kept
+    expect(accounts.get("acc_2").status).toBe("paused");
+    expect(accounts.get("acc_3").status).toBe("paused");
+  });
+
+  it("S25-DoD#8: pro→freemium should deactivate 4 of 5 accounts", async () => {
+    const userId = "user_pro_downgrade";
+    mockDb._setUser(userId, { subscriptionTier: "pro" });
+
+    // Add 5 active accounts
+    for (let i = 1; i <= 5; i++) {
+      mockDb._addAccount(`acc_${i}`, { userId, status: "active", createdAt: i * 1000 });
+    }
+
+    const result = await updateLimitsOnDowngrade(
+      { db: mockDb },
+      { userId, newTier: "freemium" }
+    );
+
+    expect(result.accountsDeactivated).toBe(4); // freemium limit is 1
+    expect(accounts.get("acc_1").status).toBe("active"); // oldest kept
+    expect(accounts.get("acc_2").status).toBe("paused");
+    expect(accounts.get("acc_3").status).toBe("paused");
+    expect(accounts.get("acc_4").status).toBe("paused");
+    expect(accounts.get("acc_5").status).toBe("paused");
+  });
+
+  it("should deactivate excess rules on downgrade", async () => {
+    const userId = "user_rules_downgrade";
+    mockDb._setUser(userId, { subscriptionTier: "start" });
+
+    // freemium limit is 3 rules, add 5 active rules
+    for (let i = 1; i <= 5; i++) {
+      mockDb._addRule(`rule_${i}`, { userId, isActive: true, createdAt: i * 1000 });
+    }
+
+    const result = await updateLimitsOnDowngrade(
+      { db: mockDb },
+      { userId, newTier: "freemium" }
+    );
+
+    expect(result.rulesDeactivated).toBe(2); // freemium limit is 3
+    expect(rules.get("rule_1").isActive).toBe(true);
+    expect(rules.get("rule_2").isActive).toBe(true);
+    expect(rules.get("rule_3").isActive).toBe(true);
+    expect(rules.get("rule_4").isActive).toBe(false);
+    expect(rules.get("rule_5").isActive).toBe(false);
+  });
+});
+
+describe("Sprint 25 - Expiry check helpers", () => {
+  it("S25-DoD#4: should identify users expiring in 7 days", () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    const users = [
+      { _id: "u1", subscriptionTier: "start", subscriptionExpiresAt: now + 7 * dayMs },
+      { _id: "u2", subscriptionTier: "pro", subscriptionExpiresAt: now + 14 * dayMs },
+      { _id: "u3", subscriptionTier: "freemium", subscriptionExpiresAt: undefined },
+      { _id: "u4", subscriptionTier: "start", subscriptionExpiresAt: now + 6.5 * dayMs },
+    ];
+
+    const daysAhead = 7;
+    const targetDate = now + daysAhead * dayMs;
+    const windowStart = targetDate - dayMs / 2;
+    const windowEnd = targetDate + dayMs / 2;
+
+    const expiring = users.filter((user) => {
+      if (!user.subscriptionExpiresAt) return false;
+      if (user.subscriptionTier === "freemium") return false;
+      return (
+        user.subscriptionExpiresAt >= windowStart &&
+        user.subscriptionExpiresAt <= windowEnd
+      );
+    });
+
+    expect(expiring.length).toBe(2); // u1 and u4
+    expect(expiring.map(u => u._id)).toContain("u1");
+    expect(expiring.map(u => u._id)).toContain("u4");
+  });
+
+  it("S25-DoD#5: should identify users expiring in 1 day", () => {
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    const users = [
+      { _id: "u1", subscriptionTier: "start", subscriptionExpiresAt: now + 1 * dayMs },
+      { _id: "u2", subscriptionTier: "pro", subscriptionExpiresAt: now + 7 * dayMs },
+      { _id: "u3", subscriptionTier: "start", subscriptionExpiresAt: now + 0.8 * dayMs },
+    ];
+
+    const daysAhead = 1;
+    const targetDate = now + daysAhead * dayMs;
+    const windowStart = targetDate - dayMs / 2;
+    const windowEnd = targetDate + dayMs / 2;
+
+    const expiring = users.filter((user) => {
+      if (!user.subscriptionExpiresAt) return false;
+      if (user.subscriptionTier === "freemium") return false;
+      return (
+        user.subscriptionExpiresAt >= windowStart &&
+        user.subscriptionExpiresAt <= windowEnd
+      );
+    });
+
+    expect(expiring.length).toBe(2); // u1 and u3
+  });
+});
+
+describe("Sprint 25 - UI expired subscription", () => {
+  it("S25-DoD#6: should detect expired subscription for UI banner", () => {
+    const now = Date.now();
+
+    // Expired subscription
+    const expiredUser = {
+      subscriptionTier: "start" as const,
+      subscriptionExpiresAt: now - 1000, // 1 second ago
+    };
+
+    const isExpired = expiredUser.subscriptionTier !== "freemium" &&
+      expiredUser.subscriptionExpiresAt &&
+      expiredUser.subscriptionExpiresAt < now;
+
+    expect(isExpired).toBe(true);
+  });
+
+  it("should not show expired banner for active subscription", () => {
+    const now = Date.now();
+
+    const activeUser = {
+      subscriptionTier: "pro" as const,
+      subscriptionExpiresAt: now + 30 * 24 * 60 * 60 * 1000, // 30 days
+    };
+
+    const isExpired = activeUser.subscriptionTier !== "freemium" &&
+      activeUser.subscriptionExpiresAt &&
+      activeUser.subscriptionExpiresAt < now;
+
+    expect(isExpired).toBe(false);
+  });
+
+  it("should not show expired banner for freemium users", () => {
+    const now = Date.now();
+
+    const freemiumUser = {
+      subscriptionTier: "freemium" as const,
+      subscriptionExpiresAt: undefined,
+    };
+
+    const isExpired = freemiumUser.subscriptionTier !== "freemium" &&
+      freemiumUser.subscriptionExpiresAt &&
+      freemiumUser.subscriptionExpiresAt < now;
+
+    expect(isExpired).toBe(false);
+  });
+});

@@ -161,13 +161,32 @@ const VK_ADS_API_BASE = "https://target.my.com";
 
 // Connect VK Ads — get token via Client Credentials Grant (no redirect needed)
 // Priority: args → user record → env vars
+// IMPORTANT: Reuses existing valid token to avoid "Active access token limit reached" error
 export const connectVkAds = action({
   args: {
     userId: v.id("users"),
     clientId: v.optional(v.string()),
     clientSecret: v.optional(v.string()),
+    forceRefresh: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    // Check if we already have a valid token (with 5-min buffer)
+    if (!args.forceRefresh) {
+      const existingTokens = await ctx.runQuery(internal.users.getVkAdsTokens, {
+        userId: args.userId,
+      });
+
+      if (existingTokens?.accessToken) {
+        const now = Date.now();
+        const BUFFER_MS = 5 * 60 * 1000; // 5 minutes
+
+        // If token exists and not expired (or no expiry set), reuse it
+        if (!existingTokens.expiresAt || existingTokens.expiresAt > now + BUFFER_MS) {
+          return { success: true, reused: true };
+        }
+      }
+    }
+
     // 1) From arguments (wizard just submitted them)
     let clientId = args.clientId;
     let clientSecret = args.clientSecret;
@@ -207,7 +226,18 @@ export const connectVkAds = action({
     const data = await response.json();
 
     if (data.error) {
-      throw new Error(data.error_description || data.error || "Не удалось получить токен VK Ads API");
+      // Translate common VK Ads API errors to Russian
+      const errorMsg = data.error_description || data.error || "";
+      if (errorMsg.toLowerCase().includes("invalid client")) {
+        throw new Error("Неверный Client ID или Client Secret. Проверьте данные в настройках VK Ads (ads.vk.com → Настройки → Доступ к API).");
+      }
+      if (errorMsg.toLowerCase().includes("unauthorized")) {
+        throw new Error("Доступ запрещён. Проверьте права приложения в VK Ads.");
+      }
+      if (errorMsg.toLowerCase().includes("token limit") || errorMsg.toLowerCase().includes("limit reached")) {
+        throw new Error("Достигнут лимит активных токенов VK Ads. Подождите несколько минут или обратитесь в поддержку ads_api@vk.team.");
+      }
+      throw new Error(errorMsg || "Не удалось получить токен VK Ads API");
     }
 
     // Save VK Ads token to user record
@@ -218,7 +248,7 @@ export const connectVkAds = action({
       expiresIn: data.expires_in || 86400,
     });
 
-    return { success: true };
+    return { success: true, reused: false };
   },
 });
 
@@ -257,6 +287,7 @@ export const validateSession = query({
       name: user.name,
       avatarUrl: user.avatarUrl,
       subscriptionTier: user.subscriptionTier,
+      subscriptionExpiresAt: user.subscriptionExpiresAt,
       onboardingCompleted: user.onboardingCompleted,
     };
   },

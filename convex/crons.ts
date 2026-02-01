@@ -17,4 +17,18 @@ crons.cron(
   internal.telegram.sendDailyDigest
 );
 
+// Check expiring subscriptions daily at 08:00 UTC (11:00 MSK)
+crons.cron(
+  "check-expiring-subscriptions",
+  "0 8 * * *",
+  internal.billing.checkExpiringSubscriptions
+);
+
+// Process expired subscriptions hourly (downgrade and update limits)
+crons.interval(
+  "process-expired-subscriptions",
+  { hours: 1 },
+  internal.billing.processExpiredSubscriptions
+);
+
 export default crons;

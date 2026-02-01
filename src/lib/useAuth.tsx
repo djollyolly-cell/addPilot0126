@@ -10,6 +10,7 @@ interface User {
   avatarUrl?: string;
   telegramChatId?: string;
   subscriptionTier: 'freemium' | 'start' | 'pro';
+  subscriptionExpiresAt?: number;
   onboardingCompleted: boolean;
 }
 

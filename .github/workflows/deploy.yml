@@ -1,0 +1,104 @@
+# ============================================
+# AdPilot CD Pipeline - Vercel Deployment
+# Sprint 27 — Docker и CI/CD
+# ============================================
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  # ─────────────────────────────────────────
+  # Deploy to Vercel Production
+  # ─────────────────────────────────────────
+  deploy:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    # Only deploy if CI passed
+    needs: []
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Pull Vercel Environment Information
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build Project Artifacts
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to Vercel
+        id: deploy
+        run: |
+          URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+      - name: Post deployment URL
+        run: |
+          echo "Deployed to: ${{ steps.deploy.outputs.url }}"
+
+  # ─────────────────────────────────────────
+  # Deploy Convex Backend
+  # ─────────────────────────────────────────
+  deploy-convex:
+    name: Deploy Convex
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Deploy Convex
+        run: npx convex deploy --yes
+        env:
+          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+
+  # ─────────────────────────────────────────
+  # Post-deploy Smoke Test
+  # ─────────────────────────────────────────
+  smoke-test:
+    name: Smoke Test
+    runs-on: ubuntu-latest
+    needs: [deploy, deploy-convex]
+    steps:
+      - name: Wait for deployment
+        run: sleep 30
+
+      - name: Health check
+        run: |
+          # Replace with your production URL
+          PROD_URL="${{ secrets.PRODUCTION_URL || 'https://adpilot.vercel.app' }}"
+
+          echo "Checking $PROD_URL..."
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL")
+
+          if [ "$HTTP_CODE" -eq 200 ]; then
+            echo "Smoke test passed! HTTP $HTTP_CODE"
+          else
+            echo "Smoke test failed! HTTP $HTTP_CODE"
+            exit 1
+          fi

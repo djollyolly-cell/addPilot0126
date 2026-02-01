@@ -1,4 +1,5 @@
 import { useQuery } from 'convex/react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import {
@@ -20,12 +21,14 @@ import {
   Shield,
   MessageCircle,
   AlertCircle,
+  Crown,
 } from 'lucide-react';
 import { getTierLabel, cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
 
 export function ProfilePage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
 
   const limits = useQuery(
     api.users.getLimits,
@@ -151,16 +154,33 @@ export function ProfilePage() {
               )}
             </div>
 
-            {user.subscriptionTier === 'freemium' && (
-              <div className="pt-4 border-t">
-                <Button className="w-full" data-testid="upgrade-button">
-                  Перейти на Start
+            <div className="pt-4 border-t">
+              {user.subscriptionTier === 'freemium' ? (
+                <>
+                  <Button
+                    className="w-full"
+                    data-testid="upgrade-button"
+                    onClick={() => navigate('/pricing')}
+                  >
+                    <Crown className="h-4 w-4 mr-2" />
+                    Перейти на Start
+                  </Button>
+                  <p className="text-xs text-center text-muted-foreground mt-2">
+                    990 ₽/мес — автоостановка, до 3 кабинетов
+                  </p>
+                </>
+              ) : (
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  data-testid="change-plan-button"
+                  onClick={() => navigate('/pricing')}
+                >
+                  <Crown className="h-4 w-4 mr-2" />
+                  Изменить тариф
                 </Button>
-                <p className="text-xs text-center text-muted-foreground mt-2">
-                  990 ₽/мес — автоостановка, до 3 кабинетов
-                </p>
-              </div>
-            )}
+              )}
+            </div>
           </CardContent>
         </Card>
 

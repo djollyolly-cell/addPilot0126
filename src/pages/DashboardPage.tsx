@@ -4,9 +4,10 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Id } from '../../convex/_generated/dataModel';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
-import { LayoutDashboard, Loader2, Trash2, CheckCircle2, Building2, TrendingUp, TrendingDown, Minus, Zap, ShieldOff, Bell, ListFilter, Clock, Inbox } from 'lucide-react';
+import { Button } from '../components/ui/button';
+import { LayoutDashboard, Loader2, Trash2, Building2, TrendingUp, TrendingDown, Minus, Zap, ShieldOff, Bell, ListFilter, Clock, Inbox, AlertTriangle, Crown } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 
 /** Animated counter hook */
 function useAnimatedNumber(target: number, duration = 800) {
@@ -362,6 +363,67 @@ function EventFeed({
   );
 }
 
+/** Expired Subscription Banner */
+function ExpiredSubscriptionBanner() {
+  const navigate = useNavigate();
+
+  return (
+    <Card className="border-destructive bg-destructive/5" data-testid="expired-subscription-banner">
+      <CardContent className="flex items-center gap-4 p-4">
+        <div className="p-2 rounded-full bg-destructive/10">
+          <AlertTriangle className="w-6 h-6 text-destructive" />
+        </div>
+        <div className="flex-1">
+          <p className="font-medium text-destructive">Подписка истекла</p>
+          <p className="text-sm text-muted-foreground">
+            Лишние кабинеты и правила деактивированы. Продлите подписку для восстановления доступа.
+          </p>
+        </div>
+        <Button onClick={() => navigate('/pricing')} variant="destructive" size="sm">
+          <Crown className="w-4 h-4 mr-2" />
+          Продлить
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Expiring Soon Banner (7 days or less) */
+function ExpiringSoonBanner({ expiresAt }: { expiresAt: number }) {
+  const navigate = useNavigate();
+  const daysLeft = Math.ceil((expiresAt - Date.now()) / (24 * 60 * 60 * 1000));
+
+  if (daysLeft > 7) return null;
+
+  const expiryDate = new Date(expiresAt);
+  const dateStr = expiryDate.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'long',
+  });
+
+  return (
+    <Card className="border-yellow-500 bg-yellow-500/5" data-testid="expiring-soon-banner">
+      <CardContent className="flex items-center gap-4 p-4">
+        <div className="p-2 rounded-full bg-yellow-500/10">
+          <Clock className="w-6 h-6 text-yellow-600" />
+        </div>
+        <div className="flex-1">
+          <p className="font-medium text-yellow-700 dark:text-yellow-500">
+            Подписка истекает {daysLeft === 1 ? 'завтра' : `через ${daysLeft} дн.`}
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Срок действия подписки заканчивается {dateStr}. Продлите заранее, чтобы не потерять доступ.
+          </p>
+        </div>
+        <Button onClick={() => navigate('/pricing')} variant="outline" size="sm" className="border-yellow-500 text-yellow-700 hover:bg-yellow-500/10">
+          <Crown className="w-4 h-4 mr-2" />
+          Продлить
+        </Button>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function DashboardPage() {
   const { user } = useAuth();
   const typedUserId = user?.userId as Id<"users"> | undefined;
@@ -390,6 +452,16 @@ export function DashboardPage() {
   const isLoading = accounts === undefined || settings === undefined;
   const activeAccountId = settings?.activeAccountId;
 
+  // Check subscription status
+  const isExpired = user.subscriptionTier !== 'freemium' &&
+    user.subscriptionExpiresAt &&
+    user.subscriptionExpiresAt < Date.now();
+
+  const isExpiringSoon = user.subscriptionTier !== 'freemium' &&
+    user.subscriptionExpiresAt &&
+    user.subscriptionExpiresAt > Date.now() &&
+    user.subscriptionExpiresAt < Date.now() + 7 * 24 * 60 * 60 * 1000;
+
   const handleSelectAccount = async (accountId: Id<"adAccounts">) => {
     if (!typedUserId) return;
     await setActiveAccount({ userId: typedUserId, accountId });
@@ -402,6 +474,12 @@ export function DashboardPage() {
 
   return (
     <div className="max-w-3xl mx-auto space-y-6" data-testid="dashboard-page">
+      {/* Subscription banners */}
+      {isExpired && <ExpiredSubscriptionBanner />}
+      {isExpiringSoon && user.subscriptionExpiresAt && (
+        <ExpiringSoonBanner expiresAt={user.subscriptionExpiresAt} />
+      )}
+
       {/* Header */}
       <div>
         <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">

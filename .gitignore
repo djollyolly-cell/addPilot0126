@@ -5,4 +5,7 @@ dist/
 playwright-report/
 test-results/
 screenshots/
+videos/
+logs/*.txt
+logs/*.json
 .claude/

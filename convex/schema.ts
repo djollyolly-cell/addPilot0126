@@ -243,4 +243,27 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_userId", ["userId"]),
+
+  // Payments table for bePaid integration
+  payments: defineTable({
+    userId: v.id("users"),
+    tier: v.union(v.literal("start"), v.literal("pro")),
+    orderId: v.string(),
+    token: v.string(),
+    amount: v.number(),
+    currency: v.string(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("refunded")
+    ),
+    bepaidUid: v.optional(v.string()),
+    errorMessage: v.optional(v.string()),
+    createdAt: v.number(),
+    completedAt: v.optional(v.number()),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_orderId", ["orderId"])
+    .index("by_token", ["token"]),
 });

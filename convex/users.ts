@@ -588,3 +588,13 @@ export const deleteUser = mutation({
     return { success: true };
   },
 });
+
+// Get user by ID (internal)
+export const getById = internalQuery({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.userId);
+  },
+});

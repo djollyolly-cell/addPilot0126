@@ -319,7 +319,7 @@ export const changePassword = action({
     success: v.boolean(),
     error: v.optional(v.string()),
   }),
-  handler: async (ctx, args): Promise<{ success: boolean; error?: string }> => {
+  handler: async (_ctx, args): Promise<{ success: boolean; error?: string }> => {
     if (!args.newPassword || args.newPassword.length < 6) {
       return { success: false, error: "Новый пароль должен быть не менее 6 символов" };
     }
