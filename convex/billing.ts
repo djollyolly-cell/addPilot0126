@@ -68,6 +68,7 @@ export const createBepaidCheckout = action({
     userId: v.id("users"),
     tier: v.union(v.literal("start"), v.literal("pro")),
     returnUrl: v.string(),
+    amountBYN: v.number(), // Price in BYN (calculated on frontend with NBRB rate)
   },
   handler: async (ctx, args): Promise<BepaidCheckoutResult> => {
     const shopId = process.env.BEPAID_SHOP_ID;
@@ -90,7 +91,7 @@ export const createBepaidCheckout = action({
     }
 
     const tierInfo = TIERS[args.tier];
-    const amountInCents = tierInfo.price * 100; // bePaid expects amount in minimal units (kopecks)
+    const amountInCents = args.amountBYN * 100; // bePaid expects amount in minimal units (kopecks)
 
     const orderId = `order_${args.userId}_${args.tier}_${Date.now()}`;
 
@@ -146,7 +147,7 @@ export const createBepaidCheckout = action({
         tier: args.tier,
         orderId,
         token: data.checkout.token as string,
-        amount: tierInfo.price,
+        amount: args.amountBYN,
         currency: "BYN",
       });
 

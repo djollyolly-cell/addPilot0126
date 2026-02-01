@@ -68,7 +68,10 @@ export function AuthCallback() {
 
         if (result.success && result.sessionToken) {
           setSession(result.sessionToken);
-          navigate('/profile', { replace: true });
+          // Check for saved redirect URL
+          const redirectUrl = sessionStorage.getItem('auth_redirect');
+          sessionStorage.removeItem('auth_redirect');
+          navigate(redirectUrl || '/dashboard', { replace: true });
         } else {
           navigate('/login?error=token_error', { replace: true });
         }

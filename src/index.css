@@ -104,3 +104,10 @@
 .status-dot.error {
   @apply bg-destructive;
 }
+
+/* Background pattern */
+.bg-dot-pattern {
+  background-color: white;
+  background-image: radial-gradient(#e5e7eb 1px, transparent 1px);
+  background-size: 24px 24px;
+}

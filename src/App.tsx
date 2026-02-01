@@ -1,4 +1,4 @@
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Layout } from './components/Layout';
 import { LandingPage } from './pages/LandingPage';
 import { LoginPage } from './pages/LoginPage';
@@ -17,6 +17,7 @@ import { useAuth } from './lib/useAuth';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
+  const location = useLocation();
 
   if (isLoading) {
     return (
@@ -27,6 +28,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   }
 
   if (!isAuthenticated) {
+    // Save the intended destination for redirect after login
+    const redirectUrl = location.pathname + location.search;
+    sessionStorage.setItem('auth_redirect', redirectUrl);
     return <Navigate to="/login" replace />;
   }
 

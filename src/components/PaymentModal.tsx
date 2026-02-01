@@ -145,6 +145,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
         userId: user.userId as Id<"users">,
         tier,
         returnUrl,
+        amountBYN: priceBYN,
       });
 
       if (result.success && result.redirectUrl) {
