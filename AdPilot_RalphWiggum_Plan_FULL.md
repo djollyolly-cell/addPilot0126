@@ -1351,6 +1351,71 @@ logs/s2-*.json
 
 ---
 
+### Sprint 31 — Performance Optimization
+
+**Цель:** Оптимизация производительности приложения для достижения Lighthouse > 90
+
+**DoD — Конкретные тестовые сценарии:**
+
+| # | Категория | Сценарий | Действие | Ожидаемый результат | Артефакт |
+|---|-----------|----------|----------|---------------------|----------|
+| 1 | Lighthouse | Performance | DevTools Audit | Score > 90 | screenshots/s31-lighthouse-perf.png |
+| 2 | Lighthouse | Accessibility | DevTools Audit | Score > 90 | screenshots/s31-lighthouse-a11y.png |
+| 3 | Lighthouse | Best Practices | DevTools Audit | Score > 90 | screenshots/s31-lighthouse-bp.png |
+| 4 | Lighthouse | SEO | DevTools Audit | Score > 90 | screenshots/s31-lighthouse-seo.png |
+| 5 | Bundle | Size analysis | npm run build | Bundle < 500KB gzip | logs/s31-bundle-size.txt |
+| 6 | Lazy Load | Route splitting | Network tab | Chunks загружаются по требованию | screenshots/s31-lazy-routes.png |
+| 7 | Images | WebP/AVIF | Проверить формат | Оптимизированные изображения | screenshots/s31-images.png |
+| 8 | FCP | First Contentful Paint | Lighthouse | < 1.8s | logs/s31-fcp.json |
+| 9 | LCP | Largest Contentful Paint | Lighthouse | < 2.5s | logs/s31-lcp.json |
+| 10 | CLS | Cumulative Layout Shift | Lighthouse | < 0.1 | logs/s31-cls.json |
+| 11 | TBT | Total Blocking Time | Lighthouse | < 200ms | logs/s31-tbt.json |
+| 12 | React | Re-renders | React DevTools Profiler | Нет лишних ре-рендеров | screenshots/s31-profiler.png |
+| 13 | Database | Query optimization | Convex Dashboard | Индексы используются | screenshots/s31-convex-indexes.png |
+| 14 | Caching | Service Worker | Offline test | Статика из кэша | screenshots/s31-sw-cache.png |
+| 15 | Network | Compression | Response headers | gzip/brotli enabled | logs/s31-compression.txt |
+
+**Задачи:**
+
+- [ ] Code splitting: React.lazy() для роутов
+- [ ] Bundle analysis: vite-plugin-visualizer
+- [ ] Tree shaking: убрать неиспользуемые зависимости
+- [ ] Image optimization: WebP, lazy loading, srcset
+- [ ] Font optimization: font-display: swap, preload
+- [ ] React.memo() для тяжёлых компонентов
+- [ ] useMemo/useCallback для дорогих вычислений
+- [ ] Convex indexes для частых запросов
+- [ ] Prefetch критических данных
+- [ ] Compression: gzip/brotli в vercel.json
+- [ ] Resource hints: preconnect, prefetch, preload
+- [ ] Убрать блокирующие ресурсы
+- [ ] Минификация CSS/JS (Vite по умолчанию)
+- [ ] HTTP/2 push (Vercel автоматически)
+
+**Файлы:**
+
+- `vite.config.ts` — code splitting, bundle optimization
+- `src/App.tsx` — React.lazy() для роутов
+- `src/components/*.tsx` — React.memo() optimization
+- `convex/schema.ts` — database indexes
+- `vercel.json` — compression, caching headers
+- `public/manifest.json` — PWA optimization
+- `index.html` — preload, preconnect hints
+
+**Метрики успеха:**
+
+| Метрика | Цель | Инструмент |
+|---------|------|------------|
+| Lighthouse Performance | > 90 | Chrome DevTools |
+| First Contentful Paint | < 1.8s | Lighthouse |
+| Largest Contentful Paint | < 2.5s | Lighthouse |
+| Cumulative Layout Shift | < 0.1 | Lighthouse |
+| Total Blocking Time | < 200ms | Lighthouse |
+| Bundle size (gzip) | < 500KB | vite build |
+| Dashboard load time | < 2s | Performance API |
+
+---
+
 ## 5. Ralph Wiggum Loop Цикл
 
 ### 5.1 Вход спринта
@@ -1503,7 +1568,7 @@ npm run test:smoke
 
 ### Технический
 
-- [ ] 30 спринтов завершены
+- [ ] 31 спринт завершен
 - [ ] Unit coverage > 80%
 - [ ] E2E full journey pass
 - [ ] Docker build success
@@ -1526,6 +1591,6 @@ npm run test:smoke
 ---
 
 *Документ: AdPilot_RalphWiggum_Plan_FULL.md*
-*Версия: 2.2*
+*Версия: 2.3*
 *Дата: 1 февраля 2026 г.*
 *Источник: AdPilot_PRD_v1.0.md*
