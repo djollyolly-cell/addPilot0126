@@ -1290,6 +1290,67 @@ logs/s2-*.json
 
 ---
 
+### Sprint 29 — Landing Page
+
+**Цель:** Публичная landing page для привлечения пользователей
+
+**DoD — Конкретные тестовые сценарии:**
+
+| # | Категория | Сценарий | Действие | Ожидаемый результат | Артефакт |
+|---|-----------|----------|----------|---------------------|----------|
+| 1 | UI | Hero секция | Открыть / | Заголовок, CTA, статистика | screenshots/s29-hero.png |
+| 2 | UI | Features | Скролл до Features | 4 карточки преимуществ | screenshots/s29-features.png |
+| 3 | UI | How it Works | Скролл | 4 шага подключения | screenshots/s29-how-it-works.png |
+| 4 | UI | Pricing | Скролл до Pricing | 3 тарифа с ценами | screenshots/s29-pricing.png |
+| 5 | UI | FAQ | Клик на вопрос | Accordion раскрывается | screenshots/s29-faq.png |
+| 6 | Navigation | Header | Клик "Возможности" | Скролл к секции | screenshots/s29-nav.png |
+| 7 | Routing | Неавторизован | Открыть / | LandingPage | screenshots/s29-landing.png |
+| 8 | Routing | Авторизован | Открыть / | Redirect на /dashboard | screenshots/s29-redirect.png |
+| 9 | SEO | Meta теги | View source | OG теги, description | screenshots/s29-seo.png |
+| 10 | Mobile | Адаптивность | Resize 375px | Корректный layout | screenshots/s29-mobile.png |
+
+**Файлы:**
+- `src/pages/LandingPage.tsx` — полная landing page
+- `src/App.tsx` — обновлённый роутинг
+- `index.html` — SEO meta теги
+
+---
+
+### Sprint 30 — Security Hardening
+
+**Цель:** Усиление безопасности приложения
+
+**DoD — Конкретные тестовые сценарии:**
+
+| # | Категория | Сценарий | Действие | Ожидаемый результат | Артефакт |
+|---|-----------|----------|----------|---------------------|----------|
+| 1 | Webhook | Telegram CSRF | POST без secret | 401 Unauthorized | logs/s30-tg-401.json |
+| 2 | Webhook | Telegram valid | POST с secret | 200 OK | logs/s30-tg-200.json |
+| 3 | Webhook | bePaid auth | POST без Basic Auth | 401 Unauthorized | logs/s30-bepaid-401.json |
+| 4 | Webhook | bePaid valid | POST с Basic Auth | 200 OK | logs/s30-bepaid-200.json |
+| 5 | Headers | Security headers | curl -I | X-Frame-Options, CSP | logs/s30-headers.txt |
+| 6 | npm | Audit | npm audit | 0 vulnerabilities | logs/s30-audit.txt |
+| 7 | Rate limit | OAuth abuse | 10+ requests/min | 429 Too Many Requests | logs/s30-rate-limit.json |
+| 8 | Token | Session expiry | Wait 30d | Auto logout | screenshots/s30-session.png |
+| 9 | Token | Tab sync | Logout в tab A | Tab B также logout | screenshots/s30-tab-sync.png |
+| 10 | Tests | Security tests | npm run test:unit tests/security/ | 35 tests pass | logs/s30-tests.txt |
+
+**Файлы:**
+- `convex/http.ts` — webhook protection
+- `convex/rateLimit.ts` — rate limiting module
+- `convex/schema.ts` — rateLimits table
+- `src/lib/useAuth.tsx` — token security
+- `serve.json`, `vercel.json` — security headers
+- `eslint.config.js` — ESLint 9 config
+- `tests/security/*.test.ts` — security tests
+
+**Зависимости обновлены:**
+- vite 5.3.5 → 7.3.1
+- eslint 8.57.0 → 9.39.2
+- vitest 2.0.4 → 4.0.18
+
+---
+
 ## 5. Ralph Wiggum Loop Цикл
 
 ### 5.1 Вход спринта
@@ -1442,7 +1503,7 @@ npm run test:smoke
 
 ### Технический
 
-- [ ] 28 спринтов завершены
+- [ ] 30 спринтов завершены
 - [ ] Unit coverage > 80%
 - [ ] E2E full journey pass
 - [ ] Docker build success
@@ -1465,6 +1526,6 @@ npm run test:smoke
 ---
 
 *Документ: AdPilot_RalphWiggum_Plan_FULL.md*
-*Версия: 2.1*
-*Дата: 24 января 2026 г.*
+*Версия: 2.2*
+*Дата: 1 февраля 2026 г.*
 *Источник: AdPilot_PRD_v1.0.md*
