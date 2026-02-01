@@ -1,5 +1,6 @@
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { Layout } from './components/Layout';
+import { LandingPage } from './pages/LandingPage';
 import { LoginPage } from './pages/LoginPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { AccountsPage } from './pages/AccountsPage';
@@ -53,6 +54,15 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 function App() {
   return (
     <Routes>
+      {/* Landing page for non-authenticated users */}
+      <Route
+        path="/"
+        element={
+          <PublicRoute>
+            <LandingPage />
+          </PublicRoute>
+        }
+      />
       <Route
         path="/login"
         element={
@@ -63,26 +73,28 @@ function App() {
       />
       <Route path="/auth/callback" element={<AuthCallback />} />
       <Route path="/auth/ads-callback" element={<AdsCallback />} />
+
+      {/* Protected app routes */}
       <Route
-        path="/"
         element={
           <ProtectedRoute>
             <Layout />
           </ProtectedRoute>
         }
       >
-        <Route index element={<Navigate to="/dashboard" replace />} />
-        <Route path="dashboard" element={<DashboardPage />} />
-        <Route path="profile" element={<ProfilePage />} />
-        <Route path="accounts" element={<AccountsPage />} />
-        <Route path="rules" element={<RulesPage />} />
-        <Route path="analytics" element={<AnalyticsPage />} />
-        <Route path="logs" element={<LogsPage />} />
-        <Route path="settings" element={<SettingsPage />} />
-        <Route path="settings/telegram" element={<TelegramSettingsPage />} />
-        <Route path="pricing" element={<PricingPage />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/profile" element={<ProfilePage />} />
+        <Route path="/accounts" element={<AccountsPage />} />
+        <Route path="/rules" element={<RulesPage />} />
+        <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/logs" element={<LogsPage />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/settings/telegram" element={<TelegramSettingsPage />} />
+        <Route path="/pricing" element={<PricingPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/login" replace />} />
+
+      {/* Fallback */}
+      <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );
 }
