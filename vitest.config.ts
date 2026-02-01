@@ -17,6 +17,7 @@ export default defineConfig({
       'tests/unit/**/*.test.ts',
       'tests/unit/**/*.test.tsx',
       'tests/integration/**/*.test.ts',
+      'tests/security/**/*.test.ts',
       'convex/**/*.test.ts',
     ],
     exclude: ['tests/e2e/**/*'],
