@@ -73,8 +73,7 @@ export const createBepaidCheckout = action({
     const shopId = process.env.BEPAID_SHOP_ID;
     const secretKey = process.env.BEPAID_SECRET_KEY;
     const isTestMode = process.env.BEPAID_TEST_MODE === "true";
-    // notificationUrl can be used for webhook URL if needed
-    // const notificationUrl = process.env.BEPAID_NOTIFICATION_URL || process.env.CONVEX_SITE_URL;
+    const siteUrl = process.env.CONVEX_SITE_URL; // e.g., https://resilient-terrier-567.convex.site
 
     // If bePaid not configured, return mock mode indicator
     if (!shopId || !secretKey) {
@@ -103,6 +102,7 @@ export const createBepaidCheckout = action({
         settings: {
           success_url: `${args.returnUrl}?status=success&tier=${args.tier}`,
           fail_url: `${args.returnUrl}?status=failed`,
+          notification_url: siteUrl ? `${siteUrl}/api/bepaid-webhook` : undefined,
           language: "ru",
         },
         order: {

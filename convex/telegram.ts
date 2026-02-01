@@ -1243,14 +1243,23 @@ export const setupWebhook = action({
       return { success: false, error: "TELEGRAM_BOT_TOKEN not configured" };
     }
 
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+
     const webhookUrl = `${args.siteUrl}/telegram`;
+
+    const webhookParams: Record<string, string> = { url: webhookUrl };
+    if (webhookSecret) {
+      // Set secret_token for webhook verification (CSRF protection)
+      // Telegram will include this in X-Telegram-Bot-Api-Secret-Token header
+      webhookParams.secret_token = webhookSecret;
+    }
 
     const response = await fetch(
       `${TELEGRAM_API_BASE}${botToken}/setWebhook`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: webhookUrl }),
+        body: JSON.stringify(webhookParams),
       }
     );
 
@@ -1260,7 +1269,11 @@ export const setupWebhook = action({
       return { success: false, error: result.description || "Failed to set webhook" };
     }
 
-    return { success: true, webhookUrl };
+    return {
+      success: true,
+      webhookUrl,
+      secretConfigured: !!webhookSecret,
+    };
   },
 });
 
