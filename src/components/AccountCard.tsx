@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, memo } from 'react';
 import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import { Card, CardContent } from './ui/card';
 import { SyncButton } from './SyncButton';
@@ -39,7 +39,7 @@ const statusConfig = {
   },
 };
 
-export function AccountCard({ account, onSync, onDisconnect }: AccountCardProps) {
+export const AccountCard = memo(function AccountCard({ account, onSync, onDisconnect }: AccountCardProps) {
   const [showCampaigns, setShowCampaigns] = useState(false);
   const status = statusConfig[account.status];
   const StatusIcon = status.icon;
@@ -118,4 +118,4 @@ export function AccountCard({ account, onSync, onDisconnect }: AccountCardProps)
       </CardContent>
     </Card>
   );
-}
+});

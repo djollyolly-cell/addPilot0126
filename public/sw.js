@@ -1,4 +1,4 @@
-const CACHE_NAME = 'adpilot-v1';
+const CACHE_NAME = 'adpilot-v2';
 const STATIC_ASSETS = [
   '/',
   '/manifest.json',
@@ -58,14 +58,20 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Static assets: cache-first
+  // Static assets: cache-first (JS, CSS, images, fonts)
   if (
     request.url.includes('/assets/') ||
     request.url.includes('/icons/') ||
     request.url.endsWith('.js') ||
     request.url.endsWith('.css') ||
     request.url.endsWith('.svg') ||
-    request.url.endsWith('.png')
+    request.url.endsWith('.png') ||
+    request.url.endsWith('.webp') ||
+    request.url.endsWith('.avif') ||
+    request.url.endsWith('.woff2') ||
+    request.url.endsWith('.woff') ||
+    request.url.includes('fonts.gstatic.com') ||
+    request.url.includes('fonts.googleapis.com')
   ) {
     event.respondWith(
       caches.match(request).then(

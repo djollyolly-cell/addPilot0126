@@ -1,19 +1,31 @@
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import { lazy, Suspense } from 'react';
 import { Layout } from './components/Layout';
-import { LandingPage } from './pages/LandingPage';
-import { LoginPage } from './pages/LoginPage';
-import { ProfilePage } from './pages/ProfilePage';
-import { AccountsPage } from './pages/AccountsPage';
-import { RulesPage } from './pages/RulesPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { AuthCallback } from './pages/AuthCallback';
-import { AdsCallback } from './pages/AdsCallback';
-import { TelegramSettingsPage } from './pages/TelegramSettingsPage';
-import { AnalyticsPage } from './pages/AnalyticsPage';
-import { LogsPage } from './pages/LogsPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { PricingPage } from './pages/PricingPage';
 import { useAuth } from './lib/useAuth';
+
+// Lazy load pages for code splitting
+const LandingPage = lazy(() => import('./pages/LandingPage').then(m => ({ default: m.LandingPage })));
+const LoginPage = lazy(() => import('./pages/LoginPage').then(m => ({ default: m.LoginPage })));
+const ProfilePage = lazy(() => import('./pages/ProfilePage').then(m => ({ default: m.ProfilePage })));
+const AccountsPage = lazy(() => import('./pages/AccountsPage').then(m => ({ default: m.AccountsPage })));
+const RulesPage = lazy(() => import('./pages/RulesPage').then(m => ({ default: m.RulesPage })));
+const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
+const AuthCallback = lazy(() => import('./pages/AuthCallback').then(m => ({ default: m.AuthCallback })));
+const AdsCallback = lazy(() => import('./pages/AdsCallback').then(m => ({ default: m.AdsCallback })));
+const TelegramSettingsPage = lazy(() => import('./pages/TelegramSettingsPage').then(m => ({ default: m.TelegramSettingsPage })));
+const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
+const LogsPage = lazy(() => import('./pages/LogsPage').then(m => ({ default: m.LogsPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
+const PricingPage = lazy(() => import('./pages/PricingPage').then(m => ({ default: m.PricingPage })));
+
+// Loading spinner component
+function PageLoader() {
+  return (
+    <div className="min-h-screen flex items-center justify-center">
+      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+    </div>
+  );
+}
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useAuth();
@@ -57,6 +69,7 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   return (
+    <Suspense fallback={<PageLoader />}>
     <Routes>
       {/* Landing page for non-authenticated users */}
       <Route
@@ -100,6 +113,7 @@ function App() {
       {/* Fallback */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </Suspense>
   );
 }
 

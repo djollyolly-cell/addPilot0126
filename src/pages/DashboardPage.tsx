@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, memo } from 'react';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
@@ -40,7 +40,7 @@ function useAnimatedNumber(target: number, duration = 800) {
 }
 
 /** Mini bar chart for 7-day savings */
-function SavingsChart({ data }: { data: { date: string; amount: number }[] }) {
+const SavingsChart = memo(function SavingsChart({ data }: { data: { date: string; amount: number }[] }) {
   const max = Math.max(...data.map((d) => d.amount), 1);
 
   return (
@@ -65,10 +65,10 @@ function SavingsChart({ data }: { data: { date: string; amount: number }[] }) {
       })}
     </div>
   );
-}
+});
 
 /** Savings Widget */
-function SavingsWidget({ userId }: { userId: Id<"users"> }) {
+const SavingsWidget = memo(function SavingsWidget({ userId }: { userId: Id<"users"> }) {
   const savedToday = useQuery(api.ruleEngine.getSavedToday, { userId });
   const savedHistory = useQuery(api.ruleEngine.getSavedHistory, { userId });
 
@@ -149,10 +149,10 @@ function SavingsWidget({ userId }: { userId: Id<"users"> }) {
       </CardContent>
     </Card>
   );
-}
+});
 
 /** Activity Block — triggers, stops, notifications counts */
-function ActivityBlock({ userId }: { userId: Id<"users"> }) {
+const ActivityBlock = memo(function ActivityBlock({ userId }: { userId: Id<"users"> }) {
   const stats = useQuery(api.ruleEngine.getActivityStats, { userId });
 
   const items = [
@@ -196,10 +196,10 @@ function ActivityBlock({ userId }: { userId: Id<"users"> }) {
       ))}
     </div>
   );
-}
+});
 
 /** Health indicator dot for account status */
-function HealthIndicator({ status }: { status: string }) {
+const HealthIndicator = memo(function HealthIndicator({ status }: { status: string }) {
   const colorClass =
     status === 'active'
       ? 'bg-green-500'
@@ -220,7 +220,7 @@ function HealthIndicator({ status }: { status: string }) {
       }
     />
   );
-}
+});
 
 /** Action type label mapping */
 const ACTION_TYPE_LABELS: Record<string, string> = {
@@ -230,7 +230,7 @@ const ACTION_TYPE_LABELS: Record<string, string> = {
 };
 
 /** Event Feed — recent action logs with filters */
-function EventFeed({
+const EventFeed = memo(function EventFeed({
   userId,
   accounts,
 }: {
@@ -361,10 +361,10 @@ function EventFeed({
       </CardContent>
     </Card>
   );
-}
+});
 
 /** Expired Subscription Banner */
-function ExpiredSubscriptionBanner() {
+const ExpiredSubscriptionBanner = memo(function ExpiredSubscriptionBanner() {
   const navigate = useNavigate();
 
   return (
@@ -386,10 +386,10 @@ function ExpiredSubscriptionBanner() {
       </CardContent>
     </Card>
   );
-}
+});
 
 /** Expiring Soon Banner (7 days or less) */
-function ExpiringSoonBanner({ expiresAt }: { expiresAt: number }) {
+const ExpiringSoonBanner = memo(function ExpiringSoonBanner({ expiresAt }: { expiresAt: number }) {
   const navigate = useNavigate();
   const daysLeft = Math.ceil((expiresAt - Date.now()) / (24 * 60 * 60 * 1000));
 
@@ -422,7 +422,7 @@ function ExpiringSoonBanner({ expiresAt }: { expiresAt: number }) {
       </CardContent>
     </Card>
   );
-}
+});
 
 export function DashboardPage() {
   const { user } = useAuth();
