@@ -496,6 +496,7 @@ export default crons;
 
 ---
 
+
 ## 4. Карта спринтов (28 спринтов, ПОЛНЫЙ ФОРМАТ)
 
 ---
@@ -917,7 +918,7 @@ logs/s2-*.json
 
 ### Sprint 12 — Telegram: дайджест и тихие часы
 
-**Цель:** Дайджест 09:00, quiet hours
+**Цель:** Дайджест 08:00, quiet hours
 
 **User stories:** EPIC-5.US-4, EPIC-5.US-5
 
@@ -927,7 +928,7 @@ logs/s2-*.json
 |---|-----------|----------|----------|---------------------|----------|
 | 1 | Unit | sendDailyDigest | Формирование дайджеста | Сводка за день | logs/test.txt |
 | 2 | Unit | Тихие часы блокируют | 23:00-07:00, now=02:00 | Не отправляется | logs/test.txt |
-| 3 | Integration | Cron daily-digest | Ждать 09:00 MSK (mock) | Дайджест отправлен | logs/integration.txt |
+| 3 | Integration | Cron daily-digest | Ждать 08:00 MSK (mock) | Дайджест отправлен | logs/integration.txt |
 | 4 | Browser | UI тихих часов | /settings/telegram | Time pickers | screenshots/s12-quiet-hours.png |
 | 5 | Browser | DOM time pickers | querySelector('[data-testid="quiet-hours-start"]') | Найден | screenshots/s12-quiet-dom.png |
 | 6 | Browser | Дайджест в Telegram | В Telegram | Сводка видна | screenshots/s12-digest.png |
@@ -1195,9 +1196,9 @@ logs/s2-*.json
 
 ---
 
-### Sprint 24 — Биллинг: оплата
+### Sprint 24 — Биллинг: оплата 
 
-**Цель:** Payment integration
+**Цель:** Payment integration https://bepaid.by/dev
 
 **User stories:** EPIC-12.US-1, EPIC-12.US-2
 
@@ -1272,7 +1273,7 @@ logs/s2-*.json
 
 ---
 
-### Sprint 28 — Smoke-тесты и мониторинг
+### Sprint 29 — Smoke-тесты и мониторинг
 
 **Цель:** Post-deploy verification
 
@@ -1413,6 +1414,91 @@ logs/s2-*.json
 | Total Blocking Time | < 200ms | Lighthouse |
 | Bundle size (gzip) | < 500KB | vite build |
 | Dashboard load time | < 2s | Performance API |
+
+---
+
+### Sprint 32 — Self-Hosted Docker Deploy
+
+**Цель:** Полный self-hosted деплой с локальным Convex для dev и prod окружений в Dokploy
+
+**DoD — Конкретные тестовые сценарии:**
+
+| # | Категория | Сценарий | Действие | Ожидаемый результат | Артефакт |
+|---|-----------|----------|----------|---------------------|----------|
+| 1 | Docker | DEV Convex | docker compose up | Backend healthy на :3210 | screenshots/s32-convex-dev.png |
+| 2 | Docker | DEV Dashboard | http://localhost:6791 | Dashboard открывается | screenshots/s32-dashboard-dev.png |
+| 3 | Docker | DEV Frontend | http://localhost:3000 | Frontend загружается | screenshots/s32-frontend-dev.png |
+| 4 | Deploy | Convex functions | ./deploy-convex.sh dev | Functions deployed | logs/s32-deploy-dev.txt |
+| 5 | Auth | DEV Registration | Регистрация нового юзера | Юзер в Convex DB | screenshots/s32-auth-dev.png |
+| 6 | Auth | DEV Login | Логин существующего | Dashboard загружается | screenshots/s32-login-dev.png |
+| 7 | Docker | PROD Convex | docker compose -f prod up | Backend healthy | screenshots/s32-convex-prod.png |
+| 8 | Docker | PROD Dashboard | https://dashboard.${DOMAIN} | Dashboard открывается | screenshots/s32-dashboard-prod.png |
+| 9 | Docker | PROD Frontend | https://${DOMAIN} | Frontend с SSL | screenshots/s32-frontend-prod.png |
+| 10 | Traefik | SSL certificates | curl -I https://${DOMAIN} | Valid SSL | logs/s32-ssl.txt |
+| 11 | Traefik | Routing | Все субдомены | Корректная маршрутизация | logs/s32-routing.txt |
+| 12 | Data | Isolation | DEV ≠ PROD data | Разные volumes | screenshots/s32-isolation.png |
+| 13 | Backup | Convex data | docker run backup | tar.gz создан | logs/s32-backup.txt |
+| 14 | Deploy | Convex PROD | ./deploy-convex.sh prod | Functions deployed | logs/s32-deploy-prod.txt |
+| 15 | Auth | PROD Login | VK OAuth на ${DOMAIN} | Успешная авторизация | screenshots/s32-auth-prod.png |
+
+**Задачи:**
+
+- [x] Docker Compose для DEV окружения
+- [x] Docker Compose для PROD окружения
+- [x] Dockerfile.prod оптимизированный
+- [x] Traefik labels для Dokploy
+- [x] Скрипты инициализации (init-dev.sh, init-prod.sh)
+- [x] Скрипт деплоя Convex функций
+- [x] dokploy.yml конфигурация
+- [x] Документация (docker/README.md)
+- [x] .env примеры для обоих окружений
+- [ ] Тестирование DEV локально
+- [ ] Деплой в Dokploy
+- [ ] DNS настройка (convex.*, api.*, dashboard.*)
+- [ ] Проверка SSL через Traefik
+- [ ] Миграция данных из Convex Cloud (опционально)
+
+**Архитектура:**
+
+```
+Dokploy Server (Traefik)
+├── aipilot.by          → frontend-prod:3000
+├── convex.aipilot.by   → convex-backend:3210
+├── api.aipilot.by      → convex-backend:3211 (WebSocket)
+└── dashboard.aipilot.by → convex-dashboard:6791
+```
+
+**Файлы:**
+
+- `docker/docker-compose.dev.yml` — DEV окружение
+- `docker/docker-compose.prod.yml` — PROD окружение с Traefik labels
+- `docker/scripts/init-dev.sh` — инициализация DEV
+- `docker/scripts/init-prod.sh` — инициализация PROD
+- `docker/scripts/deploy-convex.sh` — деплой Convex функций
+- `docker/.env.dev.example` — переменные DEV
+- `docker/.env.prod.example` — переменные PROD
+- `Dockerfile.prod` — production Dockerfile
+- `dokploy.yml` — конфигурация Dokploy
+
+**DNS записи для домена:**
+
+```
+A     @           → server-ip
+A     www         → server-ip
+A     convex      → server-ip
+A     api         → server-ip
+A     dashboard   → server-ip
+```
+
+**Переменные окружения (Dokploy):**
+
+- `DOMAIN` — основной домен (aipilot.by)
+- `CONVEX_ADMIN_KEY` — ключ администратора Convex
+- `VK_CLIENT_ID`, `VK_CLIENT_SECRET` — VK OAuth
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET` — Telegram
+- `BEPAID_SHOP_ID`, `BEPAID_SECRET_KEY` — платежи
+
+---
 
 ---
 
@@ -1568,7 +1654,7 @@ npm run test:smoke
 
 ### Технический
 
-- [ ] 31 спринт завершен
+- [ ] 28 спринтов завершены
 - [ ] Unit coverage > 80%
 - [ ] E2E full journey pass
 - [ ] Docker build success
@@ -1591,6 +1677,6 @@ npm run test:smoke
 ---
 
 *Документ: AdPilot_RalphWiggum_Plan_FULL.md*
-*Версия: 2.3*
-*Дата: 1 февраля 2026 г.*
+*Версия: 2.1*
+*Дата: 24 января 2026 г.*
 *Источник: AdPilot_PRD_v1.0.md*

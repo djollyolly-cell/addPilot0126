@@ -1,0 +1,99 @@
+# ============================================
+# AdPilot Dokploy Configuration
+# Sprint 32 — Self-Hosted Docker Deploy
+# ============================================
+# This file configures Dokploy deployment
+# Place in repository root
+
+version: "1"
+
+# Project settings
+project:
+  name: adpilot
+  description: "AdPilot - VK Ads automation assistant"
+
+# Services
+services:
+  # Convex Backend
+  convex-backend:
+    image: ghcr.io/get-convex/convex-backend:latest
+    domains:
+      - host: convex.${DOMAIN}
+        https: true
+    ports:
+      - 3210
+    volumes:
+      - convex-data:/convex/data
+    healthCheck:
+      path: /version
+      interval: 30
+    env:
+      - CONVEX_SITE_URL=https://api.${DOMAIN}
+      - CONVEX_CLOUD_URL=https://convex.${DOMAIN}
+      - CONVEX_LOCAL_STORAGE=/convex/data
+      - RUST_LOG=warn
+
+  # Convex WebSocket (for real-time)
+  convex-ws:
+    image: ghcr.io/get-convex/convex-backend:latest
+    domains:
+      - host: api.${DOMAIN}
+        https: true
+    ports:
+      - 3211
+    volumes:
+      - convex-data:/convex/data
+    env:
+      - CONVEX_SITE_URL=https://api.${DOMAIN}
+      - CONVEX_CLOUD_URL=https://convex.${DOMAIN}
+
+  # Convex Dashboard
+  convex-dashboard:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    domains:
+      - host: dashboard.${DOMAIN}
+        https: true
+    ports:
+      - 6791
+    dependsOn:
+      - convex-backend
+    env:
+      - CONVEX_PROVISION_HOST=http://convex-backend:3210
+      - NEXT_PUBLIC_DEPLOYMENT_URL=https://convex.${DOMAIN}
+
+  # Frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      args:
+        - VITE_CONVEX_URL=https://convex.${DOMAIN}
+        - VITE_CONVEX_SITE_URL=https://api.${DOMAIN}
+        - VITE_REDIRECT_URI=https://${DOMAIN}/auth/callback
+        - VITE_TELEGRAM_BOT_USERNAME=${VITE_TELEGRAM_BOT_USERNAME}
+    domains:
+      - host: ${DOMAIN}
+        https: true
+      - host: www.${DOMAIN}
+        https: true
+        redirect: ${DOMAIN}
+    ports:
+      - 3000
+    dependsOn:
+      - convex-backend
+    healthCheck:
+      path: /
+      interval: 30
+
+# Volumes
+volumes:
+  convex-data:
+    persist: true
+
+# Environment variables (set in Dokploy UI)
+# Required:
+#   DOMAIN - your domain (e.g., aipilot.by)
+#   CONVEX_ADMIN_KEY - admin key for Convex
+#   VK_CLIENT_ID, VK_CLIENT_SECRET - VK OAuth
+#   TELEGRAM_BOT_TOKEN - Telegram bot
+#   BEPAID_SHOP_ID, BEPAID_SECRET_KEY - payments

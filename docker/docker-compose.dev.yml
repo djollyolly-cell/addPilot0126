@@ -1,0 +1,89 @@
+# ============================================
+# AdPilot Self-Hosted Development Environment
+# Sprint 32 — Self-Hosted Docker Deploy
+# ============================================
+# Usage: docker compose -f docker/docker-compose.dev.yml up -d
+
+services:
+  # ─────────────────────────────────────────
+  # Convex Backend (DEV)
+  # ─────────────────────────────────────────
+  convex-backend-dev:
+    image: ghcr.io/get-convex/convex-backend:latest
+    container_name: adpilot-convex-dev
+    restart: unless-stopped
+    ports:
+      - "3210:3210"  # HTTP API
+      - "3211:3211"  # WebSocket
+    volumes:
+      - convex-data-dev:/convex/data
+    environment:
+      # Core settings
+      - CONVEX_SITE_URL=http://localhost:3211
+      - CONVEX_CLOUD_URL=http://localhost:3210
+      - CONVEX_LOCAL_STORAGE=/convex/data
+      # Logging
+      - RUST_LOG=info
+      - CONVEX_TRACE_FILE=/convex/data/trace.log
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    stop_signal: SIGINT
+    stop_grace_period: 10s
+    networks:
+      - adpilot-dev
+
+  # ─────────────────────────────────────────
+  # Convex Dashboard (DEV)
+  # ─────────────────────────────────────────
+  convex-dashboard-dev:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    container_name: adpilot-dashboard-dev
+    restart: unless-stopped
+    ports:
+      - "6791:6791"
+    environment:
+      - CONVEX_PROVISION_HOST=http://convex-backend-dev:3210
+      - NEXT_PUBLIC_DEPLOYMENT_URL=http://localhost:3210
+      - NEXT_PUBLIC_BIG_BRAIN_URL=http://convex-backend-dev:3210
+    depends_on:
+      convex-backend-dev:
+        condition: service_healthy
+    stop_signal: SIGINT
+    stop_grace_period: 10s
+    networks:
+      - adpilot-dev
+
+  # ─────────────────────────────────────────
+  # AdPilot Frontend (DEV)
+  # ─────────────────────────────────────────
+  frontend-dev:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        - VITE_CONVEX_URL=http://localhost:3210
+    container_name: adpilot-frontend-dev
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - VITE_CONVEX_URL=http://localhost:3210
+      - VITE_CONVEX_SITE_URL=http://localhost:3211
+    depends_on:
+      convex-backend-dev:
+        condition: service_healthy
+    networks:
+      - adpilot-dev
+
+volumes:
+  convex-data-dev:
+    name: adpilot-convex-data-dev
+
+networks:
+  adpilot-dev:
+    name: adpilot-network-dev

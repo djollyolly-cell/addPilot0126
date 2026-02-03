@@ -9,3 +9,7 @@ videos/
 logs/*.txt
 logs/*.json
 .claude/
+
+# Docker environment files (contain secrets)
+docker/.env.dev
+docker/.env.prod
