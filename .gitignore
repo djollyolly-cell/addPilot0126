@@ -13,3 +13,13 @@ logs/*.json
 # Docker environment files (contain secrets)
 docker/.env.dev
 docker/.env.prod
+
+# Self-hosted env files with secrets
+docker/.env.selfhosted-dev
+docker/.env.selfhosted-prod
+.env.local.cloud.backup
+.env.local.selfhosted
+
+# Test screenshots
+tests/screenshots/
+test-results/

@@ -1,0 +1,103 @@
+# ============================================
+# AdPilot Local Testing - DEV + PROD Convex
+# Sprint 32 — Self-Hosted Docker Deploy
+# ============================================
+# Runs both DEV and PROD Convex instances locally for testing
+# Usage: docker compose -f docker/docker-compose.local-test.yml up -d
+
+services:
+  # ═══════════════════════════════════════════
+  # DEV ENVIRONMENT (ports 3210, 3211, 6791)
+  # ═══════════════════════════════════════════
+
+  convex-backend-dev:
+    image: ghcr.io/get-convex/convex-backend:latest
+    container_name: adpilot-convex-dev
+    restart: unless-stopped
+    ports:
+      - "3210:3210"
+      - "3211:3211"
+    volumes:
+      - convex-data-dev:/convex/data
+    environment:
+      - CONVEX_SITE_URL=http://localhost:3211
+      - CONVEX_CLOUD_URL=http://localhost:3210
+      - CONVEX_LOCAL_STORAGE=/convex/data
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - adpilot-local
+
+  convex-dashboard-dev:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    container_name: adpilot-dashboard-dev
+    restart: unless-stopped
+    ports:
+      - "6791:6791"
+    environment:
+      - CONVEX_PROVISION_HOST=http://convex-backend-dev:3210
+      - NEXT_PUBLIC_DEPLOYMENT_URL=http://localhost:3210
+      - NEXT_PUBLIC_BIG_BRAIN_URL=http://convex-backend-dev:3210
+    depends_on:
+      convex-backend-dev:
+        condition: service_healthy
+    networks:
+      - adpilot-local
+
+  # ═══════════════════════════════════════════
+  # PROD ENVIRONMENT (ports 4210, 4211, 7791)
+  # ═══════════════════════════════════════════
+
+  convex-backend-prod:
+    image: ghcr.io/get-convex/convex-backend:latest
+    container_name: adpilot-convex-prod
+    restart: unless-stopped
+    ports:
+      - "4210:3210"
+      - "4211:3211"
+    volumes:
+      - convex-data-prod:/convex/data
+    environment:
+      - CONVEX_SITE_URL=http://localhost:4211
+      - CONVEX_CLOUD_URL=http://localhost:4210
+      - CONVEX_LOCAL_STORAGE=/convex/data
+      - RUST_LOG=warn
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - adpilot-local
+
+  convex-dashboard-prod:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    container_name: adpilot-dashboard-prod
+    restart: unless-stopped
+    ports:
+      - "7791:6791"
+    environment:
+      - CONVEX_PROVISION_HOST=http://convex-backend-prod:3210
+      - NEXT_PUBLIC_DEPLOYMENT_URL=http://localhost:4210
+      - NEXT_PUBLIC_BIG_BRAIN_URL=http://convex-backend-prod:3210
+    depends_on:
+      convex-backend-prod:
+        condition: service_healthy
+    networks:
+      - adpilot-local
+
+volumes:
+  convex-data-dev:
+    name: adpilot-convex-data-dev
+  convex-data-prod:
+    name: adpilot-convex-data-prod
+
+networks:
+  adpilot-local:
+    name: adpilot-network-local
