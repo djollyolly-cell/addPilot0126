@@ -1,0 +1,109 @@
+# ============================================
+# AdPilot Production Docker Compose
+# For Dokploy deployment
+# ============================================
+
+services:
+  # ─────────────────────────────────────────
+  # Convex Backend
+  # ─────────────────────────────────────────
+  convex-backend:
+    image: ghcr.io/get-convex/convex-backend:latest
+    container_name: adpilot-convex
+    restart: always
+    expose:
+      - "3210"
+      - "3211"
+    volumes:
+      - convex-data:/convex/data
+    environment:
+      - CONVEX_SITE_URL=${CONVEX_SITE_URL:-https://api.${DOMAIN}}
+      - CONVEX_CLOUD_URL=${CONVEX_CLOUD_URL:-https://convex.${DOMAIN}}
+      - CONVEX_LOCAL_STORAGE=/convex/data
+      - RUST_LOG=warn
+      - CONVEX_ADMIN_KEY=${CONVEX_ADMIN_KEY}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+    networks:
+      - adpilot-network
+    labels:
+      - "traefik.enable=true"
+      # HTTP API
+      - "traefik.http.routers.convex-api.rule=Host(`convex.${DOMAIN}`)"
+      - "traefik.http.routers.convex-api.entrypoints=websecure"
+      - "traefik.http.routers.convex-api.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.convex-api.service=convex-api"
+      - "traefik.http.services.convex-api.loadbalancer.server.port=3210"
+      # WebSocket
+      - "traefik.http.routers.convex-ws.rule=Host(`api.${DOMAIN}`)"
+      - "traefik.http.routers.convex-ws.entrypoints=websecure"
+      - "traefik.http.routers.convex-ws.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.convex-ws.service=convex-ws"
+      - "traefik.http.services.convex-ws.loadbalancer.server.port=3211"
+
+  # ─────────────────────────────────────────
+  # Convex Dashboard
+  # ─────────────────────────────────────────
+  convex-dashboard:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    container_name: adpilot-dashboard
+    restart: always
+    expose:
+      - "6791"
+    environment:
+      - CONVEX_PROVISION_HOST=http://convex-backend:3210
+      - NEXT_PUBLIC_DEPLOYMENT_URL=https://convex.${DOMAIN}
+      - NEXT_PUBLIC_BIG_BRAIN_URL=http://convex-backend:3210
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+    networks:
+      - adpilot-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.convex-dashboard.rule=Host(`dashboard.${DOMAIN}`)"
+      - "traefik.http.routers.convex-dashboard.entrypoints=websecure"
+      - "traefik.http.routers.convex-dashboard.tls.certresolver=letsencrypt"
+      - "traefik.http.services.convex-dashboard.loadbalancer.server.port=6791"
+
+  # ─────────────────────────────────────────
+  # AdPilot Frontend
+  # ─────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      args:
+        - VITE_CONVEX_URL=https://convex.${DOMAIN}
+    container_name: adpilot-frontend
+    restart: always
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      convex-backend:
+        condition: service_healthy
+    networks:
+      - adpilot-network
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
+      - "traefik.http.routers.frontend.entrypoints=websecure"
+      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      - "traefik.http.middlewares.www-redirect.redirectregex.regex=^https://www\\.(.+)"
+      - "traefik.http.middlewares.www-redirect.redirectregex.replacement=https://$${1}"
+      - "traefik.http.routers.frontend.middlewares=www-redirect"
+
+volumes:
+  convex-data:
+    name: adpilot-convex-data
+
+networks:
+  adpilot-network:
+    name: adpilot-network
