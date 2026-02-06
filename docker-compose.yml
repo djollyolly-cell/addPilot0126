@@ -21,6 +21,8 @@ services:
     restart: always
     expose:
       - "3000"
+    networks:
+      - dokploy-network
     environment:
       - NODE_ENV=production
     labels:
@@ -51,6 +53,8 @@ services:
     restart: always
     expose:
       - "3000"
+    networks:
+      - dokploy-network
     environment:
       - NODE_ENV=production
     labels:
@@ -59,3 +63,7 @@ services:
       - "traefik.http.routers.frontend-dev.entrypoints=websecure"
       - "traefik.http.routers.frontend-dev.tls.certresolver=letsencrypt"
       - "traefik.http.services.frontend-dev.loadbalancer.server.port=3000"
+
+networks:
+  dokploy-network:
+    external: true
