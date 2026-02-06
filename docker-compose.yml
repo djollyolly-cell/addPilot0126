@@ -1,9 +1,13 @@
 # ============================================
-# AdPilot Production Docker Compose
-# For Dokploy deployment (Cloud Convex)
+# AdPilot Docker Compose — Dokploy (Cloud Convex)
+# Prod: aipilot.by  → prod Convex Cloud
+# Dev:  dev.aipilot.by → dev Convex Cloud
 # ============================================
 
 services:
+  # ─────────────────────────────────────────
+  # Frontend PROD (aipilot.by)
+  # ─────────────────────────────────────────
   frontend:
     build:
       context: .
@@ -12,6 +16,7 @@ services:
         - VITE_CONVEX_URL=${VITE_CONVEX_URL}
         - VITE_REDIRECT_URI=${VITE_REDIRECT_URI}
         - VITE_TELEGRAM_BOT_USERNAME=${VITE_TELEGRAM_BOT_USERNAME}
+        - VITE_CONVEX_SITE_URL=${VITE_CONVEX_SITE_URL}
     container_name: adpilot-frontend
     restart: always
     expose:
@@ -24,3 +29,32 @@ services:
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
       - "traefik.http.services.frontend.loadbalancer.server.port=3000"
+      # Redirect www to non-www
+      - "traefik.http.middlewares.www-redirect.redirectregex.regex=^https://www\\.(.+)"
+      - "traefik.http.middlewares.www-redirect.redirectregex.replacement=https://$${1}"
+      - "traefik.http.routers.frontend.middlewares=www-redirect"
+
+  # ─────────────────────────────────────────
+  # Frontend DEV (dev.aipilot.by)
+  # ─────────────────────────────────────────
+  frontend-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+      args:
+        - VITE_CONVEX_URL=${VITE_CONVEX_URL_DEV}
+        - VITE_REDIRECT_URI=${VITE_REDIRECT_URI_DEV}
+        - VITE_TELEGRAM_BOT_USERNAME=${VITE_TELEGRAM_BOT_USERNAME}
+        - VITE_CONVEX_SITE_URL=${VITE_CONVEX_SITE_URL_DEV}
+    container_name: adpilot-frontend-dev
+    restart: always
+    expose:
+      - "3000"
+    environment:
+      - NODE_ENV=production
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend-dev.rule=Host(`dev.${DOMAIN}`)"
+      - "traefik.http.routers.frontend-dev.entrypoints=websecure"
+      - "traefik.http.routers.frontend-dev.tls.certresolver=letsencrypt"
+      - "traefik.http.services.frontend-dev.loadbalancer.server.port=3000"
