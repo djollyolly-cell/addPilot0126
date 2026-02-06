@@ -38,6 +38,7 @@ services:
   # Frontend DEV (dev.aipilot.by)
   # ─────────────────────────────────────────
   frontend-dev:
+    profiles: ["dev"]
     build:
       context: .
       dockerfile: Dockerfile.prod
