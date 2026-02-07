@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Check, Crown, Zap, Sparkles } from 'lucide-react';
+import { Check, Crown, Zap, Sparkles, CheckCircle, XCircle } from 'lucide-react';
 import { useAuth } from '@/lib/useAuth';
 import { PaymentModal } from '@/components/PaymentModal';
 
@@ -43,10 +44,45 @@ type TierKey = keyof typeof TIERS;
 
 export function PricingPage() {
   const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [selectedTier, setSelectedTier] = useState<TierKey | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const currentTier = (user?.subscriptionTier || 'freemium') as TierKey;
+
+  // Handle URL params on mount: ?status=success/failed and ?plan=start/pro
+  useEffect(() => {
+    const status = searchParams.get('status');
+    const tier = searchParams.get('tier');
+    const plan = searchParams.get('plan');
+
+    // Handle bePaid return status
+    if (status === 'success') {
+      const tierName = tier && tier in TIERS ? TIERS[tier as TierKey].name : '';
+      setStatusMessage({
+        type: 'success',
+        text: tierName
+          ? `Оплата прошла успешно! Тариф ${tierName} активирован.`
+          : 'Оплата прошла успешно!',
+      });
+      // Clean up URL params
+      setSearchParams({}, { replace: true });
+    } else if (status === 'failed') {
+      setStatusMessage({
+        type: 'error',
+        text: 'Оплата не прошла. Попробуйте ещё раз или выберите другой способ оплаты.',
+      });
+      setSearchParams({}, { replace: true });
+    }
+
+    // Auto-open payment modal if ?plan= is set
+    if (plan && (plan === 'start' || plan === 'pro') && plan !== currentTier) {
+      setSelectedTier(plan as TierKey);
+      setShowPaymentModal(true);
+      setSearchParams({}, { replace: true });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSelectTier = (tier: TierKey) => {
     if (tier === 'freemium' || tier === currentTier) return;
@@ -57,10 +93,41 @@ export function PricingPage() {
   const handlePaymentSuccess = () => {
     setShowPaymentModal(false);
     setSelectedTier(null);
+    setStatusMessage({
+      type: 'success',
+      text: 'Оплата прошла успешно! Тариф активирован.',
+    });
   };
+
+  const dismissStatus = () => setStatusMessage(null);
 
   return (
     <div className="container mx-auto py-8 px-4" data-testid="pricing-page">
+      {/* Payment status notification */}
+      {statusMessage && (
+        <div
+          className={`mb-8 max-w-2xl mx-auto flex items-center gap-3 p-4 rounded-lg ${
+            statusMessage.type === 'success'
+              ? 'bg-green-50 text-green-800 border border-green-200'
+              : 'bg-red-50 text-red-800 border border-red-200'
+          }`}
+          data-testid="payment-status"
+        >
+          {statusMessage.type === 'success' ? (
+            <CheckCircle className="h-5 w-5 text-green-600 shrink-0" />
+          ) : (
+            <XCircle className="h-5 w-5 text-red-600 shrink-0" />
+          )}
+          <span className="flex-1 text-sm font-medium">{statusMessage.text}</span>
+          <button
+            onClick={dismissStatus}
+            className="text-current opacity-50 hover:opacity-100 transition-opacity text-lg leading-none"
+          >
+            &times;
+          </button>
+        </div>
+      )}
+
       <div className="text-center mb-12">
         <h1 className="text-4xl font-bold mb-4">Выберите тариф</h1>
         <p className="text-muted-foreground text-lg">

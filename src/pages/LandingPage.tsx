@@ -555,9 +555,9 @@ function LandingFooter() {
             <span className="text-xl font-bold tracking-tight">AdPilot</span>
           </div>
           <div className="flex gap-8 text-slate-400 text-sm font-medium">
-            <a href="#" className="hover:text-blue-400 transition-colors">Политика конфиденциальности</a>
-            <a href="#" className="hover:text-blue-400 transition-colors">Условия использования</a>
-            <a href="#" className="hover:text-blue-400 transition-colors">Поддержка</a>
+            <Link to="/privacy" className="hover:text-blue-400 transition-colors">Политика конфиденциальности</Link>
+            <Link to="/terms" className="hover:text-blue-400 transition-colors">Условия использования</Link>
+            <a href="https://t.me/adpilot_support" target="_blank" rel="noopener noreferrer" className="hover:text-blue-400 transition-colors">Поддержка</a>
           </div>
           <p className="text-slate-500 text-sm font-medium">© {new Date().getFullYear()} AdPilot</p>
         </div>

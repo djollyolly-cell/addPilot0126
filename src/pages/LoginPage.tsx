@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { LoginButton } from '../components/LoginButton';
 import { EmailLoginForm } from '../components/EmailLoginForm';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
@@ -104,13 +104,13 @@ export function LoginPage() {
 
               <p className="text-xs text-center text-muted-foreground">
                 Нажимая кнопку, вы соглашаетесь с{' '}
-                <a href="#" className="underline hover:text-foreground">
+                <Link to="/terms" className="underline hover:text-foreground">
                   условиями использования
-                </a>{' '}
+                </Link>{' '}
                 и{' '}
-                <a href="#" className="underline hover:text-foreground">
+                <Link to="/privacy" className="underline hover:text-foreground">
                   политикой конфиденциальности
-                </a>
+                </Link>
               </p>
             </CardContent>
           </Card>
