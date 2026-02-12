@@ -1,0 +1,89 @@
+# ============================================
+# AdPilot Self-Hosted Convex Backend
+# Для деплоя на сервер 178.172.235.49 через Dokploy
+# ============================================
+# Порты: Backend 3220, HTTP Actions 3221, Dashboard 6792, PostgreSQL 5433
+# (TenderPlan занимает 3210/3211/6791/5432)
+#
+# Использование:
+#   1. Создать compose-сервис в Dokploy
+#   2. Вставить содержимое этого файла
+#   3. Задать env переменные (см. .env.convex-selfhosted.example)
+#   4. Задеплоить
+
+services:
+  # ─────────────────────────────────────────
+  # PostgreSQL для Convex
+  # ─────────────────────────────────────────
+  postgres:
+    image: postgres:16
+    container_name: adpilot-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: convex
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: convex_adpilot
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U convex -d convex_adpilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ─────────────────────────────────────────
+  # Convex Backend
+  # ─────────────────────────────────────────
+  backend:
+    image: ghcr.io/get-convex/convex-backend:latest
+    container_name: adpilot-convex-backend
+    restart: unless-stopped
+    stop_signal: SIGINT
+    stop_grace_period: 10s
+    ports:
+      - "3220:3210"
+      - "3221:3211"
+    volumes:
+      - data:/convex/data
+    environment:
+      - CONVEX_CLOUD_ORIGIN=http://178.172.235.49:3220
+      - CONVEX_SITE_ORIGIN=http://178.172.235.49:3221
+      - INSTANCE_NAME=${INSTANCE_NAME:-adpilot-prod}
+      - INSTANCE_SECRET=${INSTANCE_SECRET}
+      - POSTGRES_URL=postgresql://convex:${POSTGRES_PASSWORD}@postgres:5432/convex_adpilot
+      - DO_NOT_REQUIRE_SSL=true
+      - RUST_LOG=info
+      - DOCUMENT_RETENTION_DELAY=172800
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ─────────────────────────────────────────
+  # Convex Dashboard
+  # ─────────────────────────────────────────
+  dashboard:
+    image: ghcr.io/get-convex/convex-dashboard:latest
+    container_name: adpilot-convex-dashboard
+    restart: unless-stopped
+    ports:
+      - "6792:6791"
+    environment:
+      - NEXT_PUBLIC_DEPLOYMENT_URL=http://178.172.235.49:3220
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  data:
+    name: adpilot-convex-data
+  pgdata:
+    name: adpilot-convex-pgdata

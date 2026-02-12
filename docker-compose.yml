@@ -1,7 +1,10 @@
 # ============================================
-# AdPilot Docker Compose — Dokploy (Cloud Convex)
-# Prod: aipilot.by  → prod Convex Cloud
-# Dev:  dev.aipilot.by → dev Convex Cloud
+# AdPilot Docker Compose — Dokploy (Self-Hosted Convex)
+# Prod: aipilot.by  → self-hosted Convex (178.172.235.49:3220)
+# Dev:  dev.aipilot.by → (disabled, single instance)
+# ============================================
+# Convex backend запущен отдельным compose-сервисом:
+# docker/docker-compose.convex-selfhosted.yml
 # ============================================
 
 services:

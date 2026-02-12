@@ -1,166 +1,161 @@
-# AdPilot Self-Hosted Docker Deployment
-
-Sprint 32 — Self-Hosted Docker Deploy
+# AdPilot Self-Hosted Convex — Deployment Guide
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Dokploy + Traefik                       │
-│                    (SSL/TLS, Reverse Proxy)                     │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-        ┌───────────────────────┼───────────────────────┐
-        │                       │                       │
-        ▼                       ▼                       ▼
-┌───────────────┐      ┌───────────────┐      ┌───────────────┐
-│   Frontend    │      │    Convex     │      │    Convex     │
-│   (React)     │      │   Backend     │      │   Dashboard   │
-│  :3000        │      │ :3210, :3211  │      │    :6791      │
-└───────────────┘      └───────────────┘      └───────────────┘
-        │                       │
-        │                       ▼
-        │              ┌───────────────┐
-        │              │  Convex Data  │
-        │              │   (Volume)    │
-        └──────────────┴───────────────┘
+Server: 178.172.235.49
+
+┌─────────────────────────────────────────────────────────────┐
+│                    Dokploy + Traefik                         │
+│                  (SSL/TLS, Reverse Proxy)                    │
+└─────────────────────────────────────────────────────────────┘
+        │                                          │
+        ▼                                          ▼
+┌───────────────┐         ┌──────────────────────────────────┐
+│   Frontend    │         │    Convex Self-Hosted (отдельный  │
+│   (React)     │         │    compose-сервис)                │
+│  aipilot.by   │         │                                  │
+│  :3000        │         │  ┌──────────┐ ┌─────────┐       │
+└───────────────┘         │  │ Backend  │ │Dashboard│       │
+        │                 │  │ :3220    │ │ :6792   │       │
+        │                 │  │ :3221    │ └─────────┘       │
+        │                 │  └────┬─────┘                    │
+        │                 │       │                          │
+        │                 │  ┌────▼─────┐                    │
+        │                 │  │PostgreSQL│                    │
+        │                 │  │ :5433    │                    │
+        └─────────────────┤  └──────────┘                    │
+                          └──────────────────────────────────┘
+
+TenderPlan (уже занято): 3210/3211/6791/5432
+AdPilot (новое):         3220/3221/6792/5433
 ```
 
-## Quick Start
+## Deployment Steps
 
-### Local Development
+### Step 1: Deploy Convex Backend in Dokploy
+
+1. В Dokploy создать новый **Compose** сервис (в проекте AddPilot или отдельном)
+2. Вставить содержимое `docker/docker-compose.convex-selfhosted.yml`
+3. Задать Environment Variables:
+   ```
+   INSTANCE_NAME=adpilot-prod
+   INSTANCE_SECRET=<openssl rand -hex 32>
+   POSTGRES_PASSWORD=<openssl rand -hex 16>
+   ```
+4. Deploy
+
+### Step 2: Verify Backend
 
 ```bash
-# 1. Copy environment file
-cp docker/.env.dev.example docker/.env.dev
-
-# 2. Edit with your credentials
-nano docker/.env.dev
-
-# 3. Start DEV environment
-./docker/scripts/init-dev.sh
-
-# Or manually:
-docker compose -f docker/docker-compose.dev.yml up -d
+curl http://178.172.235.49:3220/version
+# Должен вернуть версию Convex
 ```
 
-### Production (Dokploy)
+### Step 3: Get Admin Key
 
-1. **In Dokploy:**
-   - Create new project from Git repository
-   - Set Docker Compose file: `docker/docker-compose.prod.yml`
+```bash
+# Способ 1: Через API
+curl http://178.172.235.49:3220/api/generate_admin_key
 
-2. **Set Environment Variables in Dokploy:**
-   ```
-   DOMAIN=aipilot.by
-   CONVEX_ADMIN_KEY=your_admin_key
-   VK_CLIENT_ID=...
-   VK_CLIENT_SECRET=...
-   TELEGRAM_BOT_TOKEN=...
-   BEPAID_SHOP_ID=...
-   BEPAID_SECRET_KEY=...
-   ```
+# Способ 2: Из контейнера (SSH на сервер)
+docker exec adpilot-convex-backend cat /convex/data/admin_key
+```
 
-3. **Deploy!**
+Сохраните admin key — он нужен для деплоя функций.
+
+### Step 4: Deploy Convex Functions
+
+```bash
+cd "/Users/anzelikamedvedeva/основное/ИИ и все что с ним связано/addpilot from claude"
+
+# Вариант 1: Через скрипт
+./docker/scripts/deploy-convex.sh <ADMIN_KEY>
+
+# Вариант 2: Напрямую
+npx convex deploy --url http://178.172.235.49:3220 --admin-key <ADMIN_KEY> --yes
+```
+
+Это задеплоит схему (15 таблиц) и все Convex функции.
+
+### Step 5: Set Convex Environment Variables
+
+В dashboard (http://178.172.235.49:6792) задать environment variables для Convex functions:
+```
+VK_CLIENT_ID=54431984
+VK_CLIENT_SECRET=<your_secret>
+TELEGRAM_BOT_TOKEN=<your_bot_token>
+TELEGRAM_WEBHOOK_SECRET=<openssl rand -hex 32>
+YANDEX_EMAIL=<your_email>
+YANDEX_APP_PASSWORD=<your_app_password>
+BEPAID_SHOP_ID=<your_shop_id>
+BEPAID_SECRET_KEY=<your_secret_key>
+```
+
+### Step 6: Update Frontend in Dokploy
+
+В Dokploy для сервиса AddPilot (prod) обновить Environment:
+```
+VITE_CONVEX_URL=http://178.172.235.49:3220
+VITE_CONVEX_SITE_URL=http://178.172.235.49:3221
+```
+Остальные переменные (DOMAIN, VITE_REDIRECT_URI, VITE_TELEGRAM_BOT_USERNAME) — без изменений.
+
+### Step 7: Redeploy Frontend
+
+Нажать Deploy в Dokploy для AddPilot prod. Frontend пересоберётся с новыми URL.
+
+## Verification
+
+```bash
+# 1. Backend responds
+curl http://178.172.235.49:3220/version
+
+# 2. Dashboard accessible
+open http://178.172.235.49:6792
+
+# 3. Frontend works
+open https://aipilot.by
+
+# 4. Test VK auth login flow
+# 5. Verify data saves to tables in dashboard
+```
 
 ## URLs
 
-### DEV Environment
 | Service | URL |
 |---------|-----|
-| Frontend | http://localhost:3000 |
-| Convex API | http://localhost:3210 |
-| Convex WS | http://localhost:3211 |
-| Dashboard | http://localhost:6791 |
-
-### PROD Environment (with DOMAIN=aipilot.by)
-| Service | URL |
-|---------|-----|
+| Convex Backend | http://178.172.235.49:3220 |
+| Convex HTTP Actions | http://178.172.235.49:3221 |
+| Convex Dashboard | http://178.172.235.49:6792 |
 | Frontend | https://aipilot.by |
-| Convex API | https://convex.aipilot.by |
-| Convex WS | https://api.aipilot.by |
-| Dashboard | https://dashboard.aipilot.by |
-
-## DNS Configuration
-
-Add these DNS records for your domain:
-
-```
-A     @           → your-server-ip
-A     www         → your-server-ip
-A     convex      → your-server-ip
-A     api         → your-server-ip
-A     dashboard   → your-server-ip
-```
-
-## Deploying Convex Functions
-
-After changing Convex functions (`convex/*.ts`):
-
-```bash
-# DEV
-./docker/scripts/deploy-convex.sh dev
-
-# PROD
-./docker/scripts/deploy-convex.sh prod
-```
-
-## Commands
-
-```bash
-# Start
-docker compose -f docker/docker-compose.dev.yml up -d
-
-# Stop
-docker compose -f docker/docker-compose.dev.yml down
-
-# Logs
-docker compose -f docker/docker-compose.dev.yml logs -f
-
-# Restart specific service
-docker compose -f docker/docker-compose.dev.yml restart convex-backend-dev
-
-# View Convex data
-docker exec -it adpilot-convex-dev ls /convex/data
-```
-
-## Backup & Restore
-
-### Backup Convex Data
-```bash
-# DEV
-docker run --rm -v adpilot-convex-data-dev:/data -v $(pwd):/backup \
-  alpine tar czf /backup/convex-backup-dev.tar.gz -C /data .
-
-# PROD
-docker run --rm -v adpilot-convex-data-prod:/data -v $(pwd):/backup \
-  alpine tar czf /backup/convex-backup-prod.tar.gz -C /data .
-```
-
-### Restore
-```bash
-docker run --rm -v adpilot-convex-data-dev:/data -v $(pwd):/backup \
-  alpine tar xzf /backup/convex-backup-dev.tar.gz -C /data
-```
 
 ## Troubleshooting
 
-### Convex backend not starting
+### Backend not starting
 ```bash
-docker logs adpilot-convex-dev
-# Check for port conflicts or volume permissions
+# SSH to server, check logs
+docker logs adpilot-convex-backend
+docker logs adpilot-postgres
 ```
 
 ### Functions not deploying
 ```bash
-# Check admin key
-docker exec adpilot-convex-dev cat /convex/data/admin_key
+# Check backend is reachable
+curl http://178.172.235.49:3220/version
 
-# Manual deploy
-npx convex deploy --url http://localhost:3210 --admin-key YOUR_KEY
+# Check admin key is valid
+npx convex deploy --url http://178.172.235.49:3220 --admin-key <KEY> --dry-run
 ```
 
 ### Frontend can't connect to Convex
-- Check VITE_CONVEX_URL in environment
-- Verify Convex backend is healthy
-- Check CORS settings
+- Check `VITE_CONVEX_URL` is set to `http://178.172.235.49:3220`
+- Check that port 3220 is open in firewall
+- Check browser console for CORS errors
+
+### Port conflicts
+TenderPlan and AdPilot use different ports. If ports conflict:
+```bash
+# Check what's using the port
+ss -tlnp | grep 3220
+```

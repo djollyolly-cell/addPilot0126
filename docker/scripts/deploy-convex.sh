@@ -1,70 +1,52 @@
 #!/bin/bash
 # ============================================
-# Deploy Convex Functions Script
-# Sprint 32 — Self-Hosted Docker Deploy
+# Deploy Convex Functions to Self-Hosted Backend
+# AdPilot — 178.172.235.49:3220
 # ============================================
-# Usage: ./deploy-convex.sh [dev|prod]
+# Usage:
+#   ./deploy-convex.sh                          # uses env vars
+#   ./deploy-convex.sh <ADMIN_KEY>              # pass admin key
+#   CONVEX_ADMIN_KEY=xxx ./deploy-convex.sh     # via env
 
 set -e
 
-ENV=${1:-dev}
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOCKER_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_DIR="$(dirname "$DOCKER_DIR")"
 
-echo "🔧 Deploying Convex functions to $ENV..."
+CONVEX_URL="${CONVEX_SELF_HOSTED_URL:-http://178.172.235.49:3220}"
 
-cd "$PROJECT_DIR"
+# Admin key: argument > env var > .env file
+ADMIN_KEY="${1:-${CONVEX_ADMIN_KEY:-}}"
 
-case $ENV in
-    dev)
-        CONVEX_URL="http://localhost:3210"
-        CONTAINER="adpilot-convex-dev"
-        ;;
-    prod)
-        if [ -z "$DOMAIN" ]; then
-            source "$DOCKER_DIR/.env.prod" 2>/dev/null || true
-        fi
-        if [ -z "$DOMAIN" ]; then
-            echo "❌ Error: DOMAIN not set"
-            exit 1
-        fi
-        CONVEX_URL="https://convex.$DOMAIN"
-        CONTAINER="adpilot-convex-prod"
-        ;;
-    *)
-        echo "❌ Unknown environment: $ENV"
-        echo "   Usage: ./deploy-convex.sh [dev|prod]"
-        exit 1
-        ;;
-esac
-
-# Check if container is running
-if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
-    echo "❌ Container $CONTAINER is not running"
-    echo "   Start it with: docker compose -f docker/docker-compose.$ENV.yml up -d"
-    exit 1
-fi
-
-echo "📍 Deploying to: $CONVEX_URL"
-
-# Get admin key from container or environment
-if [ -n "$CONVEX_ADMIN_KEY" ]; then
-    ADMIN_KEY="$CONVEX_ADMIN_KEY"
-else
-    ADMIN_KEY=$(docker exec "$CONTAINER" cat /convex/data/admin_key 2>/dev/null || echo "")
+if [ -z "$ADMIN_KEY" ]; then
+    # Try loading from local env file
+    if [ -f "$DOCKER_DIR/.env.selfhosted-prod" ]; then
+        source "$DOCKER_DIR/.env.selfhosted-prod"
+        ADMIN_KEY="${CONVEX_SELF_HOSTED_ADMIN_KEY:-}"
+    fi
 fi
 
 if [ -z "$ADMIN_KEY" ]; then
-    echo "⚠️  No admin key found. Generating one..."
-    docker exec "$CONTAINER" convex-local-backend generate-admin-key > /tmp/admin_key.txt
-    ADMIN_KEY=$(cat /tmp/admin_key.txt)
-    echo "📝 Admin key: $ADMIN_KEY"
-    echo "   Save this key to your .env.$ENV file as CONVEX_ADMIN_KEY"
+    echo "Error: Admin key not provided."
+    echo ""
+    echo "Get admin key:"
+    echo "  curl http://178.172.235.49:3220/api/generate_admin_key"
+    echo ""
+    echo "Then run:"
+    echo "  ./deploy-convex.sh <ADMIN_KEY>"
+    echo "  # or"
+    echo "  CONVEX_ADMIN_KEY=<key> ./deploy-convex.sh"
+    exit 1
 fi
 
-# Deploy
+echo "Deploying Convex functions to: $CONVEX_URL"
+
+cd "$PROJECT_DIR"
+
+# Deploy schema + functions
 npx convex deploy --url "$CONVEX_URL" --admin-key "$ADMIN_KEY" --yes
 
 echo ""
-echo "✅ Convex functions deployed to $ENV!"
+echo "Convex functions deployed to self-hosted backend!"
+echo "Dashboard: http://178.172.235.49:6792"
