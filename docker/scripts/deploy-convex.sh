@@ -14,7 +14,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DOCKER_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_DIR="$(dirname "$DOCKER_DIR")"
 
-CONVEX_URL="${CONVEX_SELF_HOSTED_URL:-http://178.172.235.49:3220}"
+CONVEX_URL="${CONVEX_SELF_HOSTED_URL:-https://convex.aipilot.by}"
 
 # Admin key: argument > env var > .env file
 ADMIN_KEY="${1:-${CONVEX_ADMIN_KEY:-}}"

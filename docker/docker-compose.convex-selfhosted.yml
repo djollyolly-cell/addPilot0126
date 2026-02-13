@@ -49,11 +49,11 @@ services:
     volumes:
       - data:/convex/data
     environment:
-      - CONVEX_CLOUD_ORIGIN=http://178.172.235.49:3220
-      - CONVEX_SITE_ORIGIN=http://178.172.235.49:3221
+      - CONVEX_CLOUD_ORIGIN=https://convex.aipilot.by
+      - CONVEX_SITE_ORIGIN=https://convex-site.aipilot.by
       - INSTANCE_NAME=${INSTANCE_NAME:-adpilot-prod}
       - INSTANCE_SECRET=${INSTANCE_SECRET}
-      - POSTGRES_URL=postgresql://convex:${POSTGRES_PASSWORD}@postgres:5432/convex_adpilot
+      - POSTGRES_URL=postgresql://convex:${POSTGRES_PASSWORD}@postgres:5432
       - DO_NOT_REQUIRE_SSL=true
       - RUST_LOG=info
       - DOCUMENT_RETENTION_DELAY=172800
@@ -77,7 +77,7 @@ services:
     ports:
       - "6792:6791"
     environment:
-      - NEXT_PUBLIC_DEPLOYMENT_URL=http://178.172.235.49:3220
+      - NEXT_PUBLIC_DEPLOYMENT_URL=https://convex.aipilot.by
     depends_on:
       backend:
         condition: service_healthy
