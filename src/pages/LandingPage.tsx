@@ -559,7 +559,10 @@ function LandingFooter() {
             <Link to="/terms" className="hover:text-blue-400 transition-colors">Условия использования</Link>
             <a href="https://t.me/adpilot_support" target="_blank" rel="noopener noreferrer" className="hover:text-blue-400 transition-colors">Поддержка</a>
           </div>
-          <p className="text-slate-500 text-sm font-medium">© {new Date().getFullYear()} AdPilot</p>
+          <div className="text-slate-500 text-sm font-medium text-center md:text-right">
+            <p>© {new Date().getFullYear()} AdPilot</p>
+            <p className="text-slate-600 text-xs mt-1">ИП Медведева А.А. УНП 491464862</p>
+          </div>
         </div>
       </div>
     </footer>
