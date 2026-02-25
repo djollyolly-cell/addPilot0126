@@ -89,28 +89,27 @@ describe('Sprint 27 - GitHub Actions CD', () => {
     expect(content).toContain('branches: [main]');
   });
 
-  it('Deploy workflow has Vercel integration', () => {
+  it('Deploy workflow builds and pushes Docker image to ghcr.io', () => {
     const deployPath = join(ROOT_DIR, '.github/workflows/deploy.yml');
     const content = readFileSync(deployPath, 'utf-8');
 
-    expect(content).toContain('VERCEL_');
-    expect(content).toContain('vercel deploy');
+    expect(content).toContain('ghcr.io');
+    expect(content).toContain('docker/build-push-action');
   });
 
-  it('Deploy workflow has Convex deployment', () => {
+  it('Deploy workflow has Convex deployment (self-hosted)', () => {
     const deployPath = join(ROOT_DIR, '.github/workflows/deploy.yml');
     const content = readFileSync(deployPath, 'utf-8');
 
     expect(content).toContain('convex deploy');
-    expect(content).toContain('CONVEX_DEPLOY_KEY');
+    expect(content).toContain('CONVEX_SELF_HOSTED_URL');
   });
 
-  it('Deploy workflow has smoke test', () => {
+  it('Deploy workflow triggers Dokploy webhook', () => {
     const deployPath = join(ROOT_DIR, '.github/workflows/deploy.yml');
     const content = readFileSync(deployPath, 'utf-8');
 
-    expect(content).toContain('smoke-test:');
-    expect(content).toContain('Health check');
+    expect(content).toContain('DOKPLOY_WEBHOOK_URL');
   });
 });
 
