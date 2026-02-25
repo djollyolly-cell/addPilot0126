@@ -57,11 +57,19 @@ interface CampaignListProps {
   accountId: string;
 }
 
+const statusFilterOptions = [
+  { value: 'all', label: 'Все' },
+  { value: 'active', label: 'Активные' },
+  { value: 'blocked', label: 'Заблокированные' },
+  { value: 'deleted', label: 'Удалённые' },
+];
+
 export function CampaignList({ accountId }: CampaignListProps) {
   const campaigns = useQuery(api.adAccounts.listCampaigns, {
     accountId: accountId as Id<"adAccounts">,
   });
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState('all');
 
   if (campaigns === undefined) {
     return (
@@ -79,9 +87,41 @@ export function CampaignList({ accountId }: CampaignListProps) {
     );
   }
 
+  const filtered = statusFilter === 'all'
+    ? campaigns
+    : campaigns.filter((c) => c.status === statusFilter);
+
   return (
     <div className="space-y-1">
-      {campaigns.map((campaign) => {
+      <div className="flex items-center gap-1 px-2 pb-1">
+        {statusFilterOptions.map((opt) => {
+          const count = opt.value === 'all'
+            ? campaigns.length
+            : campaigns.filter((c) => c.status === opt.value).length;
+          if (count === 0 && opt.value !== 'all') return null;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => setStatusFilter(opt.value)}
+              className={cn(
+                'text-xs px-2 py-0.5 rounded-full transition-colors',
+                statusFilter === opt.value
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+              )}
+            >
+              {opt.label} ({count})
+            </button>
+          );
+        })}
+      </div>
+      {filtered.length === 0 ? (
+        <p className="text-xs text-muted-foreground py-2 text-center">
+          Нет кампаний с таким статусом
+        </p>
+      ) : null}
+      {filtered.map((campaign) => {
         const isExpanded = expandedId === campaign._id;
         const statusInfo = campaignStatusLabels[campaign.status] || {
           label: campaign.status,
