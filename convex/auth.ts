@@ -248,6 +248,24 @@ export const connectVkAds = action({
       throw new Error("Не указаны client_id / client_secret для VK Ads API. Введите их в визарде подключения.");
     }
 
+    // Delete ALL existing tokens before requesting a new one to avoid "token limit" error.
+    // VK Ads (myTarget) allows max ~5 active tokens per app. Old tokens from previous
+    // sessions/tests accumulate and hit this limit. Always clean up first.
+    try {
+      await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token/delete.json`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          client_id: clientId,
+          client_secret: clientSecret,
+        }).toString(),
+      });
+    } catch {
+      // Ignore revocation errors — proceed to create new token
+    }
+
     const response = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
       method: "POST",
       headers: {
