@@ -39,7 +39,7 @@ RUN adduser --system --uid 1001 adpilot
 # Copy built assets and serve config
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./package.json
-COPY --from=builder /app/serve.json ./serve.json
+COPY --from=builder /app/serve.json ./dist/serve.json
 
 # Install serve for static file serving
 RUN npm install -g serve
