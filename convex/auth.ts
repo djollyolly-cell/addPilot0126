@@ -248,9 +248,7 @@ export const connectVkAds = action({
       throw new Error("Не указаны client_id / client_secret для VK Ads API. Введите их в визарде подключения.");
     }
 
-    // Delete the user's existing token before requesting a new one to avoid "token limit" error.
-    // VK Ads (myTarget) allows max ~5 active tokens per app. We revoke only this user's
-    // old token (not all app tokens) so other users are not affected.
+    // Revoke the user's existing token (if any) before requesting a new one.
     const existingTokens = await ctx.runQuery(internal.users.getVkAdsTokens, {
       userId: args.userId,
     });
@@ -258,9 +256,7 @@ export const connectVkAds = action({
       try {
         await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token/delete.json`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
             client_id: clientId,
             client_secret: clientSecret,
@@ -268,34 +264,54 @@ export const connectVkAds = action({
           }).toString(),
         });
       } catch {
-        // Ignore revocation errors — proceed to create new token
+        // Ignore — proceed to create new token
       }
     }
 
-    const response = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        grant_type: "client_credentials",
-        client_id: clientId,
-        client_secret: clientSecret,
-      }).toString(),
-    });
-    const data = await response.json();
+    // Helper: request a new token via client_credentials grant
+    const requestNewToken = async () => {
+      const resp = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: clientId,
+          client_secret: clientSecret,
+        }).toString(),
+      });
+      return resp.json();
+    };
+
+    let data = await requestNewToken();
+
+    // If we hit the token limit, purge ALL app tokens and retry once.
+    // This handles orphaned tokens from testing/previous sessions not tracked in DB.
+    if (data.error) {
+      const errMsg = (data.error_description || data.error || "").toLowerCase();
+      if (errMsg.includes("token limit") || errMsg.includes("limit reached")) {
+        try {
+          await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token/delete.json`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams({
+              client_id: clientId,
+              client_secret: clientSecret,
+            }).toString(),
+          });
+        } catch {
+          // Ignore
+        }
+        data = await requestNewToken();
+      }
+    }
 
     if (data.error) {
-      // Translate common VK Ads API errors to Russian
       const errorMsg = data.error_description || data.error || "";
       if (errorMsg.toLowerCase().includes("invalid client")) {
         throw new Error("Неверный Client ID или Client Secret. Проверьте данные в настройках VK Ads (ads.vk.com → Настройки → Доступ к API).");
       }
       if (errorMsg.toLowerCase().includes("unauthorized")) {
         throw new Error("Доступ запрещён. Проверьте права приложения в VK Ads.");
-      }
-      if (errorMsg.toLowerCase().includes("token limit") || errorMsg.toLowerCase().includes("limit reached")) {
-        throw new Error("Достигнут лимит активных токенов VK Ads. Подождите несколько минут или обратитесь в поддержку ads_api@vk.team.");
       }
       throw new Error(errorMsg || "Не удалось получить токен VK Ads API");
     }
