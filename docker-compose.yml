@@ -12,14 +12,7 @@ services:
   # Frontend PROD (aipilot.by)
   # ─────────────────────────────────────────
   frontend:
-    build:
-      context: .
-      dockerfile: Dockerfile.prod
-      args:
-        - VITE_CONVEX_URL=${VITE_CONVEX_URL}
-        - VITE_REDIRECT_URI=${VITE_REDIRECT_URI}
-        - VITE_TELEGRAM_BOT_USERNAME=${VITE_TELEGRAM_BOT_USERNAME}
-        - VITE_CONVEX_SITE_URL=${VITE_CONVEX_SITE_URL}
+    image: ghcr.io/djollyolly-cell/addpilot-frontend:latest
     container_name: adpilot-frontend
     restart: always
     expose:

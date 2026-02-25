@@ -1,6 +1,5 @@
 # ============================================
-# AdPilot CD Pipeline - Vercel Deployment
-# Sprint 27 — Docker и CI/CD
+# AdPilot CD — Build Docker image & deploy
 # ============================================
 
 name: Deploy
@@ -11,49 +10,48 @@ on:
   workflow_dispatch:
 
 env:
-  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/addpilot-frontend
 
 jobs:
   # ─────────────────────────────────────────
-  # Deploy to Vercel Production
+  # Build & push Docker image to ghcr.io
   # ─────────────────────────────────────────
-  deploy:
-    name: Deploy to Production
+  build-image:
+    name: Build & Push Docker Image
     runs-on: ubuntu-latest
-    # Only deploy if CI passed
-    needs: []
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
         with:
-          node-version: '20'
-          cache: 'npm'
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Install Vercel CLI
-        run: npm install -g vercel@latest
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile.prod
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
+          build-args: |
+            VITE_CONVEX_URL=${{ secrets.VITE_CONVEX_URL }}
+            VITE_REDIRECT_URI=${{ secrets.VITE_REDIRECT_URI }}
+            VITE_TELEGRAM_BOT_USERNAME=${{ secrets.VITE_TELEGRAM_BOT_USERNAME }}
+            VITE_CONVEX_SITE_URL=${{ secrets.VITE_CONVEX_SITE_URL }}
 
-      - name: Pull Vercel Environment Information
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Build Project Artifacts
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
-
-      - name: Deploy to Vercel
-        id: deploy
-        run: |
-          URL=$(vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }})
-          echo "url=$URL" >> $GITHUB_OUTPUT
-
-      - name: Post deployment URL
-        run: |
-          echo "Deployed to: ${{ steps.deploy.outputs.url }}"
 
   # ─────────────────────────────────────────
-  # Deploy Convex Backend
+  # Deploy Convex Backend (self-hosted)
   # ─────────────────────────────────────────
   deploy-convex:
     name: Deploy Convex
@@ -74,31 +72,21 @@ jobs:
       - name: Deploy Convex
         run: npx convex deploy --yes
         env:
-          CONVEX_DEPLOY_KEY: ${{ secrets.CONVEX_DEPLOY_KEY }}
+          CONVEX_SELF_HOSTED_URL: ${{ secrets.CONVEX_SELF_HOSTED_URL }}
+          CONVEX_SELF_HOSTED_ADMIN_KEY: ${{ secrets.CONVEX_SELF_HOSTED_ADMIN_KEY }}
 
   # ─────────────────────────────────────────
-  # Post-deploy Smoke Test
+  # Trigger Dokploy to pull new image
   # ─────────────────────────────────────────
-  smoke-test:
-    name: Smoke Test
+  trigger-dokploy:
+    name: Trigger Dokploy Deploy
     runs-on: ubuntu-latest
-    needs: [deploy, deploy-convex]
+    needs: [build-image]
     steps:
-      - name: Wait for deployment
-        run: sleep 30
-
-      - name: Health check
+      - name: Trigger Dokploy webhook
         run: |
-          # Replace with your production URL
-          PROD_URL="${{ secrets.PRODUCTION_URL || 'https://adpilot.vercel.app' }}"
-
-          echo "Checking $PROD_URL..."
-
-          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$PROD_URL")
-
-          if [ "$HTTP_CODE" -eq 200 ]; then
-            echo "Smoke test passed! HTTP $HTTP_CODE"
-          else
-            echo "Smoke test failed! HTTP $HTTP_CODE"
-            exit 1
-          fi
+          curl -s -L -X POST \
+            -H "Content-Type: application/json" \
+            -H "X-GitHub-Event: push" \
+            -d '{"ref":"refs/heads/main","repository":{"full_name":"djollyolly-cell/addPilot0126"}}' \
+            "${{ secrets.DOKPLOY_WEBHOOK_URL }}"
