@@ -132,7 +132,11 @@ jobs:
       - name: Test Docker image
         run: |
           docker run -d --name adpilot-test -p 3000:3000 adpilot:test
-          sleep 3
+          sleep 5
+          echo "--- Container logs ---"
+          docker logs adpilot-test
+          echo "--- Health check ---"
+          curl -v http://localhost:3000/ 2>&1 | head -20
           curl -sf -o /dev/null http://localhost:3000/ || exit 1
           docker stop adpilot-test
           docker rm adpilot-test
