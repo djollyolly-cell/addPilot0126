@@ -122,6 +122,7 @@ jobs:
         with:
           context: .
           push: false
+          load: true
           tags: adpilot:test
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -131,8 +132,8 @@ jobs:
       - name: Test Docker image
         run: |
           docker run -d --name adpilot-test -p 3000:3000 adpilot:test
-          sleep 5
-          curl -f http://localhost:3000/ || exit 1
+          sleep 3
+          curl -sf -o /dev/null http://localhost:3000/ || exit 1
           docker stop adpilot-test
           docker rm adpilot-test
 
