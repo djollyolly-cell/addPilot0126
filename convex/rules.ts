@@ -69,6 +69,9 @@ export const create = mutation({
     value: v.number(),
     operator: v.optional(v.string()),
     minSamples: v.optional(v.number()),
+    timeWindow: v.optional(
+      v.union(v.literal("daily"), v.literal("since_launch"), v.literal("24h"))
+    ),
     actions: v.object({
       stopAd: v.boolean(),
       notify: v.boolean(),
@@ -156,6 +159,7 @@ export const create = mutation({
         operator: args.operator || defaults.operator,
         value: args.value,
         minSamples: args.minSamples,
+        timeWindow: args.timeWindow,
       },
       actions: {
         ...args.actions,
@@ -183,6 +187,9 @@ export const update = mutation({
     value: v.optional(v.number()),
     operator: v.optional(v.string()),
     minSamples: v.optional(v.number()),
+    timeWindow: v.optional(
+      v.union(v.literal("daily"), v.literal("since_launch"), v.literal("24h"))
+    ),
     actions: v.optional(
       v.object({
         stopAd: v.boolean(),
@@ -246,6 +253,10 @@ export const update = mutation({
           args.minSamples !== undefined
             ? args.minSamples
             : rule.conditions.minSamples,
+        timeWindow:
+          args.timeWindow !== undefined
+            ? args.timeWindow
+            : rule.conditions.timeWindow,
       };
     }
 

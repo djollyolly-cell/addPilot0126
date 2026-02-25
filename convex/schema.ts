@@ -102,6 +102,13 @@ export default defineSchema({
       operator: v.string(),
       value: v.number(),
       minSamples: v.optional(v.number()),
+      timeWindow: v.optional(
+        v.union(
+          v.literal("daily"),
+          v.literal("since_launch"),
+          v.literal("24h")
+        )
+      ),
     }),
     actions: v.object({
       stopAd: v.boolean(),

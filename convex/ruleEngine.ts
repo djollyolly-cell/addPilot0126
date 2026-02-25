@@ -27,6 +27,7 @@ export interface RuleCondition {
   operator: string;
   value: number;
   minSamples?: number;
+  timeWindow?: "daily" | "since_launch" | "24h";
 }
 
 export interface SpendSnapshot {
@@ -153,6 +154,37 @@ export const getAccountTodayMetrics = internalQuery({
         q.eq("accountId", args.accountId).eq("date", args.date)
       )
       .collect();
+  },
+});
+
+/** Get aggregated metrics for an ad across all dates (since launch) or last 24h */
+export const getAdAggregatedMetrics = internalQuery({
+  args: {
+    adId: v.string(),
+    sinceDate: v.optional(v.string()), // "YYYY-MM-DD" — if set, only sum from this date
+  },
+  handler: async (ctx, args) => {
+    const records = await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_adId_date", (q) => q.eq("adId", args.adId))
+      .collect();
+
+    const filtered = args.sinceDate
+      ? records.filter((r) => r.date >= args.sinceDate!)
+      : records;
+
+    let clicks = 0;
+    let leads = 0;
+    let spent = 0;
+    let impressions = 0;
+    for (const r of filtered) {
+      clicks += r.clicks;
+      leads += r.leads;
+      spent += r.spent;
+      impressions += r.impressions;
+    }
+
+    return { clicks, leads, spent, impressions, daysCount: filtered.length };
   },
 });
 
@@ -836,7 +868,8 @@ function todayStr(): string {
 function buildReason(
   ruleType: string,
   condition: RuleCondition,
-  metrics: MetricsSnapshot
+  metrics: MetricsSnapshot,
+  timeWindow?: string
 ): string {
   switch (ruleType) {
     case "cpl_limit": {
@@ -858,8 +891,12 @@ function buildReason(
       return `\u0420\u0430\u0441\u0445\u043E\u0434 ${metrics.spent}\u20BD \u043F\u0440\u0435\u0432\u044B\u0441\u0438\u043B \u0431\u044E\u0434\u0436\u0435\u0442 ${condition.value}\u20BD`;
     case "low_impressions":
       return `\u041F\u043E\u043A\u0430\u0437\u043E\u0432 ${metrics.impressions} \u043C\u0435\u043D\u044C\u0448\u0435 \u043C\u0438\u043D\u0438\u043C\u0443\u043C\u0430 ${condition.value}`;
-    case "clicks_no_leads":
-      return `${metrics.clicks} \u043A\u043B\u0438\u043A\u043E\u0432 \u0431\u0435\u0437 \u043B\u0438\u0434\u043E\u0432 (\u043F\u043E\u0440\u043E\u0433 ${condition.value})`;
+    case "clicks_no_leads": {
+      const windowLabel =
+        timeWindow === "since_launch" ? " с запуска" :
+        timeWindow === "24h" ? " за 24ч" : " за день";
+      return `${metrics.clicks} кликов без лидов${windowLabel} (порог ${condition.value})`;
+    }
     default:
       return `\u041F\u0440\u0430\u0432\u0438\u043B\u043E ${ruleType} \u0441\u0440\u0430\u0431\u043E\u0442\u0430\u043B\u043E`;
   }
@@ -947,8 +984,8 @@ export const checkAllRules = internalAction({
                 };
               }
 
-              // Evaluate condition
-              const metricsSnapshot: MetricsSnapshot = {
+              // Build metrics snapshot (may be aggregated for clicks_no_leads)
+              let metricsSnapshot: MetricsSnapshot = {
                 spent: metric.spent,
                 leads: metric.leads,
                 impressions: metric.impressions,
@@ -957,6 +994,36 @@ export const checkAllRules = internalAction({
                 ctr: metric.ctr ?? undefined,
               };
 
+              const timeWindow = rule.conditions.timeWindow;
+
+              // For clicks_no_leads with timeWindow, use aggregated metrics
+              if (
+                rule.type === "clicks_no_leads" &&
+                timeWindow &&
+                timeWindow !== "daily"
+              ) {
+                let sinceDate: string | undefined;
+                if (timeWindow === "24h") {
+                  const yesterday = new Date();
+                  yesterday.setDate(yesterday.getDate() - 1);
+                  sinceDate = yesterday.toISOString().slice(0, 10);
+                }
+                // since_launch: sinceDate = undefined → all dates
+
+                const aggregated = await ctx.runQuery(
+                  internal.ruleEngine.getAdAggregatedMetrics,
+                  { adId: metric.adId, sinceDate }
+                );
+
+                metricsSnapshot = {
+                  spent: aggregated.spent,
+                  leads: aggregated.leads,
+                  impressions: aggregated.impressions,
+                  clicks: aggregated.clicks,
+                };
+              }
+
+              // Evaluate condition
               const triggered = evaluateCondition(
                 rule.type,
                 rule.conditions,
@@ -994,7 +1061,8 @@ export const checkAllRules = internalAction({
               const reason = buildReason(
                 rule.type,
                 rule.conditions,
-                metricsSnapshot
+                metricsSnapshot,
+                timeWindow
               );
 
               // Try to stop the ad via VK API

@@ -13,6 +13,13 @@ import { ActionRadio, ActionMode, actionModeToFlags } from '../components/Action
 import { UpgradeModal } from '../components/UpgradeModal';
 
 type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads';
+type TimeWindow = 'daily' | 'since_launch' | '24h';
+
+const TIME_WINDOW_OPTIONS: { value: TimeWindow; label: string; description: string }[] = [
+  { value: 'daily', label: 'За сегодня', description: 'Только дневная статистика' },
+  { value: 'since_launch', label: 'С запуска', description: 'Все клики с момента запуска объявления' },
+  { value: '24h', label: 'За 24 часа', description: 'Сумма за последние 24 часа' },
+];
 
 const RULE_TYPE_LABELS: Record<RuleType, string> = {
   cpl_limit: 'CPL лимит',
@@ -250,6 +257,9 @@ export function RulesPage() {
                           <p className="text-xs text-muted-foreground">
                             {RULE_TYPE_LABELS[rule.type as RuleType]} · {rule.conditions.operator} {rule.conditions.value}
                             {RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}
+                            {rule.type === 'clicks_no_leads' && rule.conditions.timeWindow && rule.conditions.timeWindow !== 'daily' && (
+                              <> · {rule.conditions.timeWindow === 'since_launch' ? 'с запуска' : 'за 24ч'}</>
+                            )}
                           </p>
                         </div>
 
@@ -297,6 +307,7 @@ export function RulesPage() {
                 name: editingRule.name,
                 type: editingRule.type as RuleType,
                 value: editingRule.conditions.value,
+                timeWindow: editingRule.conditions.timeWindow as TimeWindow | undefined,
                 actions: editingRule.actions,
                 targetAccountIds: editingRule.targetAccountIds,
                 targetCampaignIds: editingRule.targetCampaignIds,
@@ -311,6 +322,7 @@ export function RulesPage() {
                       userId: user.userId as Id<"users">,
                       name: data.name,
                       value: data.value,
+                      timeWindow: data.timeWindow,
                       actions: data.actions,
                       targetAccountIds: data.targetAccountIds,
                       targetCampaignIds: data.targetCampaignIds,
@@ -373,6 +385,7 @@ interface ExistingRuleData {
   name: string;
   type: RuleType;
   value: number;
+  timeWindow?: TimeWindow;
   actions: { stopAd: boolean; notify: boolean };
   targetAccountIds: Id<"adAccounts">[];
   targetCampaignIds?: string[];
@@ -387,6 +400,7 @@ interface RuleFormProps {
     name: string;
     type: RuleType;
     value: number;
+    timeWindow?: TimeWindow;
     actions: { stopAd: boolean; notify: boolean };
     targetAccountIds: Id<"adAccounts">[];
     targetCampaignIds?: string[];
@@ -399,6 +413,9 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
   const [name, setName] = useState(existingRule?.name ?? '');
   const [type, setType] = useState<RuleType>(existingRule?.type ?? 'cpl_limit');
   const [value, setValue] = useState(existingRule ? String(existingRule.value) : '');
+  const [timeWindow, setTimeWindow] = useState<TimeWindow>(
+    existingRule?.timeWindow ?? 'daily'
+  );
   const [actionMode, setActionMode] = useState<ActionMode>(
     existingRule ? flagsToActionMode(existingRule.actions) : 'notify_only'
   );
@@ -446,6 +463,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
         name: name.trim(),
         type,
         value: numericValue,
+        timeWindow: type === 'clicks_no_leads' ? timeWindow : undefined,
         actions: flags,
         targetAccountIds: targets.accountIds as Id<"adAccounts">[],
         targetCampaignIds: targets.campaignIds.length > 0 ? targets.campaignIds : undefined,
@@ -556,6 +574,31 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
             )}
           </div>
         </div>
+
+        {/* Time window (only for clicks_no_leads) */}
+        {type === 'clicks_no_leads' && (
+          <div className="space-y-2" data-testid="time-window-selector">
+            <label className="block text-sm font-medium">Период анализа</label>
+            <div className="grid grid-cols-3 gap-2">
+              {TIME_WINDOW_OPTIONS.map((opt) => (
+                <button
+                  key={opt.value}
+                  type="button"
+                  onClick={() => setTimeWindow(opt.value)}
+                  className={cn(
+                    'p-2 rounded-lg border text-center text-sm transition-colors',
+                    timeWindow === opt.value
+                      ? 'border-primary bg-primary/5 font-medium'
+                      : 'border-border hover:bg-muted/50'
+                  )}
+                >
+                  <p className="text-sm">{opt.label}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">{opt.description}</p>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Action radio */}
         <div className="space-y-2">
