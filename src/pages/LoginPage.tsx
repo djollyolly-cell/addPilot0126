@@ -139,7 +139,7 @@ export function LoginPage() {
       {/* Footer */}
       <footer className="p-6 text-center text-sm text-muted-foreground">
         <p>© {new Date().getFullYear()} AddPilot. Все права защищены.</p>
-        <p className="text-xs mt-1 opacity-70">ИП Медведева А.А. УНП 491464862</p>
+        <p className="text-xs mt-1 opacity-70">ИП Медведева Анжелика Александровна УНП 491464862 Жлобинским районным исполнительным комитетом 09 марта 2022 года. Почтовый адрес: РБ, Гомельская обл., г.Жлобин мк3, д43</p>
       </footer>
     </div>
   );

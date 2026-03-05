@@ -561,7 +561,7 @@ function LandingFooter() {
           </div>
           <div className="text-slate-500 text-sm font-medium text-center md:text-right">
             <p>© {new Date().getFullYear()} AdPilot</p>
-            <p className="text-slate-600 text-xs mt-1">ИП Медведева А.А. УНП 491464862</p>
+            <p className="text-slate-600 text-xs mt-1">ИП Медведева Анжелика Александровна УНП 491464862 Жлобинским районным исполнительным комитетом 09 марта 2022 года. Почтовый адрес: РБ, Гомельская обл., г.Жлобин мк3, д43</p>
           </div>
         </div>
       </div>
