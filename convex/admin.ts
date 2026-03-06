@@ -1,0 +1,179 @@
+import { v } from "convex/values";
+import { mutation, query } from "./_generated/server";
+
+const ADMIN_EMAILS = ["13632013@vk.com"];
+
+// Helper: validate session and check admin access
+async function assertAdmin(ctx: any, sessionToken: string) {
+  const session = await ctx.db
+    .query("sessions")
+    .withIndex("by_token", (q: any) => q.eq("token", sessionToken))
+    .first();
+
+  if (!session || session.expiresAt < Date.now()) {
+    throw new Error("Unauthorized: invalid session");
+  }
+
+  const user = await ctx.db.get(session.userId);
+  if (!user || !ADMIN_EMAILS.includes(user.email)) {
+    throw new Error("Forbidden: admin access required");
+  }
+
+  return user;
+}
+
+// List all users with joined data
+export const listUsers = query({
+  args: {
+    sessionToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+
+    const users = await ctx.db.query("users").collect();
+
+    const result = await Promise.all(
+      users.map(async (user) => {
+        const accounts = await ctx.db
+          .query("adAccounts")
+          .withIndex("by_userId", (q) => q.eq("userId", user._id))
+          .collect();
+
+        const rules = await ctx.db
+          .query("rules")
+          .withIndex("by_userId", (q) => q.eq("userId", user._id))
+          .collect();
+
+        const logs = await ctx.db
+          .query("actionLogs")
+          .withIndex("by_userId", (q) => q.eq("userId", user._id))
+          .collect();
+
+        return {
+          _id: user._id,
+          email: user.email,
+          name: user.name,
+          subscriptionTier: user.subscriptionTier,
+          subscriptionExpiresAt: user.subscriptionExpiresAt,
+          telegramChatId: user.telegramChatId,
+          createdAt: user.createdAt,
+          accountsCount: accounts.length,
+          rulesCount: rules.length,
+          logsCount: logs.length,
+        };
+      })
+    );
+
+    return result;
+  },
+});
+
+// Get summary statistics
+export const getStats = query({
+  args: {
+    sessionToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+
+    const users = await ctx.db.query("users").collect();
+    const payments = await ctx.db.query("payments").collect();
+
+    const totalUsers = users.length;
+    const freemiumCount = users.filter((u) => u.subscriptionTier === "freemium").length;
+    const startCount = users.filter((u) => u.subscriptionTier === "start").length;
+    const proCount = users.filter((u) => u.subscriptionTier === "pro").length;
+    const withTelegram = users.filter((u) => u.telegramChatId).length;
+
+    // Count users with at least one ad account
+    const accountUserIds = new Set<string>();
+    const allAccounts = await ctx.db.query("adAccounts").collect();
+    for (const acc of allAccounts) {
+      accountUserIds.add(acc.userId as string);
+    }
+    const withAccounts = accountUserIds.size;
+
+    // Revenue
+    const completedPayments = payments.filter((p) => p.status === "completed");
+    const totalRevenue = completedPayments.reduce((sum, p) => sum + p.amount, 0);
+
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const recentRevenue = completedPayments
+      .filter((p) => (p.completedAt || p.createdAt) > thirtyDaysAgo)
+      .reduce((sum, p) => sum + p.amount, 0);
+
+    return {
+      totalUsers,
+      freemiumCount,
+      startCount,
+      proCount,
+      withTelegram,
+      withAccounts,
+      totalRevenue,
+      recentRevenue,
+    };
+  },
+});
+
+// Update user tier (admin action)
+export const updateUserTier = mutation({
+  args: {
+    sessionToken: v.string(),
+    userId: v.id("users"),
+    tier: v.union(v.literal("freemium"), v.literal("start"), v.literal("pro")),
+  },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const oldTier = user.subscriptionTier;
+
+    // Handle downgrade: deactivate excess rules
+    if (
+      (oldTier === "pro" && (args.tier === "start" || args.tier === "freemium")) ||
+      (oldTier === "start" && args.tier === "freemium")
+    ) {
+      const TIER_LIMITS: Record<string, { rules: number; autoStop: boolean }> = {
+        freemium: { rules: 2, autoStop: false },
+        start: { rules: 10, autoStop: true },
+        pro: { rules: Infinity, autoStop: true },
+      };
+      const limits = TIER_LIMITS[args.tier];
+
+      const rules = await ctx.db
+        .query("rules")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .collect();
+
+      const activeRules = rules.filter((r) => r.isActive);
+      if (activeRules.length > limits.rules) {
+        const excess = activeRules.slice(limits.rules);
+        for (const rule of excess) {
+          await ctx.db.patch(rule._id, { isActive: false, updatedAt: Date.now() });
+        }
+      }
+
+      if (!limits.autoStop) {
+        for (const rule of rules) {
+          if (rule.actions.stopAd) {
+            await ctx.db.patch(rule._id, {
+              actions: { ...rule.actions, stopAd: false },
+              updatedAt: Date.now(),
+            });
+          }
+        }
+      }
+    }
+
+    await ctx.db.patch(args.userId, {
+      subscriptionTier: args.tier,
+      updatedAt: Date.now(),
+    });
+
+    return { success: true, previousTier: oldTier, newTier: args.tier };
+  },
+});

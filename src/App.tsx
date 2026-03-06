@@ -19,6 +19,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ defa
 const PricingPage = lazy(() => import('./pages/PricingPage').then(m => ({ default: m.PricingPage })));
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage').then(m => ({ default: m.PrivacyPage })));
 const TermsPage = lazy(() => import('./pages/TermsPage').then(m => ({ default: m.TermsPage })));
+const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
 
 // Loading spinner component
 function PageLoader() {
@@ -112,6 +113,7 @@ function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/telegram" element={<TelegramSettingsPage />} />
         <Route path="/pricing" element={<PricingPage />} />
+        <Route path="/admin" element={<AdminPage />} />
       </Route>
 
       {/* Fallback */}

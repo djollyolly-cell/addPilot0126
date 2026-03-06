@@ -11,6 +11,7 @@ import {
   User,
   Wallet,
   Crown,
+  Shield,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -33,9 +34,17 @@ const bottomNavItems = [
   { name: 'Настройки', href: '/settings', icon: Settings },
 ];
 
+const ADMIN_EMAILS = ['13632013@vk.com'];
+
 export function Layout() {
   const { user, logout } = useAuth();
   const location = useLocation();
+  const isAdmin = user && ADMIN_EMAILS.includes(user.email);
+
+  const navItems = [
+    ...navigation,
+    ...(isAdmin ? [{ name: 'Админ', href: '/admin', icon: Shield }] : []),
+  ];
 
   return (
     <div className="min-h-screen bg-background">
@@ -51,7 +60,7 @@ export function Layout() {
 
         {/* Navigation */}
         <nav className="p-4 space-y-1">
-          {navigation.map((item) => {
+          {navItems.map((item) => {
             const isActive = location.pathname === item.href;
             return (
               <Link

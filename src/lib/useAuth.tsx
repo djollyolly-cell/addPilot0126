@@ -19,9 +19,12 @@ interface EmailLoginResult {
   error?: string;
 }
 
+const ADMIN_EMAILS = ['13632013@vk.com'];
+
 interface AuthContextType {
   user: User | null;
   isAuthenticated: boolean;
+  isAdmin: boolean;
   isLoading: boolean;
   login: () => Promise<void>;
   loginWithEmail: (email: string, password: string) => Promise<EmailLoginResult>;
@@ -75,6 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isLoading = sessionToken !== null && user === undefined;
   const isAuthenticated = user !== null && user !== undefined;
+  const isAdmin = isAuthenticated && user != null && ADMIN_EMAILS.includes(user.email);
 
   const setSession = (token: string) => {
     localStorage.setItem(SESSION_KEY, token);
@@ -151,6 +155,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user: user as User | null,
         isAuthenticated,
+        isAdmin,
         isLoading,
         login,
         loginWithEmail,
@@ -170,6 +175,7 @@ export function useAuth() {
     return {
       user: null,
       isAuthenticated: false,
+      isAdmin: false,
       isLoading: true,
       login: async () => {},
       loginWithEmail: async () => ({ success: false, error: 'Not initialized' }),
