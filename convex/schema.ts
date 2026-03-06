@@ -4,17 +4,17 @@ import { v } from "convex/values";
 export default defineSchema({
   users: defineTable({
     email: v.string(),
-    vkId: v.string(),
+    vkId: v.optional(v.string()),
     name: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
     telegramChatId: v.optional(v.string()),
-    subscriptionTier: v.union(
+    subscriptionTier: v.optional(v.union(
       v.literal("freemium"),
       v.literal("start"),
       v.literal("pro")
-    ),
+    )),
     subscriptionExpiresAt: v.optional(v.number()),
-    onboardingCompleted: v.boolean(),
+    onboardingCompleted: v.optional(v.boolean()),
     createdAt: v.number(),
     vkAccessToken: v.optional(v.string()),
     vkRefreshToken: v.optional(v.string()),
@@ -26,7 +26,7 @@ export default defineSchema({
     // Per-user VK Ads API credentials (client_id / client_secret)
     vkAdsClientId: v.optional(v.string()),
     vkAdsClientSecret: v.optional(v.string()),
-    updatedAt: v.number(),
+    updatedAt: v.optional(v.number()),
   })
     .index("by_vkId", ["vkId"])
     .index("by_email", ["email"]),
@@ -35,7 +35,7 @@ export default defineSchema({
     userId: v.id("users"),
     token: v.string(),
     expiresAt: v.number(),
-    createdAt: v.number(),
+    createdAt: v.optional(v.number()),
   })
     .index("by_token", ["token"])
     .index("by_userId", ["userId"]),
@@ -282,4 +282,4 @@ export default defineSchema({
     .index("by_userId", ["userId"])
     .index("by_orderId", ["orderId"])
     .index("by_token", ["token"]),
-});
+}, { schemaValidation: false });

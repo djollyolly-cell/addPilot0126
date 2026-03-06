@@ -78,7 +78,7 @@ export const connect = mutation({
       pro: Infinity,
     };
 
-    const limit = tierLimits[user.subscriptionTier] ?? 1;
+    const limit = tierLimits[user.subscriptionTier ?? "freemium"] ?? 1;
     if (accounts.length >= limit) {
       throw new Error(`Лимит кабинетов для тарифа "${user.subscriptionTier}" исчерпан (${limit})`);
     }

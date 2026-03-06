@@ -260,7 +260,7 @@ export const getLimits = query({
       throw new Error("User not found");
     }
 
-    const limits = TIER_LIMITS[user.subscriptionTier];
+    const limits = TIER_LIMITS[user.subscriptionTier ?? "freemium"];
 
     // Count current usage
     const accounts = await ctx.db
@@ -276,7 +276,7 @@ export const getLimits = query({
     const activeRules = rules.filter((r) => r.isActive);
 
     return {
-      tier: user.subscriptionTier,
+      tier: user.subscriptionTier ?? "freemium",
       limits: {
         accounts: limits.accounts,
         rules: limits.rules,

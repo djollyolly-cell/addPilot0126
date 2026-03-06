@@ -117,11 +117,11 @@ export const create = mutation({
       .collect();
 
     const activeRules = existingRules.filter((r) => r.isActive);
-    const ruleLimit = tierRuleLimits[user.subscriptionTier] ?? 2;
+    const ruleLimit = tierRuleLimits[user.subscriptionTier ?? "freemium"] ?? 2;
 
     if (activeRules.length >= ruleLimit) {
       throw new Error(
-        `Лимит правил для тарифа "${user.subscriptionTier}" исчерпан (${ruleLimit})`
+        `Лимит правил для тарифа "${user.subscriptionTier ?? "freemium"}" исчерпан (${ruleLimit})`
       );
     }
 
@@ -317,10 +317,10 @@ export const toggleActive = mutation({
         )
         .collect();
 
-      const ruleLimit = tierRuleLimits[user.subscriptionTier] ?? 2;
+      const ruleLimit = tierRuleLimits[user.subscriptionTier ?? "freemium"] ?? 2;
       if (activeRules.length >= ruleLimit) {
         throw new Error(
-          `Лимит активных правил для тарифа "${user.subscriptionTier}" исчерпан`
+          `Лимит активных правил для тарифа "${user.subscriptionTier ?? "freemium"}" исчерпан`
         );
       }
     }

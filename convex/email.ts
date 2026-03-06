@@ -323,7 +323,7 @@ export const sendExpiryNotificationEmail = internalAction({
           : `AddPilot: Подписка истекает через ${args.daysLeft} дней`,
         html: getExpiryEmailHtml({
           userName: user.name || "",
-          tierName: tierNames[user.subscriptionTier] || user.subscriptionTier,
+          tierName: tierNames[user.subscriptionTier ?? "freemium"] || user.subscriptionTier || "freemium",
           daysLeft: args.daysLeft,
           expiresAt,
         }),

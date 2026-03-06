@@ -257,8 +257,8 @@ export function RulesPage() {
                           <p className="text-xs text-muted-foreground">
                             {RULE_TYPE_LABELS[rule.type as RuleType]} · {rule.conditions.operator} {rule.conditions.value}
                             {RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}
-                            {rule.type === 'clicks_no_leads' && rule.conditions.timeWindow && rule.conditions.timeWindow !== 'daily' && (
-                              <> · {rule.conditions.timeWindow === 'since_launch' ? 'с запуска' : 'за 24ч'}</>
+                            {rule.type === 'clicks_no_leads' && (
+                              <> · {rule.conditions.timeWindow === 'since_launch' ? 'с запуска' : rule.conditions.timeWindow === '24h' ? 'за 24ч' : 'за сегодня'}</>
                             )}
                           </p>
                         </div>
@@ -414,7 +414,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
   const [type, setType] = useState<RuleType>(existingRule?.type ?? 'cpl_limit');
   const [value, setValue] = useState(existingRule ? String(existingRule.value) : '');
   const [timeWindow, setTimeWindow] = useState<TimeWindow>(
-    existingRule?.timeWindow ?? 'daily'
+    existingRule?.timeWindow ?? 'since_launch'
   );
   const [actionMode, setActionMode] = useState<ActionMode>(
     existingRule ? flagsToActionMode(existingRule.actions) : 'notify_only'

@@ -226,8 +226,8 @@ function AdminDashboard() {
                         <div className="text-xs text-muted-foreground">{u.email}</div>
                       </td>
                       <td className="py-3 pr-4">
-                        <Badge variant={TIER_BADGE_VARIANT[u.subscriptionTier]}>
-                          {TIER_LABELS[u.subscriptionTier]}
+                        <Badge variant={TIER_BADGE_VARIANT[u.subscriptionTier ?? "freemium"]}>
+                          {TIER_LABELS[u.subscriptionTier ?? "freemium"]}
                         </Badge>
                       </td>
                       <td className="py-3 pr-4 hidden sm:table-cell">{u.accountsCount}</td>
