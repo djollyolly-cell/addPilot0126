@@ -203,6 +203,22 @@ export const getRealtimeHistory = internalQuery({
   },
 });
 
+/** Get all unique ad IDs for an account (from all metricsDaily records) */
+export const getAccountAllAdIds = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const records = await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_accountId_date", (q) => q.eq("accountId", args.accountId))
+      .collect();
+    const adIds = new Set<string>();
+    for (const r of records) {
+      adIds.add(r.adId);
+    }
+    return [...adIds];
+  },
+});
+
 /** Get campaign daily limit for fast_spend calculation */
 export const getCampaignDailyLimit = internalQuery({
   args: { adId: v.string() },
@@ -933,24 +949,54 @@ export const checkAllRules = internalAction({
 
         for (const rule of rules) {
           for (const targetAccountId of rule.targetAccountIds) {
-            // Get today's metrics for all ads in this account
+            const timeWindow = rule.conditions.timeWindow;
+            const needsAllAds =
+              rule.type === "clicks_no_leads" &&
+              timeWindow &&
+              timeWindow !== "daily";
+
+            // For since_launch / 24h — check ALL ads in account, not just today's
+            let adIdsToCheck: string[];
+            // Map adId → today's metric (if exists) for savings calculation
+            const todayMetricsByAd = new Map<
+              string,
+              { spent: number; leads: number; impressions: number; clicks: number; cpl?: number; ctr?: number }
+            >();
+
+            // Always fetch today's metrics (needed for non-clicks_no_leads rules and savings calc)
             const dailyMetrics = await ctx.runQuery(
               internal.ruleEngine.getAccountTodayMetrics,
               { accountId: targetAccountId, date }
             );
+            for (const m of dailyMetrics) {
+              todayMetricsByAd.set(m.adId, m);
+            }
 
-            for (const metric of dailyMetrics) {
+            if (needsAllAds) {
+              // Get ALL ad IDs that ever had metrics in this account
+              const allAdIds = await ctx.runQuery(
+                internal.ruleEngine.getAccountAllAdIds,
+                { accountId: targetAccountId }
+              );
+              adIdsToCheck = allAdIds;
+            } else {
+              adIdsToCheck = dailyMetrics.map((m) => m.adId);
+            }
+
+            for (const adId of adIdsToCheck) {
               // Filter by targeted ads if specified
               if (rule.targetAdIds && rule.targetAdIds.length > 0) {
-                if (!rule.targetAdIds.includes(metric.adId)) continue;
+                if (!rule.targetAdIds.includes(adId)) continue;
               }
+
+              const todayMetric = todayMetricsByAd.get(adId);
 
               // Check minSamples requirement
               if (rule.conditions.minSamples) {
                 const history = await ctx.runQuery(
                   internal.ruleEngine.getRealtimeHistory,
                   {
-                    adId: metric.adId,
+                    adId,
                     sinceTimestamp: Date.now() - 24 * 60 * 60 * 1000,
                   }
                 );
@@ -969,11 +1015,11 @@ export const checkAllRules = internalAction({
                 const fifteenMinAgo = Date.now() - 15 * 60 * 1000;
                 const history = await ctx.runQuery(
                   internal.ruleEngine.getRealtimeHistory,
-                  { adId: metric.adId, sinceTimestamp: fifteenMinAgo }
+                  { adId, sinceTimestamp: fifteenMinAgo }
                 );
                 const dailyBudget = await ctx.runQuery(
                   internal.ruleEngine.getCampaignDailyLimit,
-                  { adId: metric.adId }
+                  { adId }
                 );
                 context = {
                   spendHistory: history.map((h: { spent: number; timestamp: number }) => ({
@@ -985,23 +1031,10 @@ export const checkAllRules = internalAction({
               }
 
               // Build metrics snapshot (may be aggregated for clicks_no_leads)
-              let metricsSnapshot: MetricsSnapshot = {
-                spent: metric.spent,
-                leads: metric.leads,
-                impressions: metric.impressions,
-                clicks: metric.clicks,
-                cpl: metric.cpl ?? undefined,
-                ctr: metric.ctr ?? undefined,
-              };
+              let metricsSnapshot: MetricsSnapshot;
 
-              const timeWindow = rule.conditions.timeWindow;
-
-              // For clicks_no_leads with timeWindow, use aggregated metrics
-              if (
-                rule.type === "clicks_no_leads" &&
-                timeWindow &&
-                timeWindow !== "daily"
-              ) {
+              if (needsAllAds) {
+                // For clicks_no_leads with since_launch/24h — use aggregated metrics
                 let sinceDate: string | undefined;
                 if (timeWindow === "24h") {
                   const yesterday = new Date();
@@ -1012,7 +1045,7 @@ export const checkAllRules = internalAction({
 
                 const aggregated = await ctx.runQuery(
                   internal.ruleEngine.getAdAggregatedMetrics,
-                  { adId: metric.adId, sinceDate }
+                  { adId, sinceDate }
                 );
 
                 metricsSnapshot = {
@@ -1021,6 +1054,18 @@ export const checkAllRules = internalAction({
                   impressions: aggregated.impressions,
                   clicks: aggregated.clicks,
                 };
+              } else if (todayMetric) {
+                metricsSnapshot = {
+                  spent: todayMetric.spent,
+                  leads: todayMetric.leads,
+                  impressions: todayMetric.impressions,
+                  clicks: todayMetric.clicks,
+                  cpl: todayMetric.cpl ?? undefined,
+                  ctr: todayMetric.ctr ?? undefined,
+                };
+              } else {
+                // No today's metrics and rule doesn't need aggregation — skip
+                continue;
               }
 
               // Evaluate condition
@@ -1033,14 +1078,15 @@ export const checkAllRules = internalAction({
 
               if (!triggered) continue;
 
-              // Calculate savings
+              // Calculate savings using today's metric if available
+              const spentToday = todayMetric?.spent ?? 0;
               const now = new Date();
               const minsLeft = minutesUntilEndOfDay(now);
               const hoursElapsed =
                 now.getHours() + now.getMinutes() / 60;
               const spentPerMinute =
                 hoursElapsed > 0
-                  ? metric.spent / (hoursElapsed * 60)
+                  ? spentToday / (hoursElapsed * 60)
                   : 0;
               const savedAmount = calculateSavings(
                 spentPerMinute,
@@ -1077,7 +1123,7 @@ export const checkAllRules = internalAction({
                   );
                   await ctx.runAction(api.vkApi.stopAd, {
                     accessToken,
-                    adId: metric.adId,
+                    adId,
                     accountId: targetAccountId,
                   });
                 } catch (err) {
@@ -1096,17 +1142,17 @@ export const checkAllRules = internalAction({
                   userId: account.userId,
                   ruleId: rule._id,
                   accountId: targetAccountId,
-                  adId: metric.adId,
-                  adName: `Ad ${metric.adId}`,
+                  adId,
+                  adName: `Ad ${adId}`,
                   actionType,
                   reason,
                   metricsSnapshot: {
-                    spent: metric.spent,
-                    leads: metric.leads,
-                    impressions: metric.impressions,
-                    clicks: metric.clicks,
-                    cpl: metric.cpl ?? undefined,
-                    ctr: metric.ctr ?? undefined,
+                    spent: metricsSnapshot.spent,
+                    leads: metricsSnapshot.leads,
+                    impressions: metricsSnapshot.impressions,
+                    clicks: metricsSnapshot.clicks,
+                    cpl: metricsSnapshot.cpl ?? undefined,
+                    ctr: metricsSnapshot.ctr ?? undefined,
                   },
                   savedAmount,
                   status,
@@ -1129,15 +1175,15 @@ export const checkAllRules = internalAction({
                       userId: account.userId,
                       event: {
                         ruleName: rule.name,
-                        adName: `Ad ${metric.adId}`,
+                        adName: `Ad ${adId}`,
                         reason,
                         actionType,
                         savedAmount,
                         metrics: {
-                          spent: metric.spent,
-                          leads: metric.leads,
-                          cpl: metric.cpl ?? undefined,
-                          ctr: metric.ctr ?? undefined,
+                          spent: metricsSnapshot.spent,
+                          leads: metricsSnapshot.leads,
+                          cpl: metricsSnapshot.cpl ?? undefined,
+                          ctr: metricsSnapshot.ctr ?? undefined,
                         },
                       },
                       priority: rule.actions.stopAd ? "critical" : "standard",
