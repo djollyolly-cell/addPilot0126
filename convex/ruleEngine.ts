@@ -233,6 +233,27 @@ export const getCampaignDailyLimit = internalQuery({
   },
 });
 
+/** Check if rule already triggered for this ad today (dedup) */
+export const isAlreadyTriggeredToday = internalQuery({
+  args: {
+    ruleId: v.id("rules"),
+    adId: v.string(),
+    sinceTimestamp: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .collect();
+    return logs.some(
+      (log) =>
+        log.adId === args.adId &&
+        log.createdAt >= args.sinceTimestamp &&
+        log.status !== "reverted"
+    );
+  },
+});
+
 /** Create an action log entry (internal) */
 export const createActionLog = internalMutation({
   args: {
@@ -1068,6 +1089,14 @@ export const checkAllRules = internalAction({
                 continue;
               }
 
+              // Dedup: skip if this rule already triggered for this ad today
+              const todayStart = new Date(date + "T00:00:00Z").getTime();
+              const alreadyTriggered = await ctx.runQuery(
+                internal.ruleEngine.isAlreadyTriggeredToday,
+                { ruleId: rule._id, adId, sinceTimestamp: todayStart }
+              );
+              if (alreadyTriggered) continue;
+
               // Evaluate condition
               const triggered = evaluateCondition(
                 rule.type,
@@ -1075,6 +1104,12 @@ export const checkAllRules = internalAction({
                 metricsSnapshot,
                 context
               );
+
+              if (rule.type === "clicks_no_leads") {
+                console.log(
+                  `[ruleEngine] clicks_no_leads check for ad ${adId}: clicks=${metricsSnapshot.clicks}, leads=${metricsSnapshot.leads}, threshold=${rule.conditions.value}, triggered=${triggered}`
+                );
+              }
 
               if (!triggered) continue;
 
@@ -1169,7 +1204,10 @@ export const checkAllRules = internalAction({
               // Send Telegram notification if notify is enabled
               if (rule.actions.notify) {
                 try {
-                  await ctx.runAction(
+                  console.log(
+                    `[ruleEngine] Sending notification for ad ${adId}, rule ${rule._id}, actionLogId=${String(actionLogId)}`
+                  );
+                  const notifResult = await ctx.runAction(
                     internal.telegram.sendRuleNotification,
                     {
                       userId: account.userId,
@@ -1190,12 +1228,20 @@ export const checkAllRules = internalAction({
                       actionLogId: actionLogId as string,
                     }
                   );
+                  console.log(
+                    `[ruleEngine] Notification result for ad ${adId}:`,
+                    JSON.stringify(notifResult)
+                  );
                 } catch (notifErr) {
                   console.error(
-                    `[ruleEngine] Failed to send TG notification for rule ${rule._id}:`,
+                    `[ruleEngine] Failed to send TG notification for rule ${rule._id}, ad ${adId}:`,
                     notifErr instanceof Error ? notifErr.message : notifErr
                   );
                 }
+              } else {
+                console.warn(
+                  `[ruleEngine] Rule ${rule._id} has notify=false, skipping notification for ad ${adId}`
+                );
               }
 
               totalTriggered++;

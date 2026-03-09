@@ -56,10 +56,34 @@ export const syncAll = internalAction({
           const adId = String(item.id);
 
           for (const row of item.rows) {
-            const spent = parseFloat(row.spent) || 0;
-            const leads = row.goals || 0;
-            const impressions = row.impressions || 0;
-            const clicks = row.clicks || 0;
+            // myTarget API v2 nests metrics under row.base
+            const base = (row as any).base || row;
+            const spent = parseFloat(base.spent || "0") || 0;
+            const impressions = base.shows || 0;
+            const clicks = base.clicks || 0;
+
+            // Count leads from base.goals
+            const baseGoals = typeof base.goals === "number" ? base.goals : 0;
+
+            // Count leads from events (VK lead forms report here, not in base.goals)
+            let eventsGoals = 0;
+            const events = (row as any).events;
+            if (events && typeof events === "object") {
+              for (const [, eventData] of Object.entries(events)) {
+                const ed = eventData as { count?: number } | undefined;
+                if (ed && typeof ed.count === "number") {
+                  eventsGoals += ed.count;
+                }
+              }
+            }
+
+            // Use the maximum of base.goals and events total
+            // (they may overlap or one may be 0 depending on campaign type)
+            const leads = Math.max(baseGoals, eventsGoals);
+
+            console.log(
+              `[syncMetrics] Ad ${adId}: clicks=${clicks}, base.goals=${JSON.stringify(base.goals)}, eventsGoals=${eventsGoals}, leads=${leads}`
+            );
 
             // Save realtime snapshot
             await ctx.runMutation(internal.metrics.saveRealtime, {
@@ -80,7 +104,7 @@ export const syncAll = internalAction({
               clicks,
               spent,
               leads,
-              reach: row.reach,
+              reach: base.reach,
             });
           }
         }

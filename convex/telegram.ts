@@ -892,11 +892,15 @@ export const sendRuleNotification = internalAction({
     });
 
     if (!chatId) {
-      console.warn(
-        `[telegram] User ${args.userId} has no telegramChatId, skipping notification`
+      console.error(
+        `[telegram] User ${args.userId} has no telegramChatId, skipping notification. Rule: ${args.event.ruleName}, Ad: ${args.event.adName}`
       );
       return { sent: false, reason: "no_chat_id" };
     }
+
+    console.log(
+      `[telegram] Sending notification to chatId=${chatId} for ad ${args.event.adName}, priority=${args.priority}`
+    );
 
     const now = Date.now();
 

@@ -267,34 +267,66 @@ export const getMtAgencyClients = action({
 });
 
 // myTarget statistics types
-export interface MtStatRow {
-  date: string;
-  impressions: number;
+// API v2 nests metrics under row.base: { date, base: { shows, clicks, spent, goals, ... } }
+// When events metrics requested: row.events: { event_name: { count, ... }, ... }
+export interface MtStatBase {
+  shows: number;
   clicks: number;
   spent: string; // "250.00"
   goals: number; // leads / conversions
   reach?: number;
+  cpa?: string;
+  cpc?: string;
+  cpm?: string;
+  cr?: number;
+  ctr?: number;
+}
+
+export interface MtStatRow {
+  date: string;
+  base: MtStatBase;
+  events?: Record<string, { count: number; [key: string]: unknown }>;
 }
 
 export interface MtStatItem {
   id: number;
   rows: MtStatRow[];
+  total?: MtStatRow;
 }
 
 // Get banner (ad) statistics via myTarget API v2
+// `id` param is required per docs — without it stats return zeros
 export const getMtStatistics = action({
   args: {
     accessToken: v.string(),
     dateFrom: v.string(), // "YYYY-MM-DD"
     dateTo: v.string(),   // "YYYY-MM-DD"
+    bannerIds: v.optional(v.string()), // comma-separated banner IDs
   },
   handler: async (_, args): Promise<MtStatItem[]> => {
-    const data = await callMtApi<{ items: MtStatItem[]; total: MtStatRow }>(
+    // If no banner IDs provided, first fetch all banners to get their IDs
+    let ids = args.bannerIds;
+    if (!ids) {
+      const bannersData = await callMtApi<{ items: MtBanner[]; count: number }>(
+        "banners.json",
+        args.accessToken,
+        { fields: "id" }
+      );
+      const bannerItems = bannersData.items || [];
+      if (bannerItems.length === 0) {
+        return [];
+      }
+      ids = bannerItems.map((b: MtBanner) => String(b.id)).join(",");
+    }
+
+    const data = await callMtApi<{ items: MtStatItem[]; total: any }>(
       "statistics/banners/day.json",
       args.accessToken,
       {
+        id: ids,
         date_from: args.dateFrom,
         date_to: args.dateTo,
+        metrics: "base,events",
       }
     );
     return data.items || [];
