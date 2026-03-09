@@ -177,6 +177,7 @@ export const debugMetrics = query({
     const logs = await ctx.db.query("actionLogs").order("desc").take(10);
     const actionLogs = logs.map((l) => ({
       adId: l.adId,
+      userId: l.userId,
       actionType: l.actionType,
       reason: l.reason,
       status: l.status,
@@ -202,6 +203,20 @@ export const debugMetrics = query({
       createdAt: new Date(n.createdAt).toISOString(),
     }));
 
-    return { withClicks, actionLogs, usersTg, notifications };
+    // Get rules config
+    const rules = await ctx.db.query("rules").collect();
+    const rulesInfo = rules.map((r) => ({
+      id: r._id,
+      name: r.name,
+      type: r.type,
+      userId: r.userId,
+      stopAd: r.actions.stopAd,
+      notify: r.actions.notify,
+      value: r.conditions.value,
+      timeWindow: r.conditions.timeWindow,
+      isActive: r.isActive,
+    }));
+
+    return { withClicks, actionLogs, usersTg, notifications, rulesInfo };
   },
 });
