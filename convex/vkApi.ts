@@ -425,6 +425,70 @@ export const restartAd = action({
   },
 });
 
+// Get lead counts per banner from myTarget Lead Ads API
+// Returns map: bannerId -> lead count
+export const getMtLeadCounts = action({
+  args: {
+    accessToken: v.string(),
+    dateFrom: v.string(), // "YYYY-MM-DD"
+    dateTo: v.string(),
+  },
+  handler: async (_, args): Promise<Record<string, number>> => {
+    const result: Record<string, number> = {};
+
+    try {
+      // Fetch all lead form subscriptions to get form IDs
+      const subs = await callMtApi<{ items: Array<{ id: number; banner_id: number }> }>(
+        "lead_ads/vkontakte/subscriptions.json",
+        args.accessToken,
+        {}
+      );
+
+      if (!subs.items || subs.items.length === 0) {
+        console.log("[vkApi] No lead form subscriptions found");
+        return result;
+      }
+
+      // Map form IDs to banner IDs
+      const formToBanner = new Map<number, number>();
+      for (const sub of subs.items) {
+        formToBanner.set(sub.id, sub.banner_id);
+      }
+
+      // Fetch leads for date range
+      const formIds = subs.items.map((s) => s.id).join(",");
+      const leads = await callMtApi<{ items: Array<{ form_id: number; leads: Array<{ id: number; created: string }> }> }>(
+        "lead_ads/vkontakte/leads.json",
+        args.accessToken,
+        {
+          form_id: formIds,
+          date_from: args.dateFrom,
+          date_to: args.dateTo,
+        }
+      );
+
+      if (leads.items) {
+        for (const item of leads.items) {
+          const bannerId = formToBanner.get(item.form_id);
+          if (bannerId) {
+            const key = String(bannerId);
+            result[key] = (result[key] || 0) + (item.leads?.length || 0);
+          }
+        }
+      }
+
+      console.log(`[vkApi] Lead counts: ${JSON.stringify(result)}`);
+    } catch (err) {
+      // Lead Ads API might not be available for all accounts — don't fail the sync
+      console.warn(
+        `[vkApi] Lead Ads API error (non-fatal): ${err instanceof Error ? err.message : err}`
+      );
+    }
+
+    return result;
+  },
+});
+
 // Get banners (ads) via myTarget API v2
 export const getMtBanners = action({
   args: {

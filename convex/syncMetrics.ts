@@ -38,11 +38,18 @@ export const syncAll = internalAction({
         );
 
         // Fetch statistics for today
-        const stats = await ctx.runAction(api.vkApi.getMtStatistics, {
-          accessToken,
-          dateFrom: date,
-          dateTo: date,
-        });
+        const [stats, leadCounts] = await Promise.all([
+          ctx.runAction(api.vkApi.getMtStatistics, {
+            accessToken,
+            dateFrom: date,
+            dateTo: date,
+          }),
+          ctx.runAction(api.vkApi.getMtLeadCounts, {
+            accessToken,
+            dateFrom: date,
+            dateTo: date,
+          }),
+        ]);
 
         if (!stats || stats.length === 0) {
           console.log(
@@ -77,12 +84,14 @@ export const syncAll = internalAction({
               }
             }
 
-            // Use the maximum of base.goals and events total
-            // (they may overlap or one may be 0 depending on campaign type)
-            const leads = Math.max(baseGoals, eventsGoals);
+            // Count leads from Lead Ads API (separate endpoint for VK lead forms)
+            const leadAdsCount = leadCounts[adId] || 0;
+
+            // Use the maximum across all sources
+            const leads = Math.max(baseGoals, eventsGoals, leadAdsCount);
 
             console.log(
-              `[syncMetrics] Ad ${adId}: clicks=${clicks}, base.goals=${JSON.stringify(base.goals)}, eventsGoals=${eventsGoals}, leads=${leads}`
+              `[syncMetrics] Ad ${adId}: clicks=${clicks}, base.goals=${JSON.stringify(base.goals)}, eventsGoals=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
             );
 
             // Save realtime snapshot
