@@ -146,12 +146,62 @@ export const syncAll = internalAction({
 });
 
 // Internal query — list all active ad accounts (for cron)
-import { internalQuery } from "./_generated/server";
+import { internalQuery, query } from "./_generated/server";
 
 export const listActiveAccounts = internalQuery({
   args: {},
   handler: async (ctx) => {
     const accounts = await ctx.db.query("adAccounts").collect();
     return accounts.filter((a) => a.status === "active");
+  },
+});
+
+// TEMP diagnostic — remove after debugging
+export const debugMetrics = query({
+  args: {},
+  handler: async (ctx) => {
+    // Get recent daily metrics with clicks > 0
+    const all = await ctx.db.query("metricsDaily").order("desc").take(200);
+    const withClicks = all
+      .filter((m) => m.clicks > 0)
+      .slice(0, 20)
+      .map((m) => ({
+        adId: m.adId,
+        date: m.date,
+        clicks: m.clicks,
+        leads: m.leads,
+        spent: m.spent,
+      }));
+
+    // Get recent action logs
+    const logs = await ctx.db.query("actionLogs").order("desc").take(10);
+    const actionLogs = logs.map((l) => ({
+      adId: l.adId,
+      actionType: l.actionType,
+      reason: l.reason,
+      status: l.status,
+      leads: l.metricsSnapshot.leads,
+      clicks: l.metricsSnapshot.clicks,
+      createdAt: new Date(l.createdAt).toISOString(),
+    }));
+
+    // Get users with telegramChatId
+    const users = await ctx.db.query("users").collect();
+    const usersTg = users.map((u) => ({
+      id: u._id,
+      telegramChatId: (u as any).telegramChatId ?? null,
+    }));
+
+    // Get notifications
+    const notifs = await ctx.db.query("notifications").order("desc").take(10);
+    const notifications = notifs.map((n) => ({
+      status: n.status,
+      type: n.type,
+      title: n.title,
+      errorMessage: (n as any).errorMessage ?? null,
+      createdAt: new Date(n.createdAt).toISOString(),
+    }));
+
+    return { withClicks, actionLogs, usersTg, notifications };
   },
 });
