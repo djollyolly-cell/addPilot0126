@@ -69,17 +69,19 @@ export const syncAll = internalAction({
             const impressions = base.shows || 0;
             const clicks = base.clicks || 0;
 
-            // Count leads from base.goals
-            const baseGoals = typeof base.goals === "number" ? base.goals : 0;
+            // Count leads from base.goals (handle both number and string)
+            const baseGoals = Number(base.goals) || 0;
 
             // Count leads from events (VK lead forms report here, not in base.goals)
             let eventsGoals = 0;
             const events = (row as any).events;
             if (events && typeof events === "object") {
-              for (const [, eventData] of Object.entries(events)) {
-                const ed = eventData as { count?: number } | undefined;
-                if (ed && typeof ed.count === "number") {
-                  eventsGoals += ed.count;
+              for (const [eventName, eventData] of Object.entries(events)) {
+                const ed = eventData as { count?: number | string } | number | undefined;
+                if (typeof ed === "number") {
+                  eventsGoals += ed;
+                } else if (ed && typeof ed === "object" && ed.count !== undefined) {
+                  eventsGoals += Number(ed.count) || 0;
                 }
               }
             }
@@ -91,7 +93,7 @@ export const syncAll = internalAction({
             const leads = Math.max(baseGoals, eventsGoals, leadAdsCount);
 
             console.log(
-              `[syncMetrics] Ad ${adId}: clicks=${clicks}, base.goals=${JSON.stringify(base.goals)}, eventsGoals=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
+              `[syncMetrics] Ad ${adId}: clicks=${clicks}, base.goals=${JSON.stringify(base.goals)}, events=${JSON.stringify(events)}, eventsGoals=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
             );
 
             // Save realtime snapshot

@@ -480,8 +480,9 @@ export const getMtLeadCounts = action({
       console.log(`[vkApi] Lead counts: ${JSON.stringify(result)}`);
     } catch (err) {
       // Lead Ads API might not be available for all accounts — don't fail the sync
-      console.warn(
-        `[vkApi] Lead Ads API error (non-fatal): ${err instanceof Error ? err.message : err}`
+      // But log as ERROR so it's visible in monitoring
+      console.error(
+        `[vkApi] Lead Ads API error (non-fatal, leads may be undercounted!): ${err instanceof Error ? err.message : err}`
       );
     }
 

@@ -157,6 +157,30 @@ export const getAccountTodayMetrics = internalQuery({
   },
 });
 
+/** Update leads count for a specific ad/date (used by safety check) */
+export const updateAdLeads = internalMutation({
+  args: {
+    adId: v.string(),
+    date: v.string(),
+    leads: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_adId_date", (q) =>
+        q.eq("adId", args.adId).eq("date", args.date)
+      )
+      .first();
+    if (existing) {
+      const cpl = args.leads > 0 ? existing.spent / args.leads : undefined;
+      await ctx.db.patch(existing._id, {
+        leads: args.leads,
+        ...(cpl !== undefined ? { cpl } : {}),
+      });
+    }
+  },
+});
+
 /** Get aggregated metrics for an ad across all dates (since launch) or last 24h */
 export const getAdAggregatedMetrics = internalQuery({
   args: {
@@ -1112,6 +1136,43 @@ export const checkAllRules = internalAction({
               }
 
               if (!triggered) continue;
+
+              // Safety check for clicks_no_leads: re-verify leads via Lead Ads API
+              // before stopping. Protects against API reporting delays.
+              if (rule.type === "clicks_no_leads" && rule.actions.stopAd && metricsSnapshot.leads === 0) {
+                try {
+                  const accessToken = await ctx.runAction(
+                    internal.auth.getValidVkAdsToken,
+                    { userId: account.userId }
+                  );
+                  const freshLeadCounts = await ctx.runAction(api.vkApi.getMtLeadCounts, {
+                    accessToken,
+                    dateFrom: date,
+                    dateTo: date,
+                  });
+                  const freshLeads = freshLeadCounts[adId] || 0;
+                  if (freshLeads > 0) {
+                    console.log(
+                      `[ruleEngine] SAFETY CHECK: ad ${adId} has ${freshLeads} leads from Lead Ads API (was 0 in metrics). Skipping stop.`
+                    );
+                    // Update metricsDaily with correct lead count
+                    const todayM = todayMetricsByAd.get(adId);
+                    if (todayM) {
+                      await ctx.runMutation(internal.ruleEngine.updateAdLeads, {
+                        adId,
+                        date,
+                        leads: freshLeads,
+                      });
+                    }
+                    continue;
+                  }
+                } catch (verifyErr) {
+                  console.error(
+                    `[ruleEngine] Lead verification failed for ad ${adId}, proceeding with caution:`,
+                    verifyErr instanceof Error ? verifyErr.message : verifyErr
+                  );
+                }
+              }
 
               // Calculate savings using today's metric if available
               const spentToday = todayMetric?.spent ?? 0;
