@@ -1137,23 +1137,54 @@ export const checkAllRules = internalAction({
 
               if (!triggered) continue;
 
-              // Safety check for clicks_no_leads: re-verify leads via Lead Ads API
-              // before stopping. Protects against API reporting delays.
+              // Safety check for clicks_no_leads: re-verify leads via statistics API
+              // (base.vk.result) and Lead Ads API before stopping.
               if (rule.type === "clicks_no_leads" && rule.actions.stopAd && metricsSnapshot.leads === 0) {
                 try {
                   const accessToken = await ctx.runAction(
                     internal.auth.getValidVkAdsToken,
                     { userId: account.userId }
                   );
-                  const freshLeadCounts = await ctx.runAction(api.vkApi.getMtLeadCounts, {
-                    accessToken,
-                    dateFrom: date,
-                    dateTo: date,
-                  });
-                  const freshLeads = freshLeadCounts[adId] || 0;
+
+                  // Check statistics API for vk.result (most reliable source)
+                  let freshLeads = 0;
+                  try {
+                    const freshStats = await ctx.runAction(api.vkApi.getMtStatistics, {
+                      accessToken,
+                      dateFrom: "2020-01-01", // all time
+                      dateTo: date,
+                      bannerIds: adId,
+                    });
+                    if (freshStats && freshStats.length > 0 && freshStats[0].total) {
+                      const vk = (freshStats[0].total as any).base?.vk;
+                      if (vk) {
+                        freshLeads = Math.max(Number(vk.result) || 0, Number(vk.goals) || 0);
+                      }
+                    }
+                  } catch (statsErr) {
+                    console.error(
+                      `[ruleEngine] Safety check stats API failed for ad ${adId}:`,
+                      statsErr instanceof Error ? statsErr.message : statsErr
+                    );
+                  }
+
+                  // Also check Lead Ads API as fallback
+                  if (freshLeads === 0) {
+                    try {
+                      const freshLeadCounts = await ctx.runAction(api.vkApi.getMtLeadCounts, {
+                        accessToken,
+                        dateFrom: date,
+                        dateTo: date,
+                      });
+                      freshLeads = freshLeadCounts[adId] || 0;
+                    } catch {
+                      // Lead Ads API may not be available (404) — non-fatal
+                    }
+                  }
+
                   if (freshLeads > 0) {
                     console.log(
-                      `[ruleEngine] SAFETY CHECK: ad ${adId} has ${freshLeads} leads from Lead Ads API (was 0 in metrics). Skipping stop.`
+                      `[ruleEngine] SAFETY CHECK: ad ${adId} has ${freshLeads} leads (vk.result/Lead Ads). Skipping stop.`
                     );
                     // Update metricsDaily with correct lead count
                     const todayM = todayMetricsByAd.get(adId);

@@ -1,3 +1,4 @@
+import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 
@@ -72,11 +73,17 @@ export const syncAll = internalAction({
             // Count leads from base.goals (handle both number and string)
             const baseGoals = Number(base.goals) || 0;
 
+            // Count leads from base.vk.result / base.vk.goals
+            // VK Ads reports campaign results (joins, leads, etc.) in this nested object
+            const vkData = base.vk;
+            const vkResult = vkData ? (Number(vkData.result) || 0) : 0;
+            const vkGoals = vkData ? (Number(vkData.goals) || 0) : 0;
+
             // Count leads from events (VK lead forms report here, not in base.goals)
             let eventsGoals = 0;
             const events = (row as any).events;
             if (events && typeof events === "object") {
-              for (const [eventName, eventData] of Object.entries(events)) {
+              for (const [, eventData] of Object.entries(events)) {
                 const ed = eventData as { count?: number | string } | number | undefined;
                 if (typeof ed === "number") {
                   eventsGoals += ed;
@@ -89,11 +96,11 @@ export const syncAll = internalAction({
             // Count leads from Lead Ads API (separate endpoint for VK lead forms)
             const leadAdsCount = leadCounts[adId] || 0;
 
-            // Use the maximum across all sources
-            const leads = Math.max(baseGoals, eventsGoals, leadAdsCount);
+            // Use the maximum across all sources (4 sources now)
+            const leads = Math.max(baseGoals, vkResult, vkGoals, eventsGoals, leadAdsCount);
 
             console.log(
-              `[syncMetrics] Ad ${adId}: clicks=${clicks}, base.goals=${JSON.stringify(base.goals)}, events=${JSON.stringify(events)}, eventsGoals=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
+              `[syncMetrics] Ad ${adId}: clicks=${clicks}, base.goals=${baseGoals}, vk.result=${vkResult}, vk.goals=${vkGoals}, events=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
             );
 
             // Save realtime snapshot
@@ -229,5 +236,75 @@ export const debugMetrics = query({
     }));
 
     return { withClicks, actionLogs, usersTg, notifications, rulesInfo };
+  },
+});
+
+// TEMP — backfill vk.result into historical metricsDaily records
+import { action } from "./_generated/server";
+
+export const backfillVkResults = action({
+  args: {
+    userId: v.id("users"),
+    dateFrom: v.string(),
+    dateTo: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const accessToken = await ctx.runAction(
+      internal.auth.getValidVkAdsToken,
+      { userId: args.userId }
+    );
+
+    // Fetch all-time stats with vk.result for all banners
+    const stats = await ctx.runAction(api.vkApi.getMtStatistics, {
+      accessToken,
+      dateFrom: args.dateFrom,
+      dateTo: args.dateTo,
+    });
+
+    let updated = 0;
+    for (const item of stats) {
+      const adId = String(item.id);
+      for (const row of (item as any).rows) {
+        const vk = row.base?.vk;
+        const vkResult = vk ? Math.max(Number(vk.result) || 0, Number(vk.goals) || 0) : 0;
+        if (vkResult > 0) {
+          // Update metricsDaily for this ad/date
+          await ctx.runMutation(internal.ruleEngine.updateAdLeads, {
+            adId,
+            date: row.date,
+            leads: vkResult,
+          });
+          updated++;
+          console.log(`[backfill] Ad ${adId} date=${row.date}: set leads=${vkResult} (from vk.result)`);
+        }
+      }
+    }
+
+    return { updated, totalAds: stats.length };
+  },
+});
+
+// TEMP diagnostic — check raw VK API response for leads
+export const diagnosLeadsForAccount = action({
+  args: {
+    userId: v.id("users"),
+    bannerIds: v.string(), // comma-separated
+    dateFrom: v.string(),
+    dateTo: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Get valid token
+    const accessToken = await ctx.runAction(
+      internal.auth.getValidVkAdsToken,
+      { userId: args.userId }
+    );
+
+    // Call diagnostic
+    return await ctx.runAction(api.vkApi.diagnosLeads, {
+      accessToken,
+      bannerIds: args.bannerIds,
+      dateFrom: args.dateFrom,
+      dateTo: args.dateTo,
+    });
   },
 });

@@ -511,3 +511,77 @@ export const getMtBanners = action({
     return data.items || [];
   },
 });
+
+// ─── DIAGNOSTIC: Raw VK API response for specific ads ─────────────
+// Shows exactly what myTarget API returns for goals, events, lead ads
+export const diagnosLeads = action({
+  args: {
+    accessToken: v.string(),
+    bannerIds: v.string(), // comma-separated
+    dateFrom: v.string(),
+    dateTo: v.string(),
+  },
+  handler: async (_, args) => {
+    const result: Record<string, any> = {};
+
+    // 1. Raw statistics with ALL available metrics
+    try {
+      const statsRaw = await callMtApi<any>(
+        "statistics/banners/day.json",
+        args.accessToken,
+        {
+          id: args.bannerIds,
+          date_from: args.dateFrom,
+          date_to: args.dateTo,
+          metrics: "base,events",
+        }
+      );
+      result.rawStats = statsRaw;
+    } catch (e) {
+      result.rawStatsError = e instanceof Error ? e.message : String(e);
+    }
+
+    // 2. Campaign info with objective
+    try {
+      const campaigns = await callMtApi<any>(
+        "campaigns.json",
+        args.accessToken,
+        {
+          fields: "id,name,status,objective,mixing,package_id,pricelist_id,budget_limit,budget_limit_day,created,updated",
+        }
+      );
+      result.campaigns = campaigns;
+    } catch (e) {
+      result.campaignsError = e instanceof Error ? e.message : String(e);
+    }
+
+    // 3. Lead Ads subscriptions
+    try {
+      const subs = await callMtApi<any>(
+        "lead_ads/vkontakte/subscriptions.json",
+        args.accessToken,
+        {}
+      );
+      result.leadAdsSubs = subs;
+    } catch (e) {
+      result.leadAdsSubsError = e instanceof Error ? e.message : String(e);
+    }
+
+    // 4. Lead Ads leads (no form_id filter — get all)
+    try {
+      const leads = await callMtApi<any>(
+        "lead_ads/vkontakte/leads.json",
+        args.accessToken,
+        {
+          date_from: args.dateFrom,
+          date_to: args.dateTo,
+        }
+      );
+      result.leadAdsLeads = leads;
+    } catch (e) {
+      result.leadAdsLeadsError = e instanceof Error ? e.message : String(e);
+    }
+
+    return result;
+  },
+});
