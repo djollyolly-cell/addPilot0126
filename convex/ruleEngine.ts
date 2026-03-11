@@ -1088,7 +1088,7 @@ export const checkAllRules = internalAction({
               );
               adIdsToCheck = allAdIds;
             } else {
-              adIdsToCheck = dailyMetrics.map((m) => m.adId);
+              adIdsToCheck = dailyMetrics.map((m: { adId: string }) => m.adId);
             }
 
             // Build campaignId cache for filtering by targetCampaignIds

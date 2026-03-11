@@ -256,7 +256,7 @@ export const backfillVkResults = action({
     dateFrom: v.string(),
     dateTo: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ updated: number; totalAds: number }> => {
     const accessToken = await ctx.runAction(
       internal.auth.getValidVkAdsToken,
       { userId: args.userId }
@@ -300,7 +300,7 @@ export const diagnosLeadsForAccount = action({
     dateFrom: v.string(),
     dateTo: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<unknown> => {
     // Get valid token
     const accessToken = await ctx.runAction(
       internal.auth.getValidVkAdsToken,
