@@ -38,8 +38,8 @@ export const syncAll = internalAction({
           { userId: account.userId }
         );
 
-        // Fetch statistics for today
-        const [stats, leadCounts] = await Promise.all([
+        // Fetch statistics, lead counts, and banners (for campaign mapping) in parallel
+        const [stats, leadCounts, banners] = await Promise.all([
           ctx.runAction(api.vkApi.getMtStatistics, {
             accessToken,
             dateFrom: date,
@@ -50,7 +50,14 @@ export const syncAll = internalAction({
             dateFrom: date,
             dateTo: date,
           }),
+          ctx.runAction(api.vkApi.getMtBanners, { accessToken }),
         ]);
+
+        // Build bannerId → campaignId map
+        const bannerCampaignMap = new Map<string, string>();
+        for (const b of banners) {
+          bannerCampaignMap.set(String(b.id), String(b.campaign_id));
+        }
 
         if (!stats || stats.length === 0) {
           console.log(
@@ -117,6 +124,7 @@ export const syncAll = internalAction({
             await ctx.runMutation(internal.metrics.saveDaily, {
               accountId: account._id,
               adId,
+              campaignId: bannerCampaignMap.get(adId),
               date: row.date,
               impressions,
               clicks,

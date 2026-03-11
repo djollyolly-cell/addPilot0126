@@ -29,6 +29,7 @@ export const saveDaily = internalMutation({
   args: {
     accountId: v.id("adAccounts"),
     adId: v.string(),
+    campaignId: v.optional(v.string()),
     date: v.string(), // "YYYY-MM-DD"
     impressions: v.number(),
     clicks: v.number(),
@@ -58,6 +59,7 @@ export const saveDaily = internalMutation({
         spent: args.spent,
         leads: args.leads,
       };
+      if (args.campaignId !== undefined) patch.campaignId = args.campaignId;
       if (args.reach !== undefined) patch.reach = args.reach;
       if (cpl !== undefined) patch.cpl = cpl;
       if (ctr !== undefined) patch.ctr = ctr;
@@ -69,6 +71,7 @@ export const saveDaily = internalMutation({
     return await ctx.db.insert("metricsDaily", {
       accountId: args.accountId,
       adId: args.adId,
+      campaignId: args.campaignId,
       date: args.date,
       impressions: args.impressions,
       clicks: args.clicks,

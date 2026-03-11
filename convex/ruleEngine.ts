@@ -96,6 +96,13 @@ export function evaluateCondition(
       return metrics.clicks >= condition.value && metrics.leads === 0;
     }
 
+    case "new_lead": {
+      // Triggers when leads > 0 (new lead detected).
+      // The condition.value is ignored — any lead count > 0 triggers.
+      // Dedup ensures this fires only once per ad per day.
+      return metrics.leads > 0;
+    }
+
     default:
       return false;
   }
@@ -252,6 +259,20 @@ export const getCampaignDailyLimit = internalQuery({
     if (!ad) return null;
     const campaign = await ctx.db.get(ad.campaignId);
     return campaign?.dailyLimit ?? null;
+  },
+});
+
+/** Get vkCampaignId for a given adId (banner) */
+export const getAdCampaignId = internalQuery({
+  args: { adId: v.string() },
+  handler: async (ctx, args) => {
+    const ad = await ctx.db
+      .query("ads")
+      .withIndex("by_vkAdId", (q) => q.eq("vkAdId", args.adId))
+      .first();
+    if (!ad) return null;
+    const campaign = await ctx.db.get(ad.campaignId);
+    return campaign?.vkCampaignId ?? null;
   },
 });
 
@@ -998,6 +1019,8 @@ function buildReason(
         timeWindow === "24h" ? " за 24ч" : " за день";
       return `${metrics.clicks} кликов без лидов${windowLabel} (порог ${condition.value})`;
     }
+    case "new_lead":
+      return `Новый лид! Всего лидов: ${metrics.leads}, расход: ${metrics.spent}₽`;
     default:
       return `\u041F\u0440\u0430\u0432\u0438\u043B\u043E ${ruleType} \u0441\u0440\u0430\u0431\u043E\u0442\u0430\u043B\u043E`;
   }
@@ -1068,10 +1091,27 @@ export const checkAllRules = internalAction({
               adIdsToCheck = dailyMetrics.map((m) => m.adId);
             }
 
+            // Build campaignId cache for filtering by targetCampaignIds
+            const hasCampaignFilter = rule.targetCampaignIds && rule.targetCampaignIds.length > 0;
+            const adCampaignCache = new Map<string, string | null>();
+
             for (const adId of adIdsToCheck) {
               // Filter by targeted ads if specified
               if (rule.targetAdIds && rule.targetAdIds.length > 0) {
                 if (!rule.targetAdIds.includes(adId)) continue;
+              }
+
+              // Filter by targeted campaigns if specified
+              if (hasCampaignFilter) {
+                if (!adCampaignCache.has(adId)) {
+                  const campId = await ctx.runQuery(
+                    internal.ruleEngine.getAdCampaignId,
+                    { adId }
+                  );
+                  adCampaignCache.set(adId, campId);
+                }
+                const adCampId = adCampaignCache.get(adId);
+                if (!adCampId || !rule.targetCampaignIds!.includes(adCampId)) continue;
               }
 
               const todayMetric = todayMetricsByAd.get(adId);

@@ -19,6 +19,7 @@ import type * as email from "../email.js";
 import type * as http from "../http.js";
 import type * as metrics from "../metrics.js";
 import type * as rateLimit from "../rateLimit.js";
+import type * as reports from "../reports.js";
 import type * as ruleEngine from "../ruleEngine.js";
 import type * as rules from "../rules.js";
 import type * as syncMetrics from "../syncMetrics.js";
@@ -45,6 +46,7 @@ declare const fullApi: ApiFromModules<{
   http: typeof http;
   metrics: typeof metrics;
   rateLimit: typeof rateLimit;
+  reports: typeof reports;
   ruleEngine: typeof ruleEngine;
   rules: typeof rules;
   syncMetrics: typeof syncMetrics;

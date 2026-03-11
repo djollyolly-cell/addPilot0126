@@ -13,6 +13,7 @@ const RULE_TYPE_DEFAULTS: Record<
   budget_limit: { metric: "spent", operator: ">" },
   low_impressions: { metric: "impressions", operator: "<" },
   clicks_no_leads: { metric: "clicks_no_leads", operator: ">=" },
+  new_lead: { metric: "leads", operator: ">" },
 };
 
 // Validation
@@ -20,6 +21,8 @@ function validateRuleValue(
   type: string,
   value: number
 ): string | null {
+  // new_lead doesn't need a threshold value
+  if (type === "new_lead") return null;
   if (value <= 0) {
     return "Значение должно быть больше 0";
   }
@@ -64,7 +67,8 @@ export const create = mutation({
       v.literal("spend_no_leads"),
       v.literal("budget_limit"),
       v.literal("low_impressions"),
-      v.literal("clicks_no_leads")
+      v.literal("clicks_no_leads"),
+      v.literal("new_lead")
     ),
     value: v.number(),
     operator: v.optional(v.string()),

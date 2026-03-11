@@ -95,7 +95,8 @@ export default defineSchema({
       v.literal("spend_no_leads"),
       v.literal("budget_limit"),
       v.literal("low_impressions"),
-      v.literal("clicks_no_leads")
+      v.literal("clicks_no_leads"),
+      v.literal("new_lead")
     ),
     conditions: v.object({
       metric: v.string(),
@@ -168,6 +169,7 @@ export default defineSchema({
   metricsDaily: defineTable({
     accountId: v.id("adAccounts"),
     adId: v.string(),
+    campaignId: v.optional(v.string()),
     date: v.string(),
     impressions: v.number(),
     clicks: v.number(),

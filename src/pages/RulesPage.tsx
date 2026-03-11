@@ -12,7 +12,7 @@ import { TargetTreeSelector, TargetSelection } from '../components/TargetTreeSel
 import { ActionRadio, ActionMode, actionModeToFlags } from '../components/ActionRadio';
 import { UpgradeModal } from '../components/UpgradeModal';
 
-type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads';
+type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'new_lead';
 type TimeWindow = 'daily' | 'since_launch' | '24h';
 
 const TIME_WINDOW_OPTIONS: { value: TimeWindow; label: string; description: string }[] = [
@@ -29,6 +29,7 @@ const RULE_TYPE_LABELS: Record<RuleType, string> = {
   budget_limit: 'Лимит расхода',
   low_impressions: 'Мало показов',
   clicks_no_leads: 'Клики без результата',
+  new_lead: 'Новый лид',
 };
 
 const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
@@ -39,6 +40,7 @@ const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
   budget_limit: 'Остановить, если дневной расход превышает порог',
   low_impressions: 'Уведомить, если показов меньше порога (не откручивается)',
   clicks_no_leads: 'Остановить, если N+ кликов без единого лида',
+  new_lead: 'Уведомить в Telegram при получении нового лида',
 };
 
 const RULE_TYPE_UNITS: Record<RuleType, string> = {
@@ -49,6 +51,7 @@ const RULE_TYPE_UNITS: Record<RuleType, string> = {
   budget_limit: '₽',
   low_impressions: 'показов',
   clicks_no_leads: 'кликов',
+  new_lead: '',
 };
 
 /** Convert action flags to ActionMode */
@@ -442,7 +445,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
       setFormError('Введите название правила');
       return;
     }
-    if (!value || numericValue <= 0) {
+    if (type !== 'new_lead' && (!value || numericValue <= 0)) {
       setFormError('Значение должно быть больше 0');
       return;
     }
@@ -462,7 +465,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
       await onSubmit({
         name: name.trim(),
         type,
-        value: numericValue,
+        value: type === 'new_lead' ? 1 : numericValue,
         timeWindow: type === 'clicks_no_leads' ? timeWindow : undefined,
         actions: flags,
         targetAccountIds: targets.accountIds as Id<"adAccounts">[],
@@ -542,37 +545,39 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
             ))}
           </div>
 
-          {/* Value */}
-          <div>
-            <label className="block text-sm font-medium mb-1">
-              Порог ({RULE_TYPE_UNITS[type]})
-            </label>
-            <input
-              type="number"
-              value={value}
-              onChange={(e) => setValue(e.target.value)}
-              placeholder="0"
-              min="0"
-              step={type === 'min_ctr' ? '0.1' : '1'}
-              className={cn(
-                'w-full px-3 py-2 rounded-lg border bg-background text-foreground text-sm focus:outline-none focus:ring-2',
-                hasValueError || hasCtrError
-                  ? 'border-red-500 focus:ring-red-500'
-                  : 'border-border focus:ring-primary'
+          {/* Value (hidden for new_lead — no threshold needed) */}
+          {type !== 'new_lead' && (
+            <div>
+              <label className="block text-sm font-medium mb-1">
+                Порог ({RULE_TYPE_UNITS[type]})
+              </label>
+              <input
+                type="number"
+                value={value}
+                onChange={(e) => setValue(e.target.value)}
+                placeholder="0"
+                min="0"
+                step={type === 'min_ctr' ? '0.1' : '1'}
+                className={cn(
+                  'w-full px-3 py-2 rounded-lg border bg-background text-foreground text-sm focus:outline-none focus:ring-2',
+                  hasValueError || hasCtrError
+                    ? 'border-red-500 focus:ring-red-500'
+                    : 'border-border focus:ring-primary'
+                )}
+                data-testid="rule-value-input"
+              />
+              {hasValueError && (
+                <p className="text-xs text-red-500 mt-1" data-testid="value-error">
+                  Значение должно быть больше 0
+                </p>
               )}
-              data-testid="rule-value-input"
-            />
-            {hasValueError && (
-              <p className="text-xs text-red-500 mt-1" data-testid="value-error">
-                Значение должно быть больше 0
-              </p>
-            )}
-            {hasCtrError && (
-              <p className="text-xs text-red-500 mt-1" data-testid="value-error">
-                CTR не может быть больше 100%
-              </p>
-            )}
-          </div>
+              {hasCtrError && (
+                <p className="text-xs text-red-500 mt-1" data-testid="value-error">
+                  CTR не может быть больше 100%
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Time window (only for clicks_no_leads) */}
