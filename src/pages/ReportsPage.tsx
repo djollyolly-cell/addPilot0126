@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react';
-import { useAction } from 'convex/react';
+import { useState, useCallback, useEffect } from 'react';
+import { useAction, useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Id } from '../../convex/_generated/dataModel';
@@ -12,6 +12,8 @@ import {
   ChevronDown,
   AlertCircle,
   Search,
+  ChevronsDownUp,
+  ChevronsUpDown,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -93,10 +95,24 @@ export function ReportsPage() {
 
   const [dateFrom, setDateFrom] = useState(weekAgoStr());
   const [dateTo, setDateTo] = useState(todayStr());
+  const [selectedAccountId, setSelectedAccountId] = useState<string>('all');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<ReportData | null>(null);
   const [expandedCampaigns, setExpandedCampaigns] = useState<Set<number>>(new Set());
+
+  // Fetch user's ad accounts
+  const accounts = useQuery(
+    api.adAccounts.list,
+    userId ? { userId } : 'skip'
+  );
+
+  // Auto-select first account if only one
+  useEffect(() => {
+    if (accounts && accounts.length === 1 && selectedAccountId === 'all') {
+      setSelectedAccountId(accounts[0]._id);
+    }
+  }, [accounts, selectedAccountId]);
 
   const fetchReport = useAction(api.reports.fetchReport);
 
@@ -114,17 +130,23 @@ export function ReportsPage() {
     setError(null);
     setLoading(true);
     try {
-      const data = await fetchReport({ userId, dateFrom, dateTo });
+      const data = await fetchReport({
+        userId,
+        dateFrom,
+        dateTo,
+        accountId: selectedAccountId !== 'all'
+          ? (selectedAccountId as Id<'adAccounts'>)
+          : undefined,
+      });
       setReport(data as ReportData);
-      // Auto-expand all campaigns
-      const ids = new Set((data as ReportData).campaigns.map((c: CampaignReport) => c.id));
-      setExpandedCampaigns(ids);
+      // Default: campaign-level view (collapsed)
+      setExpandedCampaigns(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки');
     } finally {
       setLoading(false);
     }
-  }, [userId, dateFrom, dateTo, fetchReport]);
+  }, [userId, dateFrom, dateTo, selectedAccountId, fetchReport]);
 
   const toggleCampaign = (id: number) => {
     setExpandedCampaigns((prev) => {
@@ -172,10 +194,28 @@ export function ReportsPage() {
         </p>
       </div>
 
-      {/* Date picker + fetch button */}
+      {/* Account selector + Date picker + fetch button */}
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-wrap items-end gap-4">
+            {accounts && accounts.length > 1 && (
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-muted-foreground">Кабинет</label>
+                <select
+                  value={selectedAccountId}
+                  onChange={(e) => setSelectedAccountId(e.target.value)}
+                  className="block px-3 py-2 border border-border rounded-lg text-sm bg-background"
+                  data-testid="report-account-select"
+                >
+                  <option value="all">Все кабинеты</option>
+                  {accounts.map((acc) => (
+                    <option key={acc._id} value={acc._id}>
+                      {acc.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">Дата начала</label>
               <input
@@ -238,9 +278,40 @@ export function ReportsPage() {
       {report && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-lg">
-              Статистика за {report.dateFrom} — {report.dateTo}
-            </CardTitle>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-lg">
+                  Статистика за {report.dateFrom} — {report.dateTo}
+                </CardTitle>
+                {accounts && selectedAccountId !== 'all' && (
+                  <p className="text-sm text-muted-foreground mt-0.5">
+                    {accounts.find((a) => a._id === selectedAccountId)?.name}
+                  </p>
+                )}
+              </div>
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs gap-1 text-muted-foreground"
+                  onClick={() => setExpandedCampaigns(new Set(report.campaigns.map((c) => c.id)))}
+                  data-testid="expand-all"
+                >
+                  <ChevronsUpDown className="w-3.5 h-3.5" />
+                  Все
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs gap-1 text-muted-foreground"
+                  onClick={() => setExpandedCampaigns(new Set())}
+                  data-testid="collapse-all"
+                >
+                  <ChevronsDownUp className="w-3.5 h-3.5" />
+                  Свернуть
+                </Button>
+              </div>
+            </div>
           </CardHeader>
           <CardContent>
             {report.campaigns.length === 0 ? (

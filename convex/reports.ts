@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action } from "./_generated/server";
+import { action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 // ─── myTarget API helper (local copy — callMtApi is not exported from vkApi.ts) ───
@@ -89,6 +89,11 @@ interface MtStatRow {
 }
 
 interface MtStatItem {
+  id: number;
+  rows: MtStatRow[];
+}
+
+interface MtCampaignStatItem {
   id: number;
   rows: MtStatRow[];
 }
@@ -215,6 +220,7 @@ export const fetchReport = action({
     userId: v.id("users"),
     dateFrom: v.string(),
     dateTo: v.string(),
+    accountId: v.optional(v.id("adAccounts")),
   },
   handler: async (ctx, args): Promise<{ campaigns: CampaignReport[]; dateFrom: string; dateTo: string }> => {
     // Get valid VK Ads token (auto-refreshes if expired)
@@ -222,6 +228,16 @@ export const fetchReport = action({
       internal.auth.getValidVkAdsToken,
       { userId: args.userId }
     );
+
+    // If accountId provided, get its campaign IDs from DB for filtering
+    let accountCampaignIds: Set<number> | null = null;
+    if (args.accountId) {
+      const dbCampaigns = await ctx.runQuery(
+        internal.reports.getCampaignsByAccount,
+        { accountId: args.accountId }
+      );
+      accountCampaignIds = new Set(dbCampaigns.map((c: { vkCampaignId: string }) => Number(c.vkCampaignId)));
+    }
 
     // Fetch campaigns, banners, and lead counts in parallel
     const [campaignsData, bannersData] = await Promise.all([
@@ -237,8 +253,13 @@ export const fetchReport = action({
       ),
     ]);
 
-    const campaigns = campaignsData.items || [];
-    const banners = bannersData.items || [];
+    // Filter by account if specified
+    let campaigns = campaignsData.items || [];
+    let banners = bannersData.items || [];
+    if (accountCampaignIds) {
+      campaigns = campaigns.filter((c) => accountCampaignIds!.has(c.id));
+      banners = banners.filter((b) => accountCampaignIds!.has(b.campaign_id));
+    }
 
     if (banners.length === 0) {
       // No banners — return campaigns with zero metrics
@@ -263,9 +284,10 @@ export const fetchReport = action({
 
     // Fetch banner-level statistics for the period
     const bannerIds = banners.map((b) => String(b.id)).join(",");
+    const campaignIds = campaigns.map((c) => String(c.id)).join(",");
 
-    // Fetch stats and lead counts in parallel
-    const [statsData, leadCounts] = await Promise.all([
+    // Fetch banner stats, campaign stats, and lead counts in parallel
+    const [statsData, campaignStatsData, leadCounts] = await Promise.all([
       callMtApi<{ items: MtStatItem[] }>(
         "statistics/banners/day.json",
         accessToken,
@@ -276,15 +298,33 @@ export const fetchReport = action({
           metrics: "base,events",
         }
       ),
+      callMtApi<{ items: MtCampaignStatItem[] }>(
+        "statistics/campaigns/day.json",
+        accessToken,
+        {
+          id: campaignIds,
+          date_from: args.dateFrom,
+          date_to: args.dateTo,
+          metrics: "base,events",
+        }
+      ),
       fetchLeadCounts(accessToken, args.dateFrom, args.dateTo),
     ]);
 
     const statItems = statsData.items || [];
+    const campaignStatItems = campaignStatsData.items || [];
 
     // Build a map: bannerId -> stat rows
     const statsMap = new Map<number, MtStatRow[]>();
     for (const item of statItems) {
       statsMap.set(item.id, item.rows || []);
+    }
+
+    // Build a map: campaignId -> aggregated campaign stats
+    const campaignStatsMap = new Map<number, { impressions: number; clicks: number; spent: number; leads: number }>();
+    for (const item of campaignStatItems) {
+      const agg = aggregateBannerStats(item.rows || []);
+      campaignStatsMap.set(item.id, agg);
     }
 
     // Build a map: campaignId -> banners
@@ -301,12 +341,9 @@ export const fetchReport = action({
     for (const campaign of campaigns) {
       const campBanners = campaignBannersMap.get(campaign.id) || [];
 
-      let campImpressions = 0;
-      let campClicks = 0;
-      let campSpent = 0;
-      let campLeads = 0;
-
+      // Build banner reports
       const bannerReports: BannerReport[] = [];
+      let bannerLeadsTotal = 0;
 
       for (const banner of campBanners) {
         const rows = statsMap.get(banner.id) || [];
@@ -330,12 +367,17 @@ export const fetchReport = action({
           cpl: derived.cpl,
         });
 
-        // Accumulate campaign totals from banners
-        campImpressions += agg.impressions;
-        campClicks += agg.clicks;
-        campSpent += agg.spent;
-        campLeads += finalLeads;
+        bannerLeadsTotal += finalLeads;
       }
+
+      // Use campaign-level stats from API (more accurate than banner aggregation)
+      const campStats = campaignStatsMap.get(campaign.id);
+      const campImpressions = campStats?.impressions ?? bannerReports.reduce((s, b) => s + b.impressions, 0);
+      const campClicks = campStats?.clicks ?? bannerReports.reduce((s, b) => s + b.clicks, 0);
+      const campSpent = campStats?.spent ?? bannerReports.reduce((s, b) => s + b.spent, 0);
+      // For leads: take max of campaign-level leads and sum of banner leads (with Lead Ads)
+      const campLeadsFromApi = campStats?.leads ?? 0;
+      const campLeads = Math.max(campLeadsFromApi, bannerLeadsTotal);
 
       const campDerived = computeDerived({
         impressions: campImpressions,
@@ -360,6 +402,19 @@ export const fetchReport = action({
     }
 
     return { campaigns: result, dateFrom: args.dateFrom, dateTo: args.dateTo };
+  },
+});
+
+// ─── Internal queries ────────────────────────────────────────────────
+
+/** Get campaigns belonging to a specific ad account (for filtering reports). */
+export const getCampaignsByAccount = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("campaigns")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .collect();
   },
 });
 
