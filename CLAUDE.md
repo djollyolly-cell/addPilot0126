@@ -32,7 +32,7 @@ Detailed rules are in `.claude/rules/`:
 | `layout-and-navigation.md` | Sidebar, mobile nav, page structure, grid patterns |
 | `frontend-patterns.md` | React patterns, hooks, forms, routing, formatting |
 | `convex-patterns.md` | Backend functions, queries, mutations, VK API, rule engine |
-| `database-schema.md` | All 14 tables with fields, indexes, conventions |
+| `database-schema.md` | All 16 tables with fields, indexes, conventions |
 | `deploy-and-testing.md` | Deploy flow, servers, testing commands, env vars |
 
 ## Critical Conventions
