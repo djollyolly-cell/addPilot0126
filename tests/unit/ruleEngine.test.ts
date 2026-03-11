@@ -269,21 +269,16 @@ describe("evaluateCondition", () => {
 // ═══════════════════════════════════════════════════════════
 
 describe("calculateSavings", () => {
-  it("calculates savings correctly", () => {
-    // 10 rub/min * 120 min = 1200 rub
-    expect(calculateSavings(10, 120)).toBe(1200);
+  it("returns spentToday as saved amount", () => {
+    expect(calculateSavings(1500)).toBe(1500);
   });
 
-  it("returns 0 when spending rate is 0", () => {
-    expect(calculateSavings(0, 120)).toBe(0);
+  it("returns 0 when spending is 0", () => {
+    expect(calculateSavings(0)).toBe(0);
   });
 
-  it("returns 0 when no minutes remaining", () => {
-    expect(calculateSavings(10, 0)).toBe(0);
-  });
-
-  it("returns 0 when negative spending rate", () => {
-    expect(calculateSavings(-5, 120)).toBe(0);
+  it("returns 0 when negative spending", () => {
+    expect(calculateSavings(-5)).toBe(0);
   });
 });
 

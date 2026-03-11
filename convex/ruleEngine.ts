@@ -102,20 +102,18 @@ export function evaluateCondition(
 }
 
 /**
- * Calculate projected savings if ad is stopped now.
- * @param spentPerMinute - current spending rate (rub/min)
- * @param minutesRemaining - minutes until end of work day
+ * Calculate savings when ad is stopped.
+ * Uses spentToday as a conservative real estimate —
+ * we stopped the ad, so at minimum we prevented continued spending.
+ * @param spentToday - amount already spent today (real data)
  */
-export function calculateSavings(
-  spentPerMinute: number,
-  minutesRemaining: number
-): number {
-  if (spentPerMinute <= 0 || minutesRemaining <= 0) return 0;
-  return spentPerMinute * minutesRemaining;
+export function calculateSavings(spentToday: number): number {
+  return Math.max(0, spentToday);
 }
 
 /**
  * Get minutes remaining until 18:00 today.
+ * @deprecated No longer used for savings calculation, kept for backward compatibility.
  */
 export function minutesUntilEndOfDay(now: Date = new Date()): number {
   const endOfDay = new Date(now);
@@ -704,28 +702,51 @@ export const getTopAds = query({
       )
       .collect();
 
-    // Aggregate by adId
+    // Aggregate by adId, dedup by (adId, date) — take max per day
     const byAd: Record<
       string,
-      { adName: string; totalSaved: number; totalSpent: number; triggers: number }
+      {
+        adName: string;
+        triggers: number;
+        // Per-date max values to avoid double-counting when multiple rules fire on same ad same day
+        byDate: Record<string, { maxSaved: number; maxSpent: number }>;
+      }
     > = {};
 
     for (const log of logs) {
       if (!byAd[log.adId]) {
         byAd[log.adId] = {
           adName: log.adName,
-          totalSaved: 0,
-          totalSpent: 0,
           triggers: 0,
+          byDate: {},
         };
       }
-      byAd[log.adId].totalSaved += log.savedAmount;
-      byAd[log.adId].totalSpent += log.metricsSnapshot.spent;
       byAd[log.adId].triggers += 1;
+
+      // Extract date string from createdAt timestamp for dedup
+      const dateKey = new Date(log.createdAt).toISOString().slice(0, 10);
+      const dayEntry = byAd[log.adId].byDate[dateKey];
+      if (!dayEntry) {
+        byAd[log.adId].byDate[dateKey] = {
+          maxSaved: log.savedAmount,
+          maxSpent: log.metricsSnapshot.spent,
+        };
+      } else {
+        dayEntry.maxSaved = Math.max(dayEntry.maxSaved, log.savedAmount);
+        dayEntry.maxSpent = Math.max(dayEntry.maxSpent, log.metricsSnapshot.spent);
+      }
     }
 
     return Object.entries(byAd)
-      .map(([adId, data]) => ({ adId, ...data }))
+      .map(([adId, data]) => {
+        let totalSaved = 0;
+        let totalSpent = 0;
+        for (const day of Object.values(data.byDate)) {
+          totalSaved += day.maxSaved;
+          totalSpent += day.maxSpent;
+        }
+        return { adId, adName: data.adName, totalSaved, totalSpent, triggers: data.triggers };
+      })
       .sort((a, b) => b.totalSaved - a.totalSaved)
       .slice(0, limit);
   },
@@ -749,11 +770,30 @@ export const getROI = query({
       )
       .collect();
 
+    // Dedup by (adId, date): take max spent and max savedAmount per day per ad
+    // This prevents double-counting when multiple rules fire on the same ad the same day
+    const byAdDate: Record<string, { maxSaved: number; maxSpent: number }> = {};
+
+    for (const log of logs) {
+      const dateKey = new Date(log.createdAt).toISOString().slice(0, 10);
+      const key = `${log.adId}:${dateKey}`;
+      const entry = byAdDate[key];
+      if (!entry) {
+        byAdDate[key] = {
+          maxSaved: log.savedAmount,
+          maxSpent: log.metricsSnapshot.spent,
+        };
+      } else {
+        entry.maxSaved = Math.max(entry.maxSaved, log.savedAmount);
+        entry.maxSpent = Math.max(entry.maxSpent, log.metricsSnapshot.spent);
+      }
+    }
+
     let totalSaved = 0;
     let totalSpent = 0;
-    for (const log of logs) {
-      totalSaved += log.savedAmount;
-      totalSpent += log.metricsSnapshot.spent;
+    for (const entry of Object.values(byAdDate)) {
+      totalSaved += entry.maxSaved;
+      totalSpent += entry.maxSpent;
     }
 
     const roi = totalSpent > 0 ? (totalSaved / totalSpent) * 100 : 0;
@@ -1205,20 +1245,9 @@ export const checkAllRules = internalAction({
                 }
               }
 
-              // Calculate savings using today's metric if available
+              // Calculate savings: use spentToday as conservative real estimate
               const spentToday = todayMetric?.spent ?? 0;
-              const now = new Date();
-              const minsLeft = minutesUntilEndOfDay(now);
-              const hoursElapsed =
-                now.getHours() + now.getMinutes() / 60;
-              const spentPerMinute =
-                hoursElapsed > 0
-                  ? spentToday / (hoursElapsed * 60)
-                  : 0;
-              const savedAmount = calculateSavings(
-                spentPerMinute,
-                minsLeft
-              );
+              const savedAmount = calculateSavings(spentToday);
 
               // Determine action type
               const actionType:

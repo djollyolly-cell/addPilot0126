@@ -196,22 +196,17 @@ describe("ruleEngine", () => {
   // Sprint 8 DoD #5: calculateSavings
   // ═══════════════════════════════════════════════════════════
 
-  test("S8-DoD#5: calculateSavings = 100rub/min * 360min = 36000rub", () => {
-    const savings = calculateSavings(100, 360);
-    expect(savings).toBe(36000);
+  test("S8-DoD#5: calculateSavings returns spentToday as saved amount", () => {
+    const savings = calculateSavings(1500);
+    expect(savings).toBe(1500);
   });
 
-  test("calculateSavings returns 0 for zero spend rate", () => {
-    expect(calculateSavings(0, 360)).toBe(0);
-  });
-
-  test("calculateSavings returns 0 for zero minutes remaining", () => {
-    expect(calculateSavings(100, 0)).toBe(0);
+  test("calculateSavings returns 0 for zero spent", () => {
+    expect(calculateSavings(0)).toBe(0);
   });
 
   test("calculateSavings returns 0 for negative inputs", () => {
-    expect(calculateSavings(-10, 360)).toBe(0);
-    expect(calculateSavings(100, -60)).toBe(0);
+    expect(calculateSavings(-10)).toBe(0);
   });
 
   test("minutesUntilEndOfDay at 12:00 returns 360", () => {
