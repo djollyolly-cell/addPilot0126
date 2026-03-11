@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Check Convex connection', async ({ page }) => {
   const consoleMessages: string[] = [];

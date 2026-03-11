@@ -20,6 +20,7 @@ global.fetch = vi.fn();
 
 // Mock console.error to catch React warnings
 const originalError = console.error;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 console.error = (...args: any[]) => {
   if (
     typeof args[0] === 'string' &&
