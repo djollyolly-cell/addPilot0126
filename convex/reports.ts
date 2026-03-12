@@ -61,6 +61,13 @@ interface MtCampaignRaw {
   objective: string;
   budget_limit: string;
   budget_limit_day: string;
+  user_id?: number;
+}
+
+interface MtUserInfo {
+  id: number;
+  username: string;
+  status: string;
 }
 
 interface MtBannerRaw {
@@ -105,11 +112,11 @@ interface BannerReport {
   cpl: number;
 }
 
-interface CampaignReport {
+// Группа объявлений (myTarget campaign = VK Ads ad group)
+interface GroupReport {
   id: number;
   name: string;
   status: string;
-  objective: string;
   impressions: number;
   clicks: number;
   spent: number;
@@ -117,6 +124,32 @@ interface CampaignReport {
   ctr: number;
   cpl: number;
   banners: BannerReport[];
+}
+
+// Кампания (grouped by objective)
+interface CampaignReport {
+  objective: string;
+  objectiveLabel: string;
+  groups: GroupReport[];
+  impressions: number;
+  clicks: number;
+  spent: number;
+  leads: number;
+  ctr: number;
+  cpl: number;
+}
+
+// Кабинет
+interface AccountReport {
+  id: number;
+  name: string;
+  campaigns: CampaignReport[];
+  impressions: number;
+  clicks: number;
+  spent: number;
+  leads: number;
+  ctr: number;
+  cpl: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -182,7 +215,7 @@ async function fetchAccountData(
   // Fetch campaigns + banners (with pagination for banners)
   const campaignsData = await callMtApi<{ items: MtCampaignRaw[]; count: number }>(
     "campaigns.json", accessToken,
-    { fields: "id,name,status,objective,budget_limit,budget_limit_day", limit: "250" }
+    { fields: "id,name,status,objective,budget_limit,budget_limit_day,user_id", limit: "250" }
   );
   const campaigns = campaignsData.items || [];
 
@@ -239,9 +272,31 @@ async function fetchAccountData(
   return { campaigns, banners, statsMap, campaignStatsMap, leadCounts };
 }
 
+// ─── Objective labels ────────────────────────────────────────────────
+
+const OBJECTIVE_LABELS: Record<string, string> = {
+  "traffic": "Трафик",
+  "conversions": "Конверсии",
+  "reach": "Охват",
+  "video_views": "Просмотры видео",
+  "messages": "Сообщения",
+  "lead_generation": "Лидогенерация",
+  "engagement": "Вовлечённость",
+  "app_installs": "Установки приложений",
+  "product_sales": "Продажи товаров",
+  "awareness": "Узнаваемость",
+  "promo": "Продвижение",
+  "special": "Специальный",
+};
+
+function getObjectiveLabel(objective: string): string {
+  if (!objective) return "Без цели";
+  return OBJECTIVE_LABELS[objective] || objective;
+}
+
 // ─── Build report from fetched data ──────────────────────────────────
 
-function buildCampaignReports(
+function buildGroupReports(
   campaigns: MtCampaignRaw[],
   banners: MtBannerRaw[],
   statsMap: Map<number, MtStatRow[]>,
@@ -256,7 +311,8 @@ function buildCampaignReports(
     campaignBannersMap.set(banner.campaign_id, list);
   }
 
-  const result: CampaignReport[] = [];
+  // Build group reports (1 myTarget campaign = 1 group)
+  const groupReports: Array<{ objective: string; group: GroupReport }> = [];
 
   for (const campaign of campaigns) {
     const campBanners = campaignBannersMap.get(campaign.id) || [];
@@ -284,31 +340,61 @@ function buildCampaignReports(
       bannerLeadsTotal += finalLeads;
     }
 
-    // Campaign-level stats from API (more accurate than banner aggregation)
     const campStats = campaignStatsMap.get(campaign.id);
-    const campImpressions = campStats?.impressions ?? bannerReports.reduce((s, b) => s + b.impressions, 0);
-    const campClicks = campStats?.clicks ?? bannerReports.reduce((s, b) => s + b.clicks, 0);
-    const campSpent = campStats?.spent ?? bannerReports.reduce((s, b) => s + b.spent, 0);
-    const campLeadsFromApi = campStats?.leads ?? 0;
-    const campLeads = Math.max(campLeadsFromApi, bannerLeadsTotal);
+    const grpImpressions = campStats?.impressions ?? bannerReports.reduce((s, b) => s + b.impressions, 0);
+    const grpClicks = campStats?.clicks ?? bannerReports.reduce((s, b) => s + b.clicks, 0);
+    const grpSpent = campStats?.spent ?? bannerReports.reduce((s, b) => s + b.spent, 0);
+    const grpLeadsFromApi = campStats?.leads ?? 0;
+    const grpLeads = Math.max(grpLeadsFromApi, bannerLeadsTotal);
 
-    const campDerived = computeDerived({
-      impressions: campImpressions, clicks: campClicks,
-      spent: campSpent, leads: campLeads,
+    const grpDerived = computeDerived({
+      impressions: grpImpressions, clicks: grpClicks,
+      spent: grpSpent, leads: grpLeads,
     });
 
-    result.push({
-      id: campaign.id,
-      name: campaign.name,
-      status: campaign.status,
+    groupReports.push({
       objective: campaign.objective || "",
-      impressions: campImpressions,
-      clicks: campClicks,
-      spent: Math.round(campSpent * 100) / 100,
-      leads: campLeads,
-      ctr: campDerived.ctr,
-      cpl: campDerived.cpl,
-      banners: bannerReports,
+      group: {
+        id: campaign.id,
+        name: campaign.name,
+        status: campaign.status,
+        impressions: grpImpressions,
+        clicks: grpClicks,
+        spent: Math.round(grpSpent * 100) / 100,
+        leads: grpLeads,
+        ctr: grpDerived.ctr,
+        cpl: grpDerived.cpl,
+        banners: bannerReports,
+      },
+    });
+  }
+
+  // Group by objective → CampaignReport
+  const objectiveMap = new Map<string, GroupReport[]>();
+  for (const item of groupReports) {
+    const list = objectiveMap.get(item.objective) || [];
+    list.push(item.group);
+    objectiveMap.set(item.objective, list);
+  }
+
+  const result: CampaignReport[] = [];
+  for (const [objective, groups] of objectiveMap.entries()) {
+    const impressions = groups.reduce((s, g) => s + g.impressions, 0);
+    const clicks = groups.reduce((s, g) => s + g.clicks, 0);
+    const spent = groups.reduce((s, g) => s + g.spent, 0);
+    const leads = groups.reduce((s, g) => s + g.leads, 0);
+    const derived = computeDerived({ impressions, clicks, spent, leads });
+
+    result.push({
+      objective,
+      objectiveLabel: getObjectiveLabel(objective),
+      groups,
+      impressions,
+      clicks,
+      spent: Math.round(spent * 100) / 100,
+      leads,
+      ctr: derived.ctr,
+      cpl: derived.cpl,
     });
   }
 
@@ -323,21 +409,44 @@ export const fetchReport = action({
     dateFrom: v.string(),
     dateTo: v.string(),
   },
-  handler: async (ctx, args): Promise<{ campaigns: CampaignReport[]; dateFrom: string; dateTo: string }> => {
+  handler: async (ctx, args): Promise<{
+    accounts: AccountReport[];
+    dateFrom: string;
+    dateTo: string;
+  }> => {
     // Always use user-level token (auto-refreshed, works for all accounts)
     const accessToken = await ctx.runAction(
       internal.auth.getValidVkAdsToken,
       { userId: args.userId }
     );
 
-    // Fetch all data from VK API (single token returns all campaigns/banners)
-    const data = await fetchAccountData(accessToken, args.dateFrom, args.dateTo);
+    // Fetch account info + all data from VK API
+    const [userInfo, data] = await Promise.all([
+      callMtApi<MtUserInfo>("user.json", accessToken),
+      fetchAccountData(accessToken, args.dateFrom, args.dateTo),
+    ]);
 
-    const campaignReports = buildCampaignReports(
+    const campaignReports = buildGroupReports(
       data.campaigns, data.banners, data.statsMap, data.campaignStatsMap, data.leadCounts
     );
 
-    return { campaigns: campaignReports, dateFrom: args.dateFrom, dateTo: args.dateTo };
+    // Build account-level report
+    const impressions = campaignReports.reduce((s, c) => s + c.impressions, 0);
+    const clicks = campaignReports.reduce((s, c) => s + c.clicks, 0);
+    const spent = Math.round(campaignReports.reduce((s, c) => s + c.spent, 0) * 100) / 100;
+    const leads = campaignReports.reduce((s, c) => s + c.leads, 0);
+    const derived = computeDerived({ impressions, clicks, spent, leads });
+
+    const accountReport: AccountReport = {
+      id: userInfo.id,
+      name: userInfo.username || `Кабинет ${userInfo.id}`,
+      campaigns: campaignReports,
+      impressions, clicks, spent, leads,
+      ctr: derived.ctr,
+      cpl: derived.cpl,
+    };
+
+    return { accounts: [accountReport], dateFrom: args.dateFrom, dateTo: args.dateTo };
   },
 });
 

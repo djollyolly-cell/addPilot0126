@@ -14,8 +14,12 @@ import {
   Search,
   ChevronsDownUp,
   ChevronsUpDown,
+  Building2,
+  Target,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+
+// ─── Types (match backend) ──────────────────────────────────────────
 
 interface BannerReport {
   id: number;
@@ -29,11 +33,10 @@ interface BannerReport {
   cpl: number;
 }
 
-interface CampaignReport {
+interface GroupReport {
   id: number;
   name: string;
   status: string;
-  objective: string;
   impressions: number;
   clicks: number;
   spent: number;
@@ -43,15 +46,40 @@ interface CampaignReport {
   banners: BannerReport[];
 }
 
-interface ReportData {
+interface CampaignReport {
+  objective: string;
+  objectiveLabel: string;
+  groups: GroupReport[];
+  impressions: number;
+  clicks: number;
+  spent: number;
+  leads: number;
+  ctr: number;
+  cpl: number;
+}
+
+interface AccountReport {
+  id: number;
+  name: string;
   campaigns: CampaignReport[];
+  impressions: number;
+  clicks: number;
+  spent: number;
+  leads: number;
+  ctr: number;
+  cpl: number;
+}
+
+interface ReportData {
+  accounts: AccountReport[];
   dateFrom: string;
   dateTo: string;
 }
 
+// ─── Helpers ────────────────────────────────────────────────────────
+
 function todayStr(): string {
-  const d = new Date();
-  return d.toISOString().slice(0, 10);
+  return new Date().toISOString().slice(0, 10);
 }
 
 function weekAgoStr(): string {
@@ -89,6 +117,27 @@ function statusBadge(status: string) {
   );
 }
 
+// ─── Stat row (reusable) ────────────────────────────────────────────
+
+function StatCells({ impressions, clicks, ctr, spent, leads, cpl, muted }: {
+  impressions: number; clicks: number; ctr: number;
+  spent: number; leads: number; cpl: number; muted?: boolean;
+}) {
+  const cls = muted ? 'text-muted-foreground' : '';
+  return (
+    <>
+      <td className={cn('py-2 text-right tabular-nums', cls)}>{formatNumber(impressions)}</td>
+      <td className={cn('py-2 text-right tabular-nums', cls)}>{formatNumber(clicks)}</td>
+      <td className={cn('py-2 text-right tabular-nums', cls)}>{formatPercent(ctr)}</td>
+      <td className={cn('py-2 text-right tabular-nums', cls)}>{formatCurrency(spent)}</td>
+      <td className={cn('py-2 text-right tabular-nums', cls)}>{formatNumber(leads)}</td>
+      <td className={cn('py-2 text-right tabular-nums', cls)}>{cpl > 0 ? formatCurrency(cpl) : '—'}</td>
+    </>
+  );
+}
+
+// ─── Main component ─────────────────────────────────────────────────
+
 export function ReportsPage() {
   const { user } = useAuth();
   const userId = user?.userId as Id<'users'> | undefined;
@@ -98,28 +147,31 @@ export function ReportsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<ReportData | null>(null);
-  const [expandedCampaigns, setExpandedCampaigns] = useState<Set<number>>(new Set());
+
+  // Expanded state per level
+  const [expandedAccounts, setExpandedAccounts] = useState<Set<number>>(new Set());
+  const [expandedCampaigns, setExpandedCampaigns] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
 
   const fetchReport = useAction(api.reports.fetchReport);
 
   const handleFetch = useCallback(async () => {
     if (!userId) return;
-    if (!dateFrom || !dateTo) {
-      setError('Выберите даты');
-      return;
-    }
-    if (dateFrom > dateTo) {
-      setError('Дата начала не может быть позже даты окончания');
-      return;
-    }
+    if (!dateFrom || !dateTo) { setError('Выберите даты'); return; }
+    if (dateFrom > dateTo) { setError('Дата начала не может быть позже даты окончания'); return; }
 
     setError(null);
     setLoading(true);
     try {
       const data = await fetchReport({ userId, dateFrom, dateTo });
-      setReport(data as ReportData);
-      // Default: campaign-level view (collapsed)
-      setExpandedCampaigns(new Set());
+      const rd = data as ReportData;
+      setReport(rd);
+      // Default: accounts + campaigns expanded, groups collapsed
+      setExpandedAccounts(new Set(rd.accounts.map((a) => a.id)));
+      setExpandedCampaigns(new Set(
+        rd.accounts.flatMap((a) => a.campaigns.map((c) => `${a.id}:${c.objective}`))
+      ));
+      setExpandedGroups(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки');
     } finally {
@@ -127,30 +179,36 @@ export function ReportsPage() {
     }
   }, [userId, dateFrom, dateTo, fetchReport]);
 
-  const toggleCampaign = (id: number) => {
-    setExpandedCampaigns((prev) => {
+  const toggle = <T,>(setter: React.Dispatch<React.SetStateAction<Set<T>>>, id: T) => {
+    setter((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
   };
 
   // Totals
   const totals = report
-    ? report.campaigns.reduce(
-        (acc, c) => ({
-          impressions: acc.impressions + c.impressions,
-          clicks: acc.clicks + c.clicks,
-          spent: acc.spent + c.spent,
-          leads: acc.leads + c.leads,
+    ? report.accounts.reduce(
+        (acc, a) => ({
+          groups: acc.groups + a.campaigns.reduce((s, c) => s + c.groups.length, 0),
+          impressions: acc.impressions + a.impressions,
+          clicks: acc.clicks + a.clicks,
+          spent: acc.spent + a.spent,
+          leads: acc.leads + a.leads,
         }),
-        { impressions: 0, clicks: 0, spent: 0, leads: 0 }
+        { groups: 0, impressions: 0, clicks: 0, spent: 0, leads: 0 }
       )
     : null;
+
+  // IDs for expand/collapse all
+  const allAccountIds = report ? report.accounts.map((a) => a.id) : [];
+  const allCampaignKeys = report
+    ? report.accounts.flatMap((a) => a.campaigns.map((c) => `${a.id}:${c.objective}`))
+    : [];
+  const allGroupIds = report
+    ? report.accounts.flatMap((a) => a.campaigns.flatMap((c) => c.groups.map((g) => g.id)))
+    : [];
 
   if (!user) {
     return (
@@ -169,11 +227,11 @@ export function ReportsPage() {
           Отчёты VK Ads
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Реальная статистика из рекламного кабинета VK
+          Кабинет → Кампания → Группа → Объявление
         </p>
       </div>
 
-      {/* Date picker + fetch button */}
+      {/* Date picker */}
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-wrap items-end gap-4">
@@ -199,17 +257,8 @@ export function ReportsPage() {
                 data-testid="report-date-to"
               />
             </div>
-            <Button
-              onClick={handleFetch}
-              disabled={loading}
-              className="gap-2"
-              data-testid="report-fetch"
-            >
-              {loading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : (
-                <Search className="w-4 h-4" />
-              )}
+            <Button onClick={handleFetch} disabled={loading} className="gap-2" data-testid="report-fetch">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
               Загрузить
             </Button>
           </div>
@@ -227,7 +276,7 @@ export function ReportsPage() {
       {/* Summary cards */}
       {totals && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <SummaryCard label="Кампаний" value={String(report!.campaigns.length)} />
+          <SummaryCard label="Групп" value={String(totals.groups)} />
           <SummaryCard label="Показы" value={formatNumber(totals.impressions)} />
           <SummaryCard label="Клики" value={formatNumber(totals.clicks)} />
           <SummaryCard label="Расход" value={formatCurrency(totals.spent)} />
@@ -245,20 +294,26 @@ export function ReportsPage() {
               </CardTitle>
               <div className="flex gap-1">
                 <Button
-                  variant="ghost"
-                  size="sm"
+                  variant="ghost" size="sm"
                   className="text-xs gap-1 text-muted-foreground"
-                  onClick={() => setExpandedCampaigns(new Set(report.campaigns.map((c) => c.id)))}
+                  onClick={() => {
+                    setExpandedAccounts(new Set(allAccountIds));
+                    setExpandedCampaigns(new Set(allCampaignKeys));
+                    setExpandedGroups(new Set(allGroupIds));
+                  }}
                   data-testid="expand-all"
                 >
                   <ChevronsUpDown className="w-3.5 h-3.5" />
                   Все
                 </Button>
                 <Button
-                  variant="ghost"
-                  size="sm"
+                  variant="ghost" size="sm"
                   className="text-xs gap-1 text-muted-foreground"
-                  onClick={() => setExpandedCampaigns(new Set())}
+                  onClick={() => {
+                    setExpandedAccounts(new Set());
+                    setExpandedCampaigns(new Set());
+                    setExpandedGroups(new Set());
+                  }}
                   data-testid="collapse-all"
                 >
                   <ChevronsDownUp className="w-3.5 h-3.5" />
@@ -268,7 +323,7 @@ export function ReportsPage() {
             </div>
           </CardHeader>
           <CardContent>
-            {report.campaigns.length === 0 ? (
+            {report.accounts.length === 0 ? (
               <p className="text-sm text-muted-foreground py-8 text-center">
                 Нет данных за выбранный период
               </p>
@@ -277,7 +332,7 @@ export function ReportsPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
-                      <th className="pb-2 font-medium pl-8">Название</th>
+                      <th className="pb-2 font-medium pl-4">Название</th>
                       <th className="pb-2 font-medium">Статус</th>
                       <th className="pb-2 font-medium text-right">Показы</th>
                       <th className="pb-2 font-medium text-right">Клики</th>
@@ -288,35 +343,32 @@ export function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {report.campaigns.map((campaign) => {
-                      const isExpanded = expandedCampaigns.has(campaign.id);
-                      return (
-                        <CampaignRow
-                          key={campaign.id}
-                          campaign={campaign}
-                          isExpanded={isExpanded}
-                          onToggle={() => toggleCampaign(campaign.id)}
-                        />
-                      );
-                    })}
-                    {/* Totals row */}
+                    {report.accounts.map((account) => (
+                      <AccountSection
+                        key={account.id}
+                        account={account}
+                        expandedAccounts={expandedAccounts}
+                        expandedCampaigns={expandedCampaigns}
+                        expandedGroups={expandedGroups}
+                        onToggleAccount={() => toggle(setExpandedAccounts, account.id)}
+                        onToggleCampaign={(key: string) => toggle(setExpandedCampaigns, key)}
+                        onToggleGroup={(id: number) => toggle(setExpandedGroups, id)}
+                      />
+                    ))}
+                    {/* Totals */}
                     {totals && (
                       <tr className="border-t-2 font-semibold">
-                        <td className="py-3 pl-8">Итого</td>
+                        <td className="py-3 pl-4">Итого</td>
                         <td />
                         <td className="py-3 text-right">{formatNumber(totals.impressions)}</td>
                         <td className="py-3 text-right">{formatNumber(totals.clicks)}</td>
                         <td className="py-3 text-right">
-                          {totals.impressions > 0
-                            ? formatPercent((totals.clicks / totals.impressions) * 100)
-                            : '—'}
+                          {totals.impressions > 0 ? formatPercent((totals.clicks / totals.impressions) * 100) : '—'}
                         </td>
                         <td className="py-3 text-right">{formatCurrency(totals.spent)}</td>
                         <td className="py-3 text-right">{formatNumber(totals.leads)}</td>
                         <td className="py-3 text-right">
-                          {totals.leads > 0
-                            ? formatCurrency(totals.spent / totals.leads)
-                            : '—'}
+                          {totals.leads > 0 ? formatCurrency(totals.spent / totals.leads) : '—'}
                         </td>
                       </tr>
                     )}
@@ -328,7 +380,6 @@ export function ReportsPage() {
         </Card>
       )}
 
-      {/* Loading overlay */}
       {loading && !report && (
         <div className="flex justify-center py-16">
           <Loader2 className="w-8 h-8 animate-spin text-muted-foreground" />
@@ -337,6 +388,8 @@ export function ReportsPage() {
     </div>
   );
 }
+
+// ─── Summary card ───────────────────────────────────────────────────
 
 function SummaryCard({ label, value }: { label: string; value: string }) {
   return (
@@ -349,75 +402,148 @@ function SummaryCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function CampaignRow({
-  campaign,
-  isExpanded,
-  onToggle,
+// ─── Level 1: Кабинет (Account) ─────────────────────────────────────
+
+function AccountSection({
+  account, expandedAccounts, expandedCampaigns, expandedGroups,
+  onToggleAccount, onToggleCampaign, onToggleGroup,
 }: {
-  campaign: CampaignReport;
-  isExpanded: boolean;
-  onToggle: () => void;
+  account: AccountReport;
+  expandedAccounts: Set<number>;
+  expandedCampaigns: Set<string>;
+  expandedGroups: Set<number>;
+  onToggleAccount: () => void;
+  onToggleCampaign: (key: string) => void;
+  onToggleGroup: (id: number) => void;
 }) {
+  const isExpanded = expandedAccounts.has(account.id);
   return (
     <>
-      {/* Campaign row */}
       <tr
-        className="border-b cursor-pointer hover:bg-muted/50 transition-colors"
-        onClick={onToggle}
-        data-testid={`campaign-row-${campaign.id}`}
+        className="border-b cursor-pointer hover:bg-primary/5 transition-colors bg-muted/20"
+        onClick={onToggleAccount}
+        data-testid={`account-row-${account.id}`}
       >
-        <td className="py-2.5 font-medium">
-          <div className="flex items-center gap-1">
-            {isExpanded ? (
-              <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
-            ) : (
-              <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />
-            )}
-            <span className="truncate max-w-[250px]">{campaign.name}</span>
+        <td className="py-3 font-semibold">
+          <div className="flex items-center gap-2 pl-1">
+            {isExpanded
+              ? <ChevronDown className="w-4 h-4 text-primary shrink-0" />
+              : <ChevronRight className="w-4 h-4 text-primary shrink-0" />}
+            <Building2 className="w-4 h-4 text-primary shrink-0" />
+            <span className="truncate max-w-[220px]">{account.name}</span>
+            <span className="text-xs text-muted-foreground font-normal ml-1">
+              ({account.campaigns.length} кампаний)
+            </span>
           </div>
         </td>
-        <td className="py-2.5">{statusBadge(campaign.status)}</td>
-        <td className="py-2.5 text-right tabular-nums">{formatNumber(campaign.impressions)}</td>
-        <td className="py-2.5 text-right tabular-nums">{formatNumber(campaign.clicks)}</td>
-        <td className="py-2.5 text-right tabular-nums">{formatPercent(campaign.ctr)}</td>
-        <td className="py-2.5 text-right tabular-nums">{formatCurrency(campaign.spent)}</td>
-        <td className="py-2.5 text-right tabular-nums">{formatNumber(campaign.leads)}</td>
-        <td className="py-2.5 text-right tabular-nums">
-          {campaign.cpl > 0 ? formatCurrency(campaign.cpl) : '—'}
-        </td>
+        <td className="py-3" />
+        <StatCells {...account} />
       </tr>
-      {/* Banner rows */}
-      {isExpanded &&
-        campaign.banners.map((banner) => (
-          <tr
-            key={banner.id}
-            className="border-b bg-muted/30"
-            data-testid={`banner-row-${banner.id}`}
-          >
-            <td className="py-2 pl-12 text-muted-foreground">
-              <span className="truncate max-w-[220px] inline-block">{banner.name}</span>
-            </td>
-            <td className="py-2">{statusBadge(banner.status)}</td>
-            <td className="py-2 text-right tabular-nums text-muted-foreground">
-              {formatNumber(banner.impressions)}
-            </td>
-            <td className="py-2 text-right tabular-nums text-muted-foreground">
-              {formatNumber(banner.clicks)}
-            </td>
-            <td className="py-2 text-right tabular-nums text-muted-foreground">
-              {formatPercent(banner.ctr)}
-            </td>
-            <td className="py-2 text-right tabular-nums text-muted-foreground">
-              {formatCurrency(banner.spent)}
-            </td>
-            <td className="py-2 text-right tabular-nums text-muted-foreground">
-              {formatNumber(banner.leads)}
-            </td>
-            <td className="py-2 text-right tabular-nums text-muted-foreground">
-              {banner.cpl > 0 ? formatCurrency(banner.cpl) : '—'}
-            </td>
-          </tr>
-        ))}
+      {isExpanded && account.campaigns.map((campaign) => (
+        <CampaignSection
+          key={campaign.objective}
+          accountId={account.id}
+          campaign={campaign}
+          expandedCampaigns={expandedCampaigns}
+          expandedGroups={expandedGroups}
+          onToggleCampaign={onToggleCampaign}
+          onToggleGroup={onToggleGroup}
+        />
+      ))}
+    </>
+  );
+}
+
+// ─── Level 2: Кампания (by objective) ───────────────────────────────
+
+function CampaignSection({
+  accountId, campaign, expandedCampaigns, expandedGroups,
+  onToggleCampaign, onToggleGroup,
+}: {
+  accountId: number;
+  campaign: CampaignReport;
+  expandedCampaigns: Set<string>;
+  expandedGroups: Set<number>;
+  onToggleCampaign: (key: string) => void;
+  onToggleGroup: (id: number) => void;
+}) {
+  const key = `${accountId}:${campaign.objective}`;
+  const isExpanded = expandedCampaigns.has(key);
+  return (
+    <>
+      <tr
+        className="border-b cursor-pointer hover:bg-muted/40 transition-colors"
+        onClick={() => onToggleCampaign(key)}
+        data-testid={`campaign-row-${campaign.objective}`}
+      >
+        <td className="py-2.5 font-medium">
+          <div className="flex items-center gap-1.5 pl-6">
+            {isExpanded
+              ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
+              : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
+            <Target className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+            <span>{campaign.objectiveLabel}</span>
+            <span className="text-xs text-muted-foreground font-normal">
+              ({campaign.groups.length} групп)
+            </span>
+          </div>
+        </td>
+        <td className="py-2.5" />
+        <StatCells {...campaign} />
+      </tr>
+      {isExpanded && campaign.groups.map((group) => (
+        <GroupSection
+          key={group.id}
+          group={group}
+          expandedGroups={expandedGroups}
+          onToggleGroup={onToggleGroup}
+        />
+      ))}
+    </>
+  );
+}
+
+// ─── Level 3: Группа объявлений (myTarget campaign) ─────────────────
+
+function GroupSection({
+  group, expandedGroups, onToggleGroup,
+}: {
+  group: GroupReport;
+  expandedGroups: Set<number>;
+  onToggleGroup: (id: number) => void;
+}) {
+  const isExpanded = expandedGroups.has(group.id);
+  return (
+    <>
+      <tr
+        className="border-b cursor-pointer hover:bg-muted/30 transition-colors"
+        onClick={() => onToggleGroup(group.id)}
+        data-testid={`group-row-${group.id}`}
+      >
+        <td className="py-2">
+          <div className="flex items-center gap-1 pl-12">
+            {isExpanded
+              ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+              : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
+            <span className="truncate max-w-[200px]">{group.name}</span>
+          </div>
+        </td>
+        <td className="py-2">{statusBadge(group.status)}</td>
+        <StatCells {...group} />
+      </tr>
+      {isExpanded && group.banners.map((banner) => (
+        <tr
+          key={banner.id}
+          className="border-b bg-muted/20"
+          data-testid={`banner-row-${banner.id}`}
+        >
+          <td className="py-1.5 pl-20 text-muted-foreground">
+            <span className="truncate max-w-[180px] inline-block text-xs">{banner.name}</span>
+          </td>
+          <td className="py-1.5">{statusBadge(banner.status)}</td>
+          <StatCells {...banner} muted />
+        </tr>
+      ))}
     </>
   );
 }
