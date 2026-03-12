@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react';
-import { useAction, useQuery } from 'convex/react';
+import { useState, useCallback } from 'react';
+import { useAction } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Id } from '../../convex/_generated/dataModel';
@@ -95,24 +95,10 @@ export function ReportsPage() {
 
   const [dateFrom, setDateFrom] = useState(weekAgoStr());
   const [dateTo, setDateTo] = useState(todayStr());
-  const [selectedAccountId, setSelectedAccountId] = useState<string>('all');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<ReportData | null>(null);
   const [expandedCampaigns, setExpandedCampaigns] = useState<Set<number>>(new Set());
-
-  // Fetch user's ad accounts
-  const accounts = useQuery(
-    api.adAccounts.list,
-    userId ? { userId } : 'skip'
-  );
-
-  // Auto-select first account if only one
-  useEffect(() => {
-    if (accounts && accounts.length === 1 && selectedAccountId === 'all') {
-      setSelectedAccountId(accounts[0]._id);
-    }
-  }, [accounts, selectedAccountId]);
 
   const fetchReport = useAction(api.reports.fetchReport);
 
@@ -130,14 +116,7 @@ export function ReportsPage() {
     setError(null);
     setLoading(true);
     try {
-      const data = await fetchReport({
-        userId,
-        dateFrom,
-        dateTo,
-        accountId: selectedAccountId !== 'all'
-          ? (selectedAccountId as Id<'adAccounts'>)
-          : undefined,
-      });
+      const data = await fetchReport({ userId, dateFrom, dateTo });
       setReport(data as ReportData);
       // Default: campaign-level view (collapsed)
       setExpandedCampaigns(new Set());
@@ -146,7 +125,7 @@ export function ReportsPage() {
     } finally {
       setLoading(false);
     }
-  }, [userId, dateFrom, dateTo, selectedAccountId, fetchReport]);
+  }, [userId, dateFrom, dateTo, fetchReport]);
 
   const toggleCampaign = (id: number) => {
     setExpandedCampaigns((prev) => {
@@ -194,28 +173,10 @@ export function ReportsPage() {
         </p>
       </div>
 
-      {/* Account selector + Date picker + fetch button */}
+      {/* Date picker + fetch button */}
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-wrap items-end gap-4">
-            {accounts && accounts.length > 1 && (
-              <div className="space-y-1">
-                <label className="text-xs font-medium text-muted-foreground">Кабинет</label>
-                <select
-                  value={selectedAccountId}
-                  onChange={(e) => setSelectedAccountId(e.target.value)}
-                  className="block px-3 py-2 border border-border rounded-lg text-sm bg-background"
-                  data-testid="report-account-select"
-                >
-                  <option value="all">Все кабинеты</option>
-                  {accounts.map((acc) => (
-                    <option key={acc._id} value={acc._id}>
-                      {acc.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
             <div className="space-y-1">
               <label className="text-xs font-medium text-muted-foreground">Дата начала</label>
               <input
@@ -279,16 +240,9 @@ export function ReportsPage() {
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
-              <div>
-                <CardTitle className="text-lg">
-                  Статистика за {report.dateFrom} — {report.dateTo}
-                </CardTitle>
-                {accounts && selectedAccountId !== 'all' && (
-                  <p className="text-sm text-muted-foreground mt-0.5">
-                    {accounts.find((a) => a._id === selectedAccountId)?.name}
-                  </p>
-                )}
-              </div>
+              <CardTitle className="text-lg">
+                Статистика за {report.dateFrom} — {report.dateTo}
+              </CardTitle>
               <div className="flex gap-1">
                 <Button
                   variant="ghost"

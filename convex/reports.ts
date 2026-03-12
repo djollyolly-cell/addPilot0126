@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalQuery } from "./_generated/server";
+import { action } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 // ─── myTarget API helper (local copy — callMtApi is not exported from vkApi.ts) ───
@@ -317,76 +317,19 @@ export const fetchReport = action({
     userId: v.id("users"),
     dateFrom: v.string(),
     dateTo: v.string(),
-    accountId: v.optional(v.id("adAccounts")),
   },
   handler: async (ctx, args): Promise<{ campaigns: CampaignReport[]; dateFrom: string; dateTo: string }> => {
-    // Get tokens to use
-    const tokens: string[] = [];
+    // Always use user-level token (auto-refreshed, works for all accounts)
+    const accessToken = await ctx.runAction(
+      internal.auth.getValidVkAdsToken,
+      { userId: args.userId }
+    );
 
-    if (args.accountId) {
-      // Specific account — use its own token
-      const token = await ctx.runQuery(internal.reports.getAccountToken, {
-        accountId: args.accountId,
-      });
-      if (token) {
-        tokens.push(token);
-      } else {
-        // Fallback to user-level token
-        tokens.push(await ctx.runAction(internal.auth.getValidVkAdsToken, { userId: args.userId }));
-      }
-    } else {
-      // "All accounts" — collect tokens from all user's accounts
-      const accounts = await ctx.runQuery(internal.reports.getUserAccounts, {
-        userId: args.userId,
-      });
-      for (const acc of accounts) {
-        if (acc.accessToken) tokens.push(acc.accessToken);
-      }
-      // If no account tokens found, fall back to user-level
-      if (tokens.length === 0) {
-        tokens.push(await ctx.runAction(internal.auth.getValidVkAdsToken, { userId: args.userId }));
-      }
-    }
-
-    // Fetch data from each token (each represents one VK Ads account)
-    let allCampaigns: MtCampaignRaw[] = [];
-    let allBanners: MtBannerRaw[] = [];
-    const mergedStatsMap = new Map<number, MtStatRow[]>();
-    const mergedCampaignStatsMap = new Map<number, { impressions: number; clicks: number; spent: number; leads: number }>();
-    let mergedLeadCounts: Record<string, number> = {};
-
-    // Deduplicate tokens (same token shouldn't be fetched twice)
-    const uniqueTokens = [...new Set(tokens)];
-
-    for (const token of uniqueTokens) {
-      try {
-        const data = await fetchAccountData(token, args.dateFrom, args.dateTo);
-        allCampaigns.push(...data.campaigns);
-        allBanners.push(...data.banners);
-        for (const [k, v] of data.statsMap) mergedStatsMap.set(k, v);
-        for (const [k, v] of data.campaignStatsMap) mergedCampaignStatsMap.set(k, v);
-        mergedLeadCounts = { ...mergedLeadCounts, ...data.leadCounts };
-      } catch (err) {
-        console.error(`[reports] Error fetching data: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-
-    // Dedup campaigns by id (in case tokens overlap)
-    const seenCampaignIds = new Set<number>();
-    allCampaigns = allCampaigns.filter((c) => {
-      if (seenCampaignIds.has(c.id)) return false;
-      seenCampaignIds.add(c.id);
-      return true;
-    });
-    const seenBannerIds = new Set<number>();
-    allBanners = allBanners.filter((b) => {
-      if (seenBannerIds.has(b.id)) return false;
-      seenBannerIds.add(b.id);
-      return true;
-    });
+    // Fetch all data from VK API (single token returns all campaigns/banners)
+    const data = await fetchAccountData(accessToken, args.dateFrom, args.dateTo);
 
     const campaignReports = buildCampaignReports(
-      allCampaigns, allBanners, mergedStatsMap, mergedCampaignStatsMap, mergedLeadCounts
+      data.campaigns, data.banners, data.statsMap, data.campaignStatsMap, data.leadCounts
     );
 
     return { campaigns: campaignReports, dateFrom: args.dateFrom, dateTo: args.dateTo };
@@ -395,36 +338,7 @@ export const fetchReport = action({
 
 // ─── Internal queries ────────────────────────────────────────────────
 
-/** Get account's access token */
-export const getAccountToken = internalQuery({
-  args: { accountId: v.id("adAccounts") },
-  handler: async (ctx, args) => {
-    const account = await ctx.db.get(args.accountId);
-    return account?.accessToken ?? null;
-  },
-});
-
-/** Get all accounts for a user */
-export const getUserAccounts = internalQuery({
-  args: { userId: v.id("users") },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("adAccounts")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-      .collect();
-  },
-});
-
-/** Get campaigns belonging to a specific ad account (for filtering reports). */
-export const getCampaignsByAccount = internalQuery({
-  args: { accountId: v.id("adAccounts") },
-  handler: async (ctx, args) => {
-    return await ctx.db
-      .query("campaigns")
-      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
-      .collect();
-  },
-});
+// (Account filtering removed — single VK Ads token returns all data)
 
 // ─── Lead Ads helper ─────────────────────────────────────────────────
 

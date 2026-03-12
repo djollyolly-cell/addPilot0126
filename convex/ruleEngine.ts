@@ -1239,17 +1239,10 @@ export const checkAllRules = internalAction({
               // (base.vk.result) and Lead Ads API before stopping.
               if (rule.type === "clicks_no_leads" && rule.actions.stopAd && metricsSnapshot.leads === 0) {
                 try {
-                  // Use account's own token for API calls
-                  const accountToken = await ctx.runQuery(
-                    internal.ruleEngine.getAccountToken,
-                    { accountId: targetAccountId }
+                  const accessToken = await ctx.runAction(
+                    internal.auth.getValidVkAdsToken,
+                    { userId: account.userId }
                   );
-                  const accessToken = accountToken
-                    ? accountToken
-                    : await ctx.runAction(
-                        internal.auth.getValidVkAdsToken,
-                        { userId: account.userId }
-                      );
 
                   // Check statistics API for vk.result (most reliable source)
                   let freshLeads = 0;
@@ -1338,17 +1331,10 @@ export const checkAllRules = internalAction({
 
               if (rule.actions.stopAd) {
                 try {
-                  // Use account's own token for stopping ads
-                  const accountToken = await ctx.runQuery(
-                    internal.ruleEngine.getAccountToken,
-                    { accountId: targetAccountId }
+                  const accessToken = await ctx.runAction(
+                    internal.auth.getValidVkAdsToken,
+                    { userId: account.userId }
                   );
-                  const accessToken = accountToken
-                    ? accountToken
-                    : await ctx.runAction(
-                        internal.auth.getValidVkAdsToken,
-                        { userId: account.userId }
-                      );
                   await ctx.runAction(api.vkApi.stopAd, {
                     accessToken,
                     adId,
