@@ -307,16 +307,23 @@ export const getMtStatistics = action({
     // If no banner IDs provided, first fetch all banners to get their IDs
     let ids = args.bannerIds;
     if (!ids) {
-      const bannersData = await callMtApi<{ items: MtBanner[]; count: number }>(
-        "banners.json",
-        args.accessToken,
-        { fields: "id" }
-      );
-      const bannerItems = bannersData.items || [];
-      if (bannerItems.length === 0) {
+      let allBanners: MtBanner[] = [];
+      let offset = 0;
+      while (true) {
+        const bannersData = await callMtApi<{ items: MtBanner[]; count: number }>(
+          "banners.json",
+          args.accessToken,
+          { fields: "id", limit: "250", offset: String(offset) }
+        );
+        const items = bannersData.items || [];
+        allBanners = allBanners.concat(items);
+        if (allBanners.length >= bannersData.count || items.length === 0) break;
+        offset += items.length;
+      }
+      if (allBanners.length === 0) {
         return [];
       }
-      ids = bannerItems.map((b: MtBanner) => String(b.id)).join(",");
+      ids = allBanners.map((b: MtBanner) => String(b.id)).join(",");
     }
 
     const data = await callMtApi<{ items: MtStatItem[]; total: any }>(
@@ -499,16 +506,27 @@ export const getMtBanners = action({
   handler: async (_, args): Promise<MtBanner[]> => {
     const params: Record<string, string> = {
       fields: "id,campaign_id,textblocks,status,moderation_status,created,updated",
+      limit: "250",
     };
     if (args.campaignId) {
       params._campaign_id = args.campaignId;
     }
-    const data = await callMtApi<{ items: MtBanner[]; count: number }>(
-      "banners.json",
-      args.accessToken,
-      params
-    );
-    return data.items || [];
+    // Fetch all banners with pagination
+    let allBanners: MtBanner[] = [];
+    let offset = 0;
+    while (true) {
+      params.offset = String(offset);
+      const data = await callMtApi<{ items: MtBanner[]; count: number }>(
+        "banners.json",
+        args.accessToken,
+        params
+      );
+      const items = data.items || [];
+      allBanners = allBanners.concat(items);
+      if (allBanners.length >= data.count || items.length === 0) break;
+      offset += items.length;
+    }
+    return allBanners;
   },
 });
 

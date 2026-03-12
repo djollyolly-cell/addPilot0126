@@ -179,20 +179,25 @@ async function fetchAccountData(
   campaignStatsMap: Map<number, { impressions: number; clicks: number; spent: number; leads: number }>;
   leadCounts: Record<string, number>;
 }> {
-  // Fetch campaigns + banners
-  const [campaignsData, bannersData] = await Promise.all([
-    callMtApi<{ items: MtCampaignRaw[]; count: number }>(
-      "campaigns.json", accessToken,
-      { fields: "id,name,status,objective,budget_limit,budget_limit_day" }
-    ),
-    callMtApi<{ items: MtBannerRaw[]; count: number }>(
-      "banners.json", accessToken,
-      { fields: "id,campaign_id,textblocks,status,moderation_status" }
-    ),
-  ]);
-
+  // Fetch campaigns + banners (with pagination for banners)
+  const campaignsData = await callMtApi<{ items: MtCampaignRaw[]; count: number }>(
+    "campaigns.json", accessToken,
+    { fields: "id,name,status,objective,budget_limit,budget_limit_day", limit: "250" }
+  );
   const campaigns = campaignsData.items || [];
-  const banners = bannersData.items || [];
+
+  let banners: MtBannerRaw[] = [];
+  let offset = 0;
+  while (true) {
+    const bannersData = await callMtApi<{ items: MtBannerRaw[]; count: number }>(
+      "banners.json", accessToken,
+      { fields: "id,campaign_id,textblocks,status,moderation_status", limit: "250", offset: String(offset) }
+    );
+    const items = bannersData.items || [];
+    banners = banners.concat(items);
+    if (banners.length >= bannersData.count || items.length === 0) break;
+    offset += items.length;
+  }
 
   if (banners.length === 0) {
     return {
