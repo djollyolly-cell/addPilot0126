@@ -178,7 +178,7 @@ export const listActiveAccounts = internalQuery({
   args: {},
   handler: async (ctx) => {
     const accounts = await ctx.db.query("adAccounts").collect();
-    return accounts.filter((a) => a.status === "active");
+    return accounts.filter((a) => a.status === "active" || a.status === "error");
   },
 });
 
