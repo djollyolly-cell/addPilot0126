@@ -288,12 +288,21 @@ export const isAlreadyTriggeredToday = internalQuery({
       .query("actionLogs")
       .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
       .collect();
-    return logs.some(
-      (log) =>
-        log.adId === args.adId &&
-        log.createdAt >= args.sinceTimestamp &&
-        log.status !== "reverted"
+    const adLogs = logs.filter(
+      (log) => log.adId === args.adId && log.status !== "reverted"
     );
+
+    // 1. If ad was successfully stopped by this rule and not reverted — always skip
+    //    (prevents daily re-triggering on already-stopped ads)
+    const hasActiveStop = adLogs.some(
+      (log) =>
+        log.status === "success" &&
+        (log.actionType === "stopped" || log.actionType === "stopped_and_notified")
+    );
+    if (hasActiveStop) return true;
+
+    // 2. Standard daily dedup: skip if already triggered today
+    return adLogs.some((log) => log.createdAt >= args.sinceTimestamp);
   },
 });
 
