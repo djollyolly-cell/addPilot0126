@@ -4,7 +4,7 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import {
-  ListChecks, Plus, Loader2, AlertCircle, Trash2, Power, Pencil,
+  ListChecks, Plus, Loader2, AlertCircle, Trash2, Power, Pencil, Monitor,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
@@ -79,10 +79,23 @@ export function RulesPage() {
     user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
   );
 
+  const accounts = useQuery(
+    api.adAccounts.list,
+    user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
+  );
+
   const createRule = useMutation(api.rules.create);
   const updateRule = useMutation(api.rules.update);
   const toggleActive = useMutation(api.rules.toggleActive);
   const removeRule = useMutation(api.rules.remove);
+
+  // Map account IDs to names for display in rule cards
+  const accountNameMap = new Map<string, string>();
+  if (accounts) {
+    for (const acc of accounts) {
+      accountNameMap.set(acc._id, acc.name);
+    }
+  }
 
   if (!user) {
     return (
@@ -264,6 +277,12 @@ export function RulesPage() {
                               <> · {rule.conditions.timeWindow === 'since_launch' ? 'с запуска' : rule.conditions.timeWindow === '24h' ? 'за 24ч' : 'за сегодня'}</>
                             )}
                           </p>
+                          {rule.targetAccountIds.length > 0 && (
+                            <p className="text-xs text-muted-foreground/70 truncate flex items-center gap-1">
+                              <Monitor className="w-3 h-3 shrink-0" />
+                              {rule.targetAccountIds.map((id) => accountNameMap.get(id) || 'Кабинет').join(', ')}
+                            </p>
+                          )}
                         </div>
 
                         {/* Actions badge */}
@@ -516,6 +535,23 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
           />
         </div>
 
+        {/* Target tree selector — moved up for discoverability */}
+        <div>
+          <label className="block text-sm font-medium mb-2">Применить к кабинету</label>
+          <TargetTreeSelector
+            userId={userId}
+            value={targets}
+            onChange={setTargets}
+          />
+          {targets.accountIds.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {targets.accountIds.length} кабинет(ов)
+              {targets.campaignIds.length > 0 && `, ${targets.campaignIds.length} кампаний`}
+              {targets.adIds.length > 0 && `, ${targets.adIds.length} объявлений`}
+            </p>
+          )}
+        </div>
+
         {/* Condition builder */}
         <div data-testid="condition-builder" className="space-y-3">
           <label className="block text-sm font-medium">Условие</label>
@@ -613,23 +649,6 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
             onChange={setActionMode}
             isFreemium={isFreemium}
           />
-        </div>
-
-        {/* Target tree selector */}
-        <div>
-          <label className="block text-sm font-medium mb-2">Применить к</label>
-          <TargetTreeSelector
-            userId={userId}
-            value={targets}
-            onChange={setTargets}
-          />
-          {targets.accountIds.length > 0 && (
-            <p className="text-xs text-muted-foreground mt-1">
-              {targets.accountIds.length} кабинет(ов)
-              {targets.campaignIds.length > 0 && `, ${targets.campaignIds.length} кампаний`}
-              {targets.adIds.length > 0 && `, ${targets.adIds.length} объявлений`}
-            </p>
-          )}
         </div>
 
         {/* Submit */}
