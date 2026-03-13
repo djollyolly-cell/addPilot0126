@@ -1158,27 +1158,38 @@ export const getDigestActionLogs = internalQuery({
   },
 });
 
-/** Internal: get daily metrics summary for a user (spent, leads, CPL) */
+/** Internal: get daily metrics summary for a user's accounts (spent, leads, CPL) */
 export const getDigestMetricsSummary = internalQuery({
   args: {
+    userId: v.id("users"),
     date: v.string(), // "YYYY-MM-DD"
   },
   handler: async (ctx, args) => {
-    const metrics = await ctx.db
-      .query("metricsDaily")
-      .withIndex("by_accountId_date")
+    // Get user's accounts
+    const accounts = await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .collect();
-    const dayMetrics = metrics.filter((m) => m.date === args.date);
 
     let totalSpent = 0;
     let totalLeads = 0;
     let totalClicks = 0;
     let totalImpressions = 0;
-    for (const m of dayMetrics) {
-      totalSpent += m.spent || 0;
-      totalLeads += m.leads || 0;
-      totalClicks += m.clicks || 0;
-      totalImpressions += m.impressions || 0;
+
+    // Sum metrics per account for this date
+    for (const account of accounts) {
+      const metrics = await ctx.db
+        .query("metricsDaily")
+        .withIndex("by_accountId_date", (q) =>
+          q.eq("accountId", account._id).eq("date", args.date)
+        )
+        .collect();
+      for (const m of metrics) {
+        totalSpent += m.spent || 0;
+        totalLeads += m.leads || 0;
+        totalClicks += m.clicks || 0;
+        totalImpressions += m.impressions || 0;
+      }
     }
 
     return {
@@ -1249,15 +1260,15 @@ export const sendDailyDigest = internalAction({
     const dateStr = `${String(yesterday.getDate()).padStart(2, "0")}.${String(yesterday.getMonth() + 1).padStart(2, "0")}.${yesterday.getFullYear()}`;
     const dateISO = yesterday.toISOString().slice(0, 10); // "YYYY-MM-DD"
 
-    // Fetch metrics summary for yesterday
-    const metricsSummary = await ctx.runQuery(
-      internal.telegram.getDigestMetricsSummary,
-      { date: dateISO }
-    );
-
     let sentCount = 0;
 
     for (const recipient of recipients) {
+      // Fetch metrics for this user's accounts
+      const metricsSummary = await ctx.runQuery(
+        internal.telegram.getDigestMetricsSummary,
+        { userId: recipient.userId, date: dateISO }
+      );
+
       const logs = await ctx.runQuery(
         internal.telegram.getDigestActionLogs,
         { userId: recipient.userId, since, until }
