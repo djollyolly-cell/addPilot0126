@@ -47,6 +47,9 @@ interface GroupReport {
 }
 
 interface CampaignReport {
+  id: number;
+  name: string;
+  status: string;
   objective: string;
   objectiveLabel: string;
   groups: GroupReport[];
@@ -150,7 +153,7 @@ export function ReportsPage() {
 
   // Expanded state per level
   const [expandedAccounts, setExpandedAccounts] = useState<Set<number>>(new Set());
-  const [expandedCampaigns, setExpandedCampaigns] = useState<Set<string>>(new Set());
+  const [expandedCampaigns, setExpandedCampaigns] = useState<Set<number>>(new Set());
   const [expandedGroups, setExpandedGroups] = useState<Set<number>>(new Set());
 
   const fetchReport = useAction(api.reports.fetchReport);
@@ -169,7 +172,7 @@ export function ReportsPage() {
       // Default: accounts + campaigns expanded, groups collapsed
       setExpandedAccounts(new Set(rd.accounts.map((a) => a.id)));
       setExpandedCampaigns(new Set(
-        rd.accounts.flatMap((a) => a.campaigns.map((c) => `${a.id}:${c.objective}`))
+        rd.accounts.flatMap((a) => a.campaigns.map((c) => c.id))
       ));
       setExpandedGroups(new Set());
     } catch (err) {
@@ -191,20 +194,21 @@ export function ReportsPage() {
   const totals = report
     ? report.accounts.reduce(
         (acc, a) => ({
+          campaigns: acc.campaigns + a.campaigns.length,
           groups: acc.groups + a.campaigns.reduce((s, c) => s + c.groups.length, 0),
           impressions: acc.impressions + a.impressions,
           clicks: acc.clicks + a.clicks,
           spent: acc.spent + a.spent,
           leads: acc.leads + a.leads,
         }),
-        { groups: 0, impressions: 0, clicks: 0, spent: 0, leads: 0 }
+        { campaigns: 0, groups: 0, impressions: 0, clicks: 0, spent: 0, leads: 0 }
       )
     : null;
 
   // IDs for expand/collapse all
   const allAccountIds = report ? report.accounts.map((a) => a.id) : [];
-  const allCampaignKeys = report
-    ? report.accounts.flatMap((a) => a.campaigns.map((c) => `${a.id}:${c.objective}`))
+  const allCampaignIds = report
+    ? report.accounts.flatMap((a) => a.campaigns.map((c) => c.id))
     : [];
   const allGroupIds = report
     ? report.accounts.flatMap((a) => a.campaigns.flatMap((c) => c.groups.map((g) => g.id)))
@@ -276,7 +280,7 @@ export function ReportsPage() {
       {/* Summary cards */}
       {totals && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <SummaryCard label="Групп" value={String(totals.groups)} />
+          <SummaryCard label="Кампаний" value={String(totals.campaigns)} />
           <SummaryCard label="Показы" value={formatNumber(totals.impressions)} />
           <SummaryCard label="Клики" value={formatNumber(totals.clicks)} />
           <SummaryCard label="Расход" value={formatCurrency(totals.spent)} />
@@ -298,7 +302,7 @@ export function ReportsPage() {
                   className="text-xs gap-1 text-muted-foreground"
                   onClick={() => {
                     setExpandedAccounts(new Set(allAccountIds));
-                    setExpandedCampaigns(new Set(allCampaignKeys));
+                    setExpandedCampaigns(new Set(allCampaignIds));
                     setExpandedGroups(new Set(allGroupIds));
                   }}
                   data-testid="expand-all"
@@ -351,7 +355,7 @@ export function ReportsPage() {
                         expandedCampaigns={expandedCampaigns}
                         expandedGroups={expandedGroups}
                         onToggleAccount={() => toggle(setExpandedAccounts, account.id)}
-                        onToggleCampaign={(key: string) => toggle(setExpandedCampaigns, key)}
+                        onToggleCampaign={(id: number) => toggle(setExpandedCampaigns, id)}
                         onToggleGroup={(id: number) => toggle(setExpandedGroups, id)}
                       />
                     ))}
@@ -410,10 +414,10 @@ function AccountSection({
 }: {
   account: AccountReport;
   expandedAccounts: Set<number>;
-  expandedCampaigns: Set<string>;
+  expandedCampaigns: Set<number>;
   expandedGroups: Set<number>;
   onToggleAccount: () => void;
-  onToggleCampaign: (key: string) => void;
+  onToggleCampaign: (id: number) => void;
   onToggleGroup: (id: number) => void;
 }) {
   const isExpanded = expandedAccounts.has(account.id);
@@ -441,8 +445,7 @@ function AccountSection({
       </tr>
       {isExpanded && account.campaigns.map((campaign) => (
         <CampaignSection
-          key={campaign.objective}
-          accountId={account.id}
+          key={campaign.id}
           campaign={campaign}
           expandedCampaigns={expandedCampaigns}
           expandedGroups={expandedGroups}
@@ -454,27 +457,25 @@ function AccountSection({
   );
 }
 
-// ─── Level 2: Кампания (by objective) ───────────────────────────────
+// ─── Level 2: Кампания (VK Ads campaign = myTarget ad_plan) ─────────
 
 function CampaignSection({
-  accountId, campaign, expandedCampaigns, expandedGroups,
+  campaign, expandedCampaigns, expandedGroups,
   onToggleCampaign, onToggleGroup,
 }: {
-  accountId: number;
   campaign: CampaignReport;
-  expandedCampaigns: Set<string>;
+  expandedCampaigns: Set<number>;
   expandedGroups: Set<number>;
-  onToggleCampaign: (key: string) => void;
+  onToggleCampaign: (id: number) => void;
   onToggleGroup: (id: number) => void;
 }) {
-  const key = `${accountId}:${campaign.objective}`;
-  const isExpanded = expandedCampaigns.has(key);
+  const isExpanded = expandedCampaigns.has(campaign.id);
   return (
     <>
       <tr
         className="border-b cursor-pointer hover:bg-muted/40 transition-colors"
-        onClick={() => onToggleCampaign(key)}
-        data-testid={`campaign-row-${campaign.objective}`}
+        onClick={() => onToggleCampaign(campaign.id)}
+        data-testid={`campaign-row-${campaign.id}`}
       >
         <td className="py-2.5 font-medium">
           <div className="flex items-center gap-1.5 pl-6">
@@ -482,13 +483,13 @@ function CampaignSection({
               ? <ChevronDown className="w-4 h-4 text-muted-foreground shrink-0" />
               : <ChevronRight className="w-4 h-4 text-muted-foreground shrink-0" />}
             <Target className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-            <span>{campaign.objectiveLabel}</span>
+            <span className="truncate max-w-[180px]">{campaign.name}</span>
             <span className="text-xs text-muted-foreground font-normal">
-              ({campaign.groups.length} групп)
+              · {campaign.objectiveLabel} · {campaign.groups.length} групп
             </span>
           </div>
         </td>
-        <td className="py-2.5" />
+        <td className="py-2.5">{statusBadge(campaign.status)}</td>
         <StatCells {...campaign} />
       </tr>
       {isExpanded && campaign.groups.map((group) => (
@@ -503,7 +504,7 @@ function CampaignSection({
   );
 }
 
-// ─── Level 3: Группа объявлений (myTarget campaign) ─────────────────
+// ─── Level 3: Группа объявлений (VK Ads group = myTarget ad_group) ──
 
 function GroupSection({
   group, expandedGroups, onToggleGroup,
@@ -526,6 +527,9 @@ function GroupSection({
               ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
               : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />}
             <span className="truncate max-w-[200px]">{group.name}</span>
+            <span className="text-xs text-muted-foreground font-normal">
+              ({group.banners.length} объявл.)
+            </span>
           </div>
         </td>
         <td className="py-2">{statusBadge(group.status)}</td>

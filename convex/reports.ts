@@ -54,14 +54,25 @@ async function callMtApi<T>(
 
 // ─── Types ───────────────────────────────────────────────────────────
 
-interface MtCampaignRaw {
+// myTarget ad_plans.json = VK Ads Кампании
+interface MtAdPlanRaw {
   id: number;
   name: string;
   status: string;
   objective: string;
-  budget_limit: string;
-  budget_limit_day: string;
-  user_id?: number;
+  budget_limit: number | null;
+  budget_limit_day: number | null;
+}
+
+// myTarget ad_groups.json (= campaigns.json) = VK Ads Группы
+interface MtAdGroupRaw {
+  id: number;
+  name: string;
+  status: string;
+  ad_plan_id: number;
+  package_id: number;
+  budget_limit: number | null;
+  budget_limit_day: number | null;
 }
 
 interface MtUserInfo {
@@ -72,7 +83,7 @@ interface MtUserInfo {
 
 interface MtBannerRaw {
   id: number;
-  campaign_id: number;
+  campaign_id: number; // = ad_group_id
   textblocks?: Record<string, { text: string }>;
   status: string;
   moderation_status: string;
@@ -100,6 +111,8 @@ interface MtStatItem {
   rows: MtStatRow[];
 }
 
+// ─── Report types (4 levels: Account → Campaign → Group → Ad) ───────
+
 interface BannerReport {
   id: number;
   name: string;
@@ -112,7 +125,7 @@ interface BannerReport {
   cpl: number;
 }
 
-// Группа объявлений (myTarget campaign = VK Ads ad group)
+// VK Ads Группа (myTarget ad_group / campaign)
 interface GroupReport {
   id: number;
   name: string;
@@ -126,8 +139,11 @@ interface GroupReport {
   banners: BannerReport[];
 }
 
-// Кампания (grouped by objective)
+// VK Ads Кампания (myTarget ad_plan)
 interface CampaignReport {
+  id: number;
+  name: string;
+  status: string;
   objective: string;
   objectiveLabel: string;
   groups: GroupReport[];
@@ -182,7 +198,7 @@ function countLeadsFromRow(row: MtStatRow): number {
   return Math.max(baseGoals, vkResult, vkGoals, eventsGoals);
 }
 
-function aggregateBannerStats(rows: MtStatRow[]) {
+function aggregateStats(rows: MtStatRow[]) {
   let impressions = 0, clicks = 0, spent = 0, leads = 0;
   for (const row of rows) {
     impressions += row.base.shows || 0;
@@ -199,26 +215,54 @@ function computeDerived(stats: { impressions: number; clicks: number; spent: num
   return { ctr: Math.round(ctr * 100) / 100, cpl: Math.round(cpl * 100) / 100 };
 }
 
-// ─── Fetch data for one token ────────────────────────────────────────
+// ─── Objective labels ────────────────────────────────────────────────
 
-async function fetchAccountData(
+const OBJECTIVE_LABELS: Record<string, string> = {
+  "traffic": "Трафик",
+  "conversions": "Конверсии",
+  "reach": "Охват",
+  "video_views": "Просмотры видео",
+  "messages": "Сообщения",
+  "leadads": "Получение лидов",
+  "lead_generation": "Лидогенерация",
+  "engagement": "Вовлечённость",
+  "socialengagement": "Отправка сообщений",
+  "app_installs": "Установки приложений",
+  "appinstalls": "Установки приложений",
+  "product_sales": "Продажи товаров",
+  "awareness": "Узнаваемость",
+  "promo": "Продвижение",
+  "special": "Специальный",
+};
+
+function getObjectiveLabel(objective: string): string {
+  if (!objective) return "Без цели";
+  return OBJECTIVE_LABELS[objective] || objective;
+}
+
+// ─── Fetch all data from API ─────────────────────────────────────────
+
+async function fetchAllData(
   accessToken: string,
   dateFrom: string,
   dateTo: string
-): Promise<{
-  campaigns: MtCampaignRaw[];
-  banners: MtBannerRaw[];
-  statsMap: Map<number, MtStatRow[]>;
-  campaignStatsMap: Map<number, { impressions: number; clicks: number; spent: number; leads: number }>;
-  leadCounts: Record<string, number>;
-}> {
-  // Fetch campaigns + banners (with pagination for banners)
-  const campaignsData = await callMtApi<{ items: MtCampaignRaw[]; count: number }>(
-    "campaigns.json", accessToken,
-    { fields: "id,name,status,objective,budget_limit,budget_limit_day,user_id", limit: "250" }
-  );
-  const campaigns = campaignsData.items || [];
+) {
+  // Fetch ad_plans (VK campaigns), ad_groups (VK groups), banners (VK ads) in parallel
+  const [adPlansData, adGroupsData] = await Promise.all([
+    callMtApi<{ items: MtAdPlanRaw[]; count: number }>(
+      "ad_plans.json", accessToken,
+      { fields: "id,name,status,objective,budget_limit,budget_limit_day", limit: "250" }
+    ),
+    callMtApi<{ items: MtAdGroupRaw[]; count: number }>(
+      "ad_groups.json", accessToken,
+      { fields: "id,name,status,ad_plan_id,package_id,budget_limit,budget_limit_day", limit: "250" }
+    ),
+  ]);
 
+  const adPlans = adPlansData.items || [];
+  const adGroups = adGroupsData.items || [];
+
+  // Fetch banners with pagination
   let banners: MtBannerRaw[] = [];
   let offset = 0;
   while (true) {
@@ -232,173 +276,165 @@ async function fetchAccountData(
     offset += items.length;
   }
 
-  if (banners.length === 0) {
-    return {
-      campaigns, banners,
-      statsMap: new Map(),
-      campaignStatsMap: new Map(),
-      leadCounts: {},
-    };
-  }
-
+  // Fetch statistics for all levels + lead counts in parallel
+  const adPlanIds = adPlans.map((p) => String(p.id)).join(",");
+  const adGroupIds = adGroups.map((g) => String(g.id)).join(",");
   const bannerIds = banners.map((b) => String(b.id)).join(",");
-  const campaignIds = campaigns.map((c) => String(c.id)).join(",");
 
-  // Fetch stats in parallel
-  const [statsData, campaignStatsData, leadCounts] = await Promise.all([
-    callMtApi<{ items: MtStatItem[] }>(
-      "statistics/banners/day.json", accessToken,
-      { id: bannerIds, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
-    ),
-    campaignIds
+  const [adPlanStats, adGroupStats, bannerStats, leadCounts] = await Promise.all([
+    adPlanIds
       ? callMtApi<{ items: MtStatItem[] }>(
-          "statistics/campaigns/day.json", accessToken,
-          { id: campaignIds, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
+          "statistics/ad_plans/day.json", accessToken,
+          { id: adPlanIds, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
+        )
+      : Promise.resolve({ items: [] as MtStatItem[] }),
+    adGroupIds
+      ? callMtApi<{ items: MtStatItem[] }>(
+          "statistics/ad_groups/day.json", accessToken,
+          { id: adGroupIds, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
+        )
+      : Promise.resolve({ items: [] as MtStatItem[] }),
+    bannerIds
+      ? callMtApi<{ items: MtStatItem[] }>(
+          "statistics/banners/day.json", accessToken,
+          { id: bannerIds, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
         )
       : Promise.resolve({ items: [] as MtStatItem[] }),
     fetchLeadCounts(accessToken, dateFrom, dateTo),
   ]);
 
-  const statsMap = new Map<number, MtStatRow[]>();
-  for (const item of (statsData.items || [])) {
-    statsMap.set(item.id, item.rows || []);
+  // Build lookup maps
+  const adPlanStatsMap = new Map<number, MtStatRow[]>();
+  for (const item of (adPlanStats.items || [])) {
+    adPlanStatsMap.set(item.id, item.rows || []);
   }
 
-  const campaignStatsMap = new Map<number, { impressions: number; clicks: number; spent: number; leads: number }>();
-  for (const item of (campaignStatsData.items || [])) {
-    campaignStatsMap.set(item.id, aggregateBannerStats(item.rows || []));
+  const adGroupStatsMap = new Map<number, MtStatRow[]>();
+  for (const item of (adGroupStats.items || [])) {
+    adGroupStatsMap.set(item.id, item.rows || []);
   }
 
-  return { campaigns, banners, statsMap, campaignStatsMap, leadCounts };
+  const bannerStatsMap = new Map<number, MtStatRow[]>();
+  for (const item of (bannerStats.items || [])) {
+    bannerStatsMap.set(item.id, item.rows || []);
+  }
+
+  return { adPlans, adGroups, banners, adPlanStatsMap, adGroupStatsMap, bannerStatsMap, leadCounts };
 }
 
-// ─── Objective labels ────────────────────────────────────────────────
+// ─── Build 4-level report ────────────────────────────────────────────
 
-const OBJECTIVE_LABELS: Record<string, string> = {
-  "traffic": "Трафик",
-  "conversions": "Конверсии",
-  "reach": "Охват",
-  "video_views": "Просмотры видео",
-  "messages": "Сообщения",
-  "lead_generation": "Лидогенерация",
-  "engagement": "Вовлечённость",
-  "app_installs": "Установки приложений",
-  "product_sales": "Продажи товаров",
-  "awareness": "Узнаваемость",
-  "promo": "Продвижение",
-  "special": "Специальный",
-};
-
-function getObjectiveLabel(objective: string): string {
-  if (!objective) return "Без цели";
-  return OBJECTIVE_LABELS[objective] || objective;
-}
-
-// ─── Build report from fetched data ──────────────────────────────────
-
-function buildGroupReports(
-  campaigns: MtCampaignRaw[],
+function buildReport(
+  adPlans: MtAdPlanRaw[],
+  adGroups: MtAdGroupRaw[],
   banners: MtBannerRaw[],
-  statsMap: Map<number, MtStatRow[]>,
-  campaignStatsMap: Map<number, { impressions: number; clicks: number; spent: number; leads: number }>,
+  adPlanStatsMap: Map<number, MtStatRow[]>,
+  adGroupStatsMap: Map<number, MtStatRow[]>,
+  bannerStatsMap: Map<number, MtStatRow[]>,
   leadCounts: Record<string, number>
 ): CampaignReport[] {
-  // campaignId -> banners
-  const campaignBannersMap = new Map<number, MtBannerRaw[]>();
+  // adGroupId → banners
+  const groupBannersMap = new Map<number, MtBannerRaw[]>();
   for (const banner of banners) {
-    const list = campaignBannersMap.get(banner.campaign_id) || [];
+    const list = groupBannersMap.get(banner.campaign_id) || [];
     list.push(banner);
-    campaignBannersMap.set(banner.campaign_id, list);
+    groupBannersMap.set(banner.campaign_id, list);
   }
 
-  // Build group reports (1 myTarget campaign = 1 group)
-  const groupReports: Array<{ objective: string; group: GroupReport }> = [];
+  // adPlanId → adGroups
+  const planGroupsMap = new Map<number, MtAdGroupRaw[]>();
+  for (const group of adGroups) {
+    const list = planGroupsMap.get(group.ad_plan_id) || [];
+    list.push(group);
+    planGroupsMap.set(group.ad_plan_id, list);
+  }
 
-  for (const campaign of campaigns) {
-    const campBanners = campaignBannersMap.get(campaign.id) || [];
-    const bannerReports: BannerReport[] = [];
-    let bannerLeadsTotal = 0;
+  const campaignReports: CampaignReport[] = [];
 
-    for (const banner of campBanners) {
-      const rows = statsMap.get(banner.id) || [];
-      const agg = aggregateBannerStats(rows);
-      const leadAdsCount = leadCounts[String(banner.id)] || 0;
-      const finalLeads = Math.max(agg.leads, leadAdsCount);
-      const derived = computeDerived({ ...agg, leads: finalLeads });
+  for (const plan of adPlans) {
+    const groups = planGroupsMap.get(plan.id) || [];
+    const groupReports: GroupReport[] = [];
 
-      bannerReports.push({
-        id: banner.id,
-        name: getBannerName(banner),
-        status: banner.status,
-        impressions: agg.impressions,
-        clicks: agg.clicks,
-        spent: Math.round(agg.spent * 100) / 100,
-        leads: finalLeads,
-        ctr: derived.ctr,
-        cpl: derived.cpl,
-      });
-      bannerLeadsTotal += finalLeads;
-    }
+    for (const group of groups) {
+      const grpBanners = groupBannersMap.get(group.id) || [];
+      const bannerReports: BannerReport[] = [];
+      let bannerLeadsTotal = 0;
 
-    const campStats = campaignStatsMap.get(campaign.id);
-    const grpImpressions = campStats?.impressions ?? bannerReports.reduce((s, b) => s + b.impressions, 0);
-    const grpClicks = campStats?.clicks ?? bannerReports.reduce((s, b) => s + b.clicks, 0);
-    const grpSpent = campStats?.spent ?? bannerReports.reduce((s, b) => s + b.spent, 0);
-    const grpLeadsFromApi = campStats?.leads ?? 0;
-    const grpLeads = Math.max(grpLeadsFromApi, bannerLeadsTotal);
+      for (const banner of grpBanners) {
+        const rows = bannerStatsMap.get(banner.id) || [];
+        const agg = aggregateStats(rows);
+        const leadAdsCount = leadCounts[String(banner.id)] || 0;
+        const finalLeads = Math.max(agg.leads, leadAdsCount);
+        const derived = computeDerived({ ...agg, leads: finalLeads });
 
-    const grpDerived = computeDerived({
-      impressions: grpImpressions, clicks: grpClicks,
-      spent: grpSpent, leads: grpLeads,
-    });
+        bannerReports.push({
+          id: banner.id,
+          name: getBannerName(banner),
+          status: banner.status,
+          impressions: agg.impressions,
+          clicks: agg.clicks,
+          spent: Math.round(agg.spent * 100) / 100,
+          leads: finalLeads,
+          ctr: derived.ctr,
+          cpl: derived.cpl,
+        });
+        bannerLeadsTotal += finalLeads;
+      }
 
-    groupReports.push({
-      objective: campaign.objective || "",
-      group: {
-        id: campaign.id,
-        name: campaign.name,
-        status: campaign.status,
-        impressions: grpImpressions,
-        clicks: grpClicks,
-        spent: Math.round(grpSpent * 100) / 100,
+      // Use ad_group stats from API (more accurate) or fallback to sum of banners
+      const grpRows = adGroupStatsMap.get(group.id) || [];
+      const grpAgg = grpRows.length > 0 ? aggregateStats(grpRows) : {
+        impressions: bannerReports.reduce((s, b) => s + b.impressions, 0),
+        clicks: bannerReports.reduce((s, b) => s + b.clicks, 0),
+        spent: bannerReports.reduce((s, b) => s + b.spent, 0),
+        leads: bannerLeadsTotal,
+      };
+      const grpLeads = Math.max(grpAgg.leads, bannerLeadsTotal);
+      const grpDerived = computeDerived({ ...grpAgg, leads: grpLeads });
+
+      groupReports.push({
+        id: group.id,
+        name: group.name,
+        status: group.status,
+        impressions: grpAgg.impressions,
+        clicks: grpAgg.clicks,
+        spent: Math.round(grpAgg.spent * 100) / 100,
         leads: grpLeads,
         ctr: grpDerived.ctr,
         cpl: grpDerived.cpl,
         banners: bannerReports,
-      },
+      });
+    }
+
+    // Use ad_plan stats from API (most accurate) or fallback to sum of groups
+    const planRows = adPlanStatsMap.get(plan.id) || [];
+    const planAgg = planRows.length > 0 ? aggregateStats(planRows) : {
+      impressions: groupReports.reduce((s, g) => s + g.impressions, 0),
+      clicks: groupReports.reduce((s, g) => s + g.clicks, 0),
+      spent: groupReports.reduce((s, g) => s + g.spent, 0),
+      leads: groupReports.reduce((s, g) => s + g.leads, 0),
+    };
+    const planLeadsFromGroups = groupReports.reduce((s, g) => s + g.leads, 0);
+    const planLeads = Math.max(planAgg.leads, planLeadsFromGroups);
+    const planDerived = computeDerived({ ...planAgg, leads: planLeads });
+
+    campaignReports.push({
+      id: plan.id,
+      name: plan.name,
+      status: plan.status,
+      objective: plan.objective || "",
+      objectiveLabel: getObjectiveLabel(plan.objective || ""),
+      groups: groupReports,
+      impressions: planAgg.impressions,
+      clicks: planAgg.clicks,
+      spent: Math.round(planAgg.spent * 100) / 100,
+      leads: planLeads,
+      ctr: planDerived.ctr,
+      cpl: planDerived.cpl,
     });
   }
 
-  // Group by objective → CampaignReport
-  const objectiveMap = new Map<string, GroupReport[]>();
-  for (const item of groupReports) {
-    const list = objectiveMap.get(item.objective) || [];
-    list.push(item.group);
-    objectiveMap.set(item.objective, list);
-  }
-
-  const result: CampaignReport[] = [];
-  for (const [objective, groups] of objectiveMap.entries()) {
-    const impressions = groups.reduce((s, g) => s + g.impressions, 0);
-    const clicks = groups.reduce((s, g) => s + g.clicks, 0);
-    const spent = groups.reduce((s, g) => s + g.spent, 0);
-    const leads = groups.reduce((s, g) => s + g.leads, 0);
-    const derived = computeDerived({ impressions, clicks, spent, leads });
-
-    result.push({
-      objective,
-      objectiveLabel: getObjectiveLabel(objective),
-      groups,
-      impressions,
-      clicks,
-      spent: Math.round(spent * 100) / 100,
-      leads,
-      ctr: derived.ctr,
-      cpl: derived.cpl,
-    });
-  }
-
-  return result;
+  return campaignReports;
 }
 
 // ─── Main action ─────────────────────────────────────────────────────
@@ -423,11 +459,13 @@ export const fetchReport = action({
     // Fetch account info + all data from VK API
     const [userInfo, data] = await Promise.all([
       callMtApi<MtUserInfo>("user.json", accessToken),
-      fetchAccountData(accessToken, args.dateFrom, args.dateTo),
+      fetchAllData(accessToken, args.dateFrom, args.dateTo),
     ]);
 
-    const campaignReports = buildGroupReports(
-      data.campaigns, data.banners, data.statsMap, data.campaignStatsMap, data.leadCounts
+    const campaignReports = buildReport(
+      data.adPlans, data.adGroups, data.banners,
+      data.adPlanStatsMap, data.adGroupStatsMap, data.bannerStatsMap,
+      data.leadCounts
     );
 
     // Build account-level report
@@ -449,10 +487,6 @@ export const fetchReport = action({
     return { accounts: [accountReport], dateFrom: args.dateFrom, dateTo: args.dateTo };
   },
 });
-
-// ─── Internal queries ────────────────────────────────────────────────
-
-// (Account filtering removed — single VK Ads token returns all data)
 
 // ─── Lead Ads helper ─────────────────────────────────────────────────
 

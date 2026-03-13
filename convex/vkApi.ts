@@ -603,3 +603,51 @@ export const diagnosLeads = action({
     return result;
   },
 });
+
+// ─── DIAGNOSTIC: Probe myTarget API endpoints for VK Ads campaign level ───
+// myTarget campaigns.json = VK Ads groups. Need to find the parent level (VK Ads campaigns).
+export const probeVkCampaignEndpoints = action({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (_, args) => {
+    const results: Record<string, any> = {};
+
+    const endpoints = [
+      { name: "packages", url: "packages.json", params: { fields: "id,name,status,price_list_id,created,updated" } },
+      { name: "ad_plans", url: "ad_plans.json", params: { fields: "id,name,status,created,updated" } },
+      { name: "project_packages", url: "project_packages.json", params: {} },
+      { name: "ad_groups", url: "ad_groups.json", params: {} },
+      { name: "campaigns_extended", url: "campaigns.json", params: {
+        fields: "id,name,status,objective,package_id,mixing,pricelist_id,budget_limit,budget_limit_day,created,updated",
+        limit: "50",
+      }},
+      { name: "pads", url: "pads.json", params: {} },
+    ];
+
+    for (const ep of endpoints) {
+      try {
+        const url = new URL(`${MT_API_BASE}/api/v2/${ep.url}`);
+        Object.entries(ep.params).forEach(([k, v]) => url.searchParams.set(k, v));
+
+        const response = await fetch(url.toString(), {
+          headers: { Authorization: `Bearer ${args.accessToken}` },
+        });
+
+        const status = response.status;
+        let body: any;
+        try {
+          body = await response.json();
+        } catch {
+          body = await response.text();
+        }
+
+        results[ep.name] = { status, body };
+      } catch (e) {
+        results[ep.name] = { error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    return results;
+  },
+});
