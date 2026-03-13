@@ -126,55 +126,77 @@ export interface DigestActionLogSummary {
   };
 }
 
+/** Metrics summary for digest */
+export interface DigestMetrics {
+  spent: number;
+  leads: number;
+  clicks: number;
+  impressions: number;
+  cpl: number;
+}
+
 /**
- * Format daily digest message from action log summaries.
- * Returns empty string if no events.
+ * Format daily digest message.
+ * Always sends — even without rule events, shows metrics summary.
  */
 export function formatDailyDigest(
   events: DigestActionLogSummary[],
-  dateStr: string // "DD.MM.YYYY"
+  dateStr: string, // "DD.MM.YYYY"
+  metrics?: DigestMetrics
 ): string {
-  if (events.length === 0) return "";
-
-  const totalSaved = events.reduce((sum, e) => sum + e.savedAmount, 0);
-  const totalSpent = events.reduce((sum, e) => sum + e.metricsSnapshot.spent, 0);
-  const stoppedCount = events.filter(
-    (e) => e.actionType === "stopped" || e.actionType === "stopped_and_notified"
-  ).length;
-  const notifyCount = events.filter((e) => e.actionType === "notified").length;
-
   const lines: string[] = [
     `📊 <b>Дайджест за ${dateStr}</b>`,
     "",
-    `Сработало правил: ${events.length}`,
   ];
 
-  if (stoppedCount > 0) {
-    lines.push(`🛑 Остановлено: ${stoppedCount}`);
-  }
-  if (notifyCount > 0) {
-    lines.push(`⚠️ Предупреждений: ${notifyCount}`);
-  }
-
-  lines.push("");
-  lines.push(`💰 Общий расход: ${totalSpent.toFixed(0)}₽`);
-  if (totalSaved > 0) {
-    lines.push(`✅ Сэкономлено: ~${totalSaved.toFixed(0)}₽`);
+  // Metrics summary (always shown)
+  if (metrics) {
+    lines.push("<b>Статистика за сутки:</b>");
+    lines.push(`📈 Показы: ${metrics.impressions.toLocaleString("ru-RU")}`);
+    lines.push(`👆 Клики: ${metrics.clicks.toLocaleString("ru-RU")}`);
+    lines.push(`💰 Расход: ${metrics.spent.toFixed(0)}₽`);
+    lines.push(`🎯 Лиды: ${metrics.leads}`);
+    lines.push(`💵 CPL: ${metrics.cpl > 0 ? metrics.cpl.toFixed(0) + "₽" : "—"}`);
+    lines.push("");
   }
 
-  lines.push("");
-  lines.push("<b>Детали:</b>");
+  // Rule events (if any)
+  if (events.length > 0) {
+    const totalSaved = events.reduce((sum, e) => sum + e.savedAmount, 0);
+    const stoppedCount = events.filter(
+      (e) => e.actionType === "stopped" || e.actionType === "stopped_and_notified"
+    ).length;
+    const notifyCount = events.filter((e) => e.actionType === "notified").length;
 
-  for (const event of events.slice(0, 10)) {
-    const emoji =
-      event.actionType === "stopped" || event.actionType === "stopped_and_notified"
-        ? "🛑"
-        : "⚠️";
-    lines.push(`${emoji} ${event.adName} — ${event.reason}`);
-  }
+    lines.push(`<b>Правила:</b>`);
+    lines.push(`Сработало: ${events.length}`);
 
-  if (events.length > 10) {
-    lines.push(`...и ещё ${events.length - 10}`);
+    if (stoppedCount > 0) {
+      lines.push(`🛑 Остановлено: ${stoppedCount}`);
+    }
+    if (notifyCount > 0) {
+      lines.push(`⚠️ Предупреждений: ${notifyCount}`);
+    }
+    if (totalSaved > 0) {
+      lines.push(`✅ Сэкономлено: ~${totalSaved.toFixed(0)}₽`);
+    }
+
+    lines.push("");
+    lines.push("<b>Детали:</b>");
+
+    for (const event of events.slice(0, 10)) {
+      const emoji =
+        event.actionType === "stopped" || event.actionType === "stopped_and_notified"
+          ? "🛑"
+          : "⚠️";
+      lines.push(`${emoji} ${event.adName} — ${event.reason}`);
+    }
+
+    if (events.length > 10) {
+      lines.push(`...и ещё ${events.length - 10}`);
+    }
+  } else {
+    lines.push("✅ Правила не сработали за сутки");
   }
 
   return lines.join("\n");
@@ -1136,6 +1158,39 @@ export const getDigestActionLogs = internalQuery({
   },
 });
 
+/** Internal: get daily metrics summary for a user (spent, leads, CPL) */
+export const getDigestMetricsSummary = internalQuery({
+  args: {
+    date: v.string(), // "YYYY-MM-DD"
+  },
+  handler: async (ctx, args) => {
+    const metrics = await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_accountId_date")
+      .collect();
+    const dayMetrics = metrics.filter((m) => m.date === args.date);
+
+    let totalSpent = 0;
+    let totalLeads = 0;
+    let totalClicks = 0;
+    let totalImpressions = 0;
+    for (const m of dayMetrics) {
+      totalSpent += m.spent || 0;
+      totalLeads += m.leads || 0;
+      totalClicks += m.clicks || 0;
+      totalImpressions += m.impressions || 0;
+    }
+
+    return {
+      spent: Math.round(totalSpent * 100) / 100,
+      leads: totalLeads,
+      clicks: totalClicks,
+      impressions: totalImpressions,
+      cpl: totalLeads > 0 ? Math.round((totalSpent / totalLeads) * 100) / 100 : 0,
+    };
+  },
+});
+
 /** Internal: get all users with Telegram connected and digest enabled */
 export const getDigestRecipients = internalQuery({
   args: {},
@@ -1183,15 +1238,22 @@ export const sendDailyDigest = internalAction({
 
     if (recipients.length === 0) return { sent: 0 };
 
-    // Yesterday 00:00 to today 00:00 (UTC-based, approximation for MSK)
+    // Yesterday's date for metrics
     const now = Date.now();
     const dayMs = 24 * 60 * 60 * 1000;
     const since = now - dayMs;
     const until = now;
 
-    // Format date string for digest header
-    const date = new Date(since);
-    const dateStr = `${String(date.getDate()).padStart(2, "0")}.${String(date.getMonth() + 1).padStart(2, "0")}.${date.getFullYear()}`;
+    // Yesterday's date strings
+    const yesterday = new Date(since);
+    const dateStr = `${String(yesterday.getDate()).padStart(2, "0")}.${String(yesterday.getMonth() + 1).padStart(2, "0")}.${yesterday.getFullYear()}`;
+    const dateISO = yesterday.toISOString().slice(0, 10); // "YYYY-MM-DD"
+
+    // Fetch metrics summary for yesterday
+    const metricsSummary = await ctx.runQuery(
+      internal.telegram.getDigestMetricsSummary,
+      { date: dateISO }
+    );
 
     let sentCount = 0;
 
@@ -1201,8 +1263,6 @@ export const sendDailyDigest = internalAction({
         { userId: recipient.userId, since, until }
       );
 
-      if (logs.length === 0) continue; // S12-DoD#7: No events → no digest
-
       const events: DigestActionLogSummary[] = logs.map((log: any) => ({
         adName: log.adName,
         actionType: log.actionType,
@@ -1211,8 +1271,7 @@ export const sendDailyDigest = internalAction({
         metricsSnapshot: log.metricsSnapshot,
       }));
 
-      const message = formatDailyDigest(events, dateStr);
-      if (!message) continue;
+      const message = formatDailyDigest(events, dateStr, metricsSummary);
 
       try {
         await ctx.runAction(internal.telegram.sendMessageWithRetry, {

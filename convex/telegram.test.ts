@@ -879,13 +879,11 @@ describe("telegram", () => {
     // Contains date header
     expect(message).toContain("Дайджест за 27.01.2026");
     // Contains rule count
-    expect(message).toContain("Сработало правил: 3");
+    expect(message).toContain("Сработало: 3");
     // Contains stopped count (2: stopped + stopped_and_notified)
     expect(message).toContain("Остановлено: 2");
     // Contains warning count
     expect(message).toContain("Предупреждений: 1");
-    // Contains total spend
-    expect(message).toContain("8800₽");
     // Contains total savings (1500 + 2000 = 3500)
     expect(message).toContain("3500₽");
     // Contains details for each ad
@@ -987,10 +985,16 @@ describe("telegram", () => {
     expect(logs[0].adName).toBe("Digest Ad");
   });
 
-  // S12-DoD#7: Нет событий за день — дайджест не отправляется
-  test("S12-DoD#7: formatDailyDigest returns empty for 0 events", () => {
-    const message = formatDailyDigest([], "27.01.2026");
-    expect(message).toBe("");
+  // S12-DoD#7: Нет событий за день — дайджест всё равно содержит метрики
+  test("S12-DoD#7: formatDailyDigest with 0 events still shows metrics", () => {
+    const message = formatDailyDigest([], "27.01.2026", {
+      spent: 500, leads: 2, clicks: 50, impressions: 10000, cpl: 250,
+    });
+    expect(message).toContain("Дайджест за 27.01.2026");
+    expect(message).toContain("Лиды: 2");
+    expect(message).toContain("CPL: 250₽");
+    expect(message).toContain("Расход: 500₽");
+    expect(message).toContain("Правила не сработали");
   });
 
   // S12-DoD#8: 00:00-00:00 — тихие часы отключены
