@@ -602,6 +602,22 @@ export const deleteUser = mutation({
   },
 });
 
+// Force-expire VK Ads token so next getValidVkAdsToken will auto-refresh
+export const forceExpireVkAdsToken = mutation({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("User not found");
+    await ctx.db.patch(args.userId, {
+      vkAdsTokenExpiresAt: Date.now() - 1000, // expired 1 second ago
+      updatedAt: Date.now(),
+    });
+    return { success: true };
+  },
+});
+
 // Get user by ID (internal)
 export const getById = internalQuery({
   args: {
