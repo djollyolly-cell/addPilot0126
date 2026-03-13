@@ -431,6 +431,19 @@ export const updateVkAdsTokens = internalMutation({
       vkAdsTokenExpiresAt: tokenExpiresAt ?? user.vkAdsTokenExpiresAt,
       updatedAt: now,
     });
+
+    // Sync fresh token to all adAccounts for this user
+    const accounts = await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const account of accounts) {
+      await ctx.db.patch(account._id, {
+        accessToken: args.accessToken,
+        refreshToken: args.refreshToken ?? account.refreshToken,
+        tokenExpiresAt: tokenExpiresAt ?? account.tokenExpiresAt,
+      });
+    }
   },
 });
 
