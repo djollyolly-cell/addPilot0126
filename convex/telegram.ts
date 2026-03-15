@@ -115,6 +115,8 @@ export function isQuietHours(
 /** Action log summary for daily digest */
 export interface DigestActionLogSummary {
   adName: string;
+  adId: string;
+  accountId: string;
   actionType: string;
   reason: string;
   savedAmount: number;
@@ -1202,6 +1204,29 @@ export const getDigestMetricsSummary = internalQuery({
   },
 });
 
+/** Internal: get end-of-day metrics for a specific ad */
+export const getAdDailyMetrics = internalQuery({
+  args: {
+    adId: v.string(),
+    date: v.string(), // "YYYY-MM-DD"
+  },
+  handler: async (ctx, args) => {
+    const metric = await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_adId_date", (q) =>
+        q.eq("adId", args.adId).eq("date", args.date)
+      )
+      .first();
+    if (!metric) return null;
+    return {
+      spent: metric.spent || 0,
+      leads: metric.leads || 0,
+      clicks: metric.clicks || 0,
+      impressions: metric.impressions || 0,
+    };
+  },
+});
+
 /** Internal: get all users with Telegram connected and digest enabled */
 export const getDigestRecipients = internalQuery({
   args: {},
@@ -1276,11 +1301,37 @@ export const sendDailyDigest = internalAction({
 
       const events: DigestActionLogSummary[] = logs.map((log: any) => ({
         adName: log.adName,
+        adId: log.adId,
+        accountId: log.accountId,
         actionType: log.actionType,
         reason: log.reason,
         savedAmount: log.savedAmount,
         metricsSnapshot: log.metricsSnapshot,
       }));
+
+      // Update events with end-of-day metrics from metricsDaily
+      for (const event of events) {
+        const freshMetrics = await ctx.runQuery(
+          internal.telegram.getAdDailyMetrics,
+          { adId: event.adId, date: dateISO }
+        );
+        if (freshMetrics) {
+          event.metricsSnapshot = {
+            spent: freshMetrics.spent,
+            leads: freshMetrics.leads,
+            cpl: freshMetrics.leads > 0
+              ? Math.round((freshMetrics.spent / freshMetrics.leads) * 100) / 100
+              : undefined,
+            ctr: freshMetrics.impressions > 0
+              ? Math.round((freshMetrics.clicks / freshMetrics.impressions) * 10000) / 100
+              : undefined,
+          };
+          // Update reason with end-of-day spend for new_lead events
+          if (event.reason.includes("Новый лид!")) {
+            event.reason = `Новый лид! Всего лидов: ${freshMetrics.leads}, расход: ${freshMetrics.spent.toFixed(2)}₽`;
+          }
+        }
+      }
 
       const message = formatDailyDigest(events, dateStr, metricsSummary);
 
@@ -1293,6 +1344,256 @@ export const sendDailyDigest = internalAction({
       } catch (err) {
         console.error(
           `[telegram] Failed to send digest to ${recipient.userId}:`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
+
+    return { sent: sentCount };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
+// Sprint — Weekly Digest
+// ═══════════════════════════════════════════════════════════
+
+/**
+ * Format weekly digest message.
+ * Shows aggregated metrics for 7 days + all rule events.
+ */
+export function formatWeeklyDigest(
+  events: DigestActionLogSummary[],
+  periodStr: string, // "08.03 — 14.03.2026"
+  metrics?: DigestMetrics
+): string {
+  const lines: string[] = [
+    `📊 <b>Дайджест за неделю</b>`,
+    `${periodStr}`,
+    "",
+  ];
+
+  // Metrics summary
+  if (metrics) {
+    lines.push("<b>Статистика за неделю:</b>");
+    lines.push(`📈 Показы: ${metrics.impressions.toLocaleString("ru-RU")}`);
+    lines.push(`👆 Клики: ${metrics.clicks.toLocaleString("ru-RU")}`);
+    lines.push(`💰 Расход: ${metrics.spent.toFixed(0)}₽`);
+    lines.push(`🎯 Лиды: ${metrics.leads}`);
+    lines.push(`💵 CPL: ${metrics.cpl > 0 ? metrics.cpl.toFixed(0) + "₽" : "—"}`);
+    lines.push("");
+  }
+
+  // Rule events
+  if (events.length > 0) {
+    const totalSaved = events.reduce((sum, e) => sum + e.savedAmount, 0);
+    const stoppedCount = events.filter(
+      (e) => e.actionType === "stopped" || e.actionType === "stopped_and_notified"
+    ).length;
+    const notifyCount = events.filter((e) => e.actionType === "notified").length;
+
+    lines.push(`<b>Правила:</b>`);
+    lines.push(`Сработало: ${events.length}`);
+
+    if (stoppedCount > 0) {
+      lines.push(`🛑 Остановлено: ${stoppedCount}`);
+    }
+    if (notifyCount > 0) {
+      lines.push(`⚠️ Предупреждений: ${notifyCount}`);
+    }
+    if (totalSaved > 0) {
+      lines.push(`✅ Сэкономлено: ~${totalSaved.toFixed(0)}₽`);
+    }
+
+    lines.push("");
+    lines.push("<b>Детали:</b>");
+
+    for (const event of events.slice(0, 20)) {
+      const emoji =
+        event.actionType === "stopped" || event.actionType === "stopped_and_notified"
+          ? "🛑"
+          : "⚠️";
+      lines.push(`${emoji} ${event.adName} — ${event.reason}`);
+    }
+
+    if (events.length > 20) {
+      lines.push(`...и ещё ${events.length - 20}`);
+    }
+  } else {
+    lines.push("✅ Правила не сработали за неделю");
+  }
+
+  return lines.join("\n");
+}
+
+/** Internal: get aggregated metrics for a user's accounts over multiple dates */
+export const getWeeklyMetricsSummary = internalQuery({
+  args: {
+    userId: v.id("users"),
+    dates: v.array(v.string()), // ["YYYY-MM-DD", ...]
+  },
+  handler: async (ctx, args) => {
+    const accounts = await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    let totalSpent = 0;
+    let totalLeads = 0;
+    let totalClicks = 0;
+    let totalImpressions = 0;
+
+    for (const account of accounts) {
+      for (const date of args.dates) {
+        const metrics = await ctx.db
+          .query("metricsDaily")
+          .withIndex("by_accountId_date", (q) =>
+            q.eq("accountId", account._id).eq("date", date)
+          )
+          .collect();
+        for (const m of metrics) {
+          totalSpent += m.spent || 0;
+          totalLeads += m.leads || 0;
+          totalClicks += m.clicks || 0;
+          totalImpressions += m.impressions || 0;
+        }
+      }
+    }
+
+    return {
+      spent: Math.round(totalSpent * 100) / 100,
+      leads: totalLeads,
+      clicks: totalClicks,
+      impressions: totalImpressions,
+      cpl: totalLeads > 0 ? Math.round((totalSpent / totalLeads) * 100) / 100 : 0,
+    };
+  },
+});
+
+/**
+ * Send weekly digest to users whose local time is Monday 08:30.
+ * Called by cron every 30 minutes — checks each user's timezone.
+ */
+export const sendWeeklyDigest = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const recipients = await ctx.runQuery(
+      internal.telegram.getDigestRecipients,
+      {}
+    );
+
+    if (recipients.length === 0) return { sent: 0 };
+
+    const now = Date.now();
+    const nowDate = new Date(now);
+    let sentCount = 0;
+
+    for (const recipient of recipients) {
+      // Get user's timezone
+      const settings: any = await ctx.runQuery(
+        internal.userSettings.getInternal,
+        { userId: recipient.userId }
+      );
+      const tz = settings?.timezone || "Europe/Moscow";
+
+      // Check if it's Monday 08:00-08:29 in user's timezone
+      const localTime = nowDate.toLocaleString("en-GB", {
+        timeZone: tz,
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
+      // Format: "Mon, 08:30" or "Mon, 08:00"
+      const parts = localTime.split(", ");
+      const dayOfWeek = parts[0]; // "Mon"
+      const timeParts = parts[1]?.split(":"); // ["08", "30"]
+
+      if (!timeParts) continue;
+
+      const hour = parseInt(timeParts[0], 10);
+      const minute = parseInt(timeParts[1], 10);
+
+      // Only send on Monday at 08:30-08:59 (cron runs every 30 min)
+      if (dayOfWeek !== "Mon" || hour !== 8 || minute < 30) continue;
+
+      // Build 7-day date range (Mon-Sun of previous week)
+      // Find last Monday in user's timezone
+      const dates: string[] = [];
+      for (let i = 7; i >= 1; i--) {
+        const d = new Date(now - i * 24 * 60 * 60 * 1000);
+        dates.push(d.toISOString().slice(0, 10));
+      }
+
+      const since = now - 7 * 24 * 60 * 60 * 1000;
+      const until = now;
+
+      // Period string for header: "08.03 — 14.03.2026"
+      const startDate = new Date(since);
+      const endDate = new Date(until - 24 * 60 * 60 * 1000); // yesterday
+      const periodStr = `${String(startDate.getDate()).padStart(2, "0")}.${String(startDate.getMonth() + 1).padStart(2, "0")} — ${String(endDate.getDate()).padStart(2, "0")}.${String(endDate.getMonth() + 1).padStart(2, "0")}.${endDate.getFullYear()}`;
+
+      // Fetch weekly metrics
+      const metricsSummary = await ctx.runQuery(
+        internal.telegram.getWeeklyMetricsSummary,
+        { userId: recipient.userId, dates }
+      );
+
+      // Fetch action logs for the week
+      const logs = await ctx.runQuery(
+        internal.telegram.getDigestActionLogs,
+        { userId: recipient.userId, since, until }
+      );
+
+      const events: DigestActionLogSummary[] = logs.map((log: any) => ({
+        adName: log.adName,
+        adId: log.adId,
+        accountId: log.accountId,
+        actionType: log.actionType,
+        reason: log.reason,
+        savedAmount: log.savedAmount,
+        metricsSnapshot: log.metricsSnapshot,
+      }));
+
+      // Update events with end-of-day metrics (same fix as daily digest)
+      for (const event of events) {
+        // Find the date of the event from actionLog createdAt
+        const logEntry = logs.find((l: any) => l.adId === event.adId && l.reason === event.reason);
+        const eventDate = logEntry
+          ? new Date(logEntry.createdAt).toISOString().slice(0, 10)
+          : dates[dates.length - 1];
+
+        const freshMetrics = await ctx.runQuery(
+          internal.telegram.getAdDailyMetrics,
+          { adId: event.adId, date: eventDate }
+        );
+        if (freshMetrics) {
+          event.metricsSnapshot = {
+            spent: freshMetrics.spent,
+            leads: freshMetrics.leads,
+            cpl: freshMetrics.leads > 0
+              ? Math.round((freshMetrics.spent / freshMetrics.leads) * 100) / 100
+              : undefined,
+            ctr: freshMetrics.impressions > 0
+              ? Math.round((freshMetrics.clicks / freshMetrics.impressions) * 10000) / 100
+              : undefined,
+          };
+          if (event.reason.includes("Новый лид!")) {
+            event.reason = `Новый лид! Всего лидов: ${freshMetrics.leads}, расход: ${freshMetrics.spent.toFixed(2)}₽`;
+          }
+        }
+      }
+
+      const message = formatWeeklyDigest(events, periodStr, metricsSummary);
+
+      try {
+        await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+          chatId: recipient.chatId,
+          text: message,
+        });
+        sentCount++;
+      } catch (err) {
+        console.error(
+          `[telegram] Failed to send weekly digest to ${recipient.userId}:`,
           err instanceof Error ? err.message : err
         );
       }
