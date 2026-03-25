@@ -151,6 +151,34 @@ export const disconnect = mutation({
   },
 });
 
+// Clear all campaigns and ads for an account (used before re-sync of agency accounts)
+export const clearAccountData = mutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account || account.userId !== args.userId) return;
+
+    const campaigns = await ctx.db
+      .query("campaigns")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .collect();
+
+    for (const campaign of campaigns) {
+      const ads = await ctx.db
+        .query("ads")
+        .withIndex("by_campaignId", (q) => q.eq("campaignId", campaign._id))
+        .collect();
+      for (const ad of ads) {
+        await ctx.db.delete(ad._id);
+      }
+      await ctx.db.delete(campaign._id);
+    }
+  },
+});
+
 // Fetch available accounts: own account + agency clients
 export const fetchAvailableAccounts = action({
   args: {
@@ -418,6 +446,15 @@ export const syncNow = action({
         : await ctx.runAction(internal.auth.getValidVkAdsToken, {
             userId: args.userId,
           });
+
+      // For agency accounts, clear old data before re-sync
+      // (prevents stale campaigns from a previously used wrong token)
+      if (account.vkAccountId.startsWith("agency_")) {
+        await ctx.runMutation(api.adAccounts.clearAccountData, {
+          accountId: args.accountId,
+          userId: args.userId,
+        });
+      }
 
       // Fetch campaigns from myTarget API
       const mtCampaigns = await ctx.runAction(api.vkApi.getMtCampaigns, {
