@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action } from "./_generated/server";
+import { action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 // ─── myTarget API helper (local copy — callMtApi is not exported from vkApi.ts) ───
@@ -437,7 +437,54 @@ function buildReport(
   return campaignReports;
 }
 
+// ─── Internal queries ────────────────────────────────────────────────
+
+/** Get user's ad accounts for report building */
+export const getUserAccounts = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+  },
+});
+
 // ─── Main action ─────────────────────────────────────────────────────
+
+/** Build a report for a single token, returns an AccountReport */
+async function buildAccountReport(
+  accessToken: string,
+  accountName: string,
+  dateFrom: string,
+  dateTo: string
+): Promise<AccountReport> {
+  const [userInfo, data] = await Promise.all([
+    callMtApi<MtUserInfo>("user.json", accessToken).catch(() => null),
+    fetchAllData(accessToken, dateFrom, dateTo),
+  ]);
+
+  const campaignReports = buildReport(
+    data.adPlans, data.adGroups, data.banners,
+    data.adPlanStatsMap, data.adGroupStatsMap, data.bannerStatsMap,
+    data.leadCounts
+  );
+
+  const impressions = campaignReports.reduce((s, c) => s + c.impressions, 0);
+  const clicks = campaignReports.reduce((s, c) => s + c.clicks, 0);
+  const spent = Math.round(campaignReports.reduce((s, c) => s + c.spent, 0) * 100) / 100;
+  const leads = campaignReports.reduce((s, c) => s + c.leads, 0);
+  const derived = computeDerived({ impressions, clicks, spent, leads });
+
+  return {
+    id: userInfo?.id ?? 0,
+    name: accountName || userInfo?.username || "Кабинет",
+    campaigns: campaignReports,
+    impressions, clicks, spent, leads,
+    ctr: derived.ctr,
+    cpl: derived.cpl,
+  };
+}
 
 export const fetchReport = action({
   args: {
@@ -450,41 +497,69 @@ export const fetchReport = action({
     dateFrom: string;
     dateTo: string;
   }> => {
-    // Always use user-level token (auto-refreshed, works for all accounts)
-    const accessToken = await ctx.runAction(
-      internal.auth.getValidVkAdsToken,
+    // Get all user's ad accounts
+    const adAccounts = await ctx.runQuery(
+      internal.reports.getUserAccounts,
       { userId: args.userId }
     );
 
-    // Fetch account info + all data from VK API
-    const [userInfo, data] = await Promise.all([
-      callMtApi<MtUserInfo>("user.json", accessToken),
-      fetchAllData(accessToken, args.dateFrom, args.dateTo),
-    ]);
+    if (adAccounts.length === 0) {
+      // Fallback: use global token (legacy behavior)
+      const accessToken = await ctx.runAction(
+        internal.auth.getValidVkAdsToken,
+        { userId: args.userId }
+      );
+      const report = await buildAccountReport(
+        accessToken, "", args.dateFrom, args.dateTo
+      );
+      return { accounts: [report], dateFrom: args.dateFrom, dateTo: args.dateTo };
+    }
 
-    const campaignReports = buildReport(
-      data.adPlans, data.adGroups, data.banners,
-      data.adPlanStatsMap, data.adGroupStatsMap, data.bannerStatsMap,
-      data.leadCounts
-    );
+    // Group non-agency accounts by userId (they share the same global token)
+    const regularAccounts = adAccounts.filter((a) => !a.vkAccountId.startsWith("agency_"));
+    const agencyAccounts = adAccounts.filter((a) => a.vkAccountId.startsWith("agency_"));
 
-    // Build account-level report
-    const impressions = campaignReports.reduce((s, c) => s + c.impressions, 0);
-    const clicks = campaignReports.reduce((s, c) => s + c.clicks, 0);
-    const spent = Math.round(campaignReports.reduce((s, c) => s + c.spent, 0) * 100) / 100;
-    const leads = campaignReports.reduce((s, c) => s + c.leads, 0);
-    const derived = computeDerived({ impressions, clicks, spent, leads });
+    const accountReports: AccountReport[] = [];
 
-    const accountReport: AccountReport = {
-      id: userInfo.id,
-      name: userInfo.username || `Кабинет ${userInfo.id}`,
-      campaigns: campaignReports,
-      impressions, clicks, spent, leads,
-      ctr: derived.ctr,
-      cpl: derived.cpl,
-    };
+    // Build report for regular accounts (one global token covers all)
+    if (regularAccounts.length > 0) {
+      try {
+        const accessToken = await ctx.runAction(
+          internal.auth.getValidVkAdsToken,
+          { userId: args.userId }
+        );
+        const report = await buildAccountReport(
+          accessToken, "", args.dateFrom, args.dateTo
+        );
+        // Use the first regular account's name if user.json didn't return one
+        if (!report.name || report.name === "Кабинет") {
+          report.name = regularAccounts[0].name;
+        }
+        accountReports.push(report);
+      } catch (err) {
+        console.error(
+          `[reports] Failed to fetch report for regular accounts:`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
 
-    return { accounts: [accountReport], dateFrom: args.dateFrom, dateTo: args.dateTo };
+    // Build report for each agency account (each has its own token)
+    for (const agency of agencyAccounts) {
+      try {
+        const report = await buildAccountReport(
+          agency.accessToken, agency.name, args.dateFrom, args.dateTo
+        );
+        accountReports.push(report);
+      } catch (err) {
+        console.error(
+          `[reports] Failed to fetch report for agency account ${agency.name}:`,
+          err instanceof Error ? err.message : err
+        );
+      }
+    }
+
+    return { accounts: accountReports, dateFrom: args.dateFrom, dateTo: args.dateTo };
   },
 });
 

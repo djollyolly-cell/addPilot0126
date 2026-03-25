@@ -411,10 +411,13 @@ export const syncNow = action({
     }
 
     try {
-      // Get a valid VK Ads token (myTarget, auto-refreshes if needed)
-      const accessToken = await ctx.runAction(internal.auth.getValidVkAdsToken, {
-        userId: args.userId,
-      });
+      // For agency accounts, use the account's own token;
+      // for regular accounts, use the user's global VK Ads token
+      const accessToken = account.vkAccountId.startsWith("agency_")
+        ? account.accessToken
+        : await ctx.runAction(internal.auth.getValidVkAdsToken, {
+            userId: args.userId,
+          });
 
       // Fetch campaigns from myTarget API
       const mtCampaigns = await ctx.runAction(api.vkApi.getMtCampaigns, {

@@ -146,6 +146,14 @@ export const listActiveRules = internalQuery({
   },
 });
 
+/** Get an ad account by ID (for token resolution in agency accounts) */
+export const getAccountById = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.accountId);
+  },
+});
+
 /** Get today's daily metrics for an account */
 export const getAccountTodayMetrics = internalQuery({
   args: {
@@ -1239,10 +1247,14 @@ export const checkAllRules = internalAction({
               // (base.vk.result) and Lead Ads API before stopping.
               if (rule.type === "clicks_no_leads" && rule.actions.stopAd && metricsSnapshot.leads === 0) {
                 try {
-                  const accessToken = await ctx.runAction(
-                    internal.auth.getValidVkAdsToken,
-                    { userId: account.userId }
-                  );
+                  // For agency accounts, use the account's own token
+                  const targetAccount = await ctx.runQuery(internal.ruleEngine.getAccountById, { accountId: targetAccountId });
+                  const accessToken = targetAccount && targetAccount.vkAccountId.startsWith("agency_")
+                    ? targetAccount.accessToken
+                    : await ctx.runAction(
+                        internal.auth.getValidVkAdsToken,
+                        { userId: account.userId }
+                      );
 
                   // Check statistics API for vk.result (most reliable source)
                   let freshLeads = 0;
@@ -1331,10 +1343,14 @@ export const checkAllRules = internalAction({
 
               if (rule.actions.stopAd) {
                 try {
-                  const accessToken = await ctx.runAction(
-                    internal.auth.getValidVkAdsToken,
-                    { userId: account.userId }
-                  );
+                  // For agency accounts, use the account's own token
+                  const stopAccount = await ctx.runQuery(internal.ruleEngine.getAccountById, { accountId: targetAccountId });
+                  const accessToken = stopAccount && stopAccount.vkAccountId.startsWith("agency_")
+                    ? stopAccount.accessToken
+                    : await ctx.runAction(
+                        internal.auth.getValidVkAdsToken,
+                        { userId: account.userId }
+                      );
                   await ctx.runAction(api.vkApi.stopAd, {
                     accessToken,
                     adId,
