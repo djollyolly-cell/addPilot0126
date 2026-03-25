@@ -24,6 +24,13 @@ crons.interval(
   internal.telegram.sendWeeklyDigest
 );
 
+// Monthly digest — runs every hour, checks user's timezone for 1st of month 09:00
+crons.interval(
+  "monthly-digest",
+  { hours: 1 },
+  internal.telegram.sendMonthlyDigest
+);
+
 // Check expiring subscriptions daily at 08:00 UTC (11:00 MSK)
 crons.cron(
   "check-expiring-subscriptions",
