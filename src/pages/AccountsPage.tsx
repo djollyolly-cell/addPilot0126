@@ -4,9 +4,10 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { AccountList } from '../components/AccountList';
 import { VkAdsConnectWizard } from '../components/VkAdsConnectWizard';
+import { AgencyConnectModal } from '../components/AgencyConnectModal';
 import { UpgradeModal } from '../components/UpgradeModal';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Building2, Loader2, AlertCircle, RefreshCw, Link } from 'lucide-react';
+import { Building2, Loader2, AlertCircle, RefreshCw, Link, KeyRound } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
 
@@ -16,6 +17,7 @@ export function AccountsPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showWizard, setShowWizard] = useState(false);
+  const [showAgencyModal, setShowAgencyModal] = useState(false);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
 
   const accounts = useQuery(
@@ -74,6 +76,14 @@ export function AccountsPage() {
       return;
     }
     setShowWizard(true);
+  };
+
+  const handleAgencyClick = () => {
+    if (!canAddAccount) {
+      setShowUpgradeModal(true);
+      return;
+    }
+    setShowAgencyModal(true);
   };
 
   const handleUpgrade = async (tier: 'start' | 'pro') => {
@@ -197,6 +207,20 @@ export function AccountsPage() {
           </button>
           <button
             type="button"
+            onClick={handleAgencyClick}
+            disabled={isConnecting}
+            className={cn(
+              'inline-flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all',
+              'border-2 border-primary text-primary hover:bg-primary/5',
+              'disabled:opacity-50 disabled:cursor-not-allowed'
+            )}
+            data-testid="connect-agency-button"
+          >
+            <KeyRound className="w-4 h-4" />
+            Агентский кабинет
+          </button>
+          <button
+            type="button"
             onClick={handleConnectClick}
             disabled={isConnecting}
             className={cn(
@@ -272,6 +296,18 @@ export function AccountsPage() {
           onConnected={() => {
             setShowWizard(false);
             setSuccess('Кабинеты VK Ads успешно подключены!');
+          }}
+        />
+      )}
+
+      {/* Agency connect modal */}
+      {showAgencyModal && (
+        <AgencyConnectModal
+          userId={user.userId}
+          onClose={() => setShowAgencyModal(false)}
+          onConnected={() => {
+            setShowAgencyModal(false);
+            setSuccess('Агентский кабинет успешно подключён!');
           }}
         />
       )}

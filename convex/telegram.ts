@@ -1772,10 +1772,6 @@ export const sendMonthlyDigest = internalAction({
         parts.find((p) => p.type === "hour")?.value || "-1",
         10
       );
-      const minute = parseInt(
-        parts.find((p) => p.type === "minute")?.value || "-1",
-        10
-      );
 
       // Only send on the 1st of the month at 09:00-09:59 (cron runs every hour)
       if (day !== 1 || hour !== 9) continue;

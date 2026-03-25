@@ -266,6 +266,45 @@ export const connectSelectedAccounts = action({
   },
 });
 
+// Connect an agency account with a manually provided API key
+export const connectAgencyAccount = action({
+  args: {
+    userId: v.id("users"),
+    accessToken: v.string(),
+    name: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ accountId: string }> => {
+    const token = args.accessToken.trim();
+    const name = args.name.trim();
+
+    if (!token) throw new Error("Введите API-ключ");
+    if (!name) throw new Error("Введите название кабинета");
+
+    // Validate token by fetching campaigns from VK API
+    try {
+      await ctx.runAction(api.vkApi.getMtCampaigns, { accessToken: token });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("TOKEN_EXPIRED") || msg.includes("401")) {
+        throw new Error("API-ключ недействителен или истёк. Запросите новый у сервиса.");
+      }
+      throw new Error("Не удалось проверить API-ключ: " + msg);
+    }
+
+    // Use a hash of token prefix as vkAccountId for uniqueness
+    const vkAccountId = `agency_${token.slice(0, 16)}`;
+
+    const accountId = await ctx.runMutation(api.adAccounts.connect, {
+      userId: args.userId,
+      vkAccountId,
+      name,
+      accessToken: token,
+    });
+
+    return { accountId: accountId as string };
+  },
+});
+
 // Fetch VK ad accounts/campaigns using user's stored VK Ads token and connect
 export const fetchAndConnect = action({
   args: {
