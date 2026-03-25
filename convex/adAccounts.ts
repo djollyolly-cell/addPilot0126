@@ -542,9 +542,13 @@ export const upsertCampaign = mutation({
     allLimit: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    // Find campaign by accountId + vkCampaignId (not just vkCampaignId)
+    // to keep campaigns properly isolated between accounts
     const existing = await ctx.db
       .query("campaigns")
-      .withIndex("by_vkCampaignId", (q) => q.eq("vkCampaignId", args.vkCampaignId))
+      .withIndex("by_accountId_vkCampaignId", (q) =>
+        q.eq("accountId", args.accountId).eq("vkCampaignId", args.vkCampaignId)
+      )
       .first();
 
     if (existing) {
@@ -599,9 +603,13 @@ export const upsertAd = mutation({
     approved: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Find ad by accountId + vkAdId (not just vkAdId)
+    // to keep ads properly isolated between accounts
     const existing = await ctx.db
       .query("ads")
-      .withIndex("by_vkAdId", (q) => q.eq("vkAdId", args.vkAdId))
+      .withIndex("by_accountId_vkAdId", (q) =>
+        q.eq("accountId", args.accountId).eq("vkAdId", args.vkAdId)
+      )
       .first();
 
     if (existing) {

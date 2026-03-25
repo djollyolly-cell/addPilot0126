@@ -70,7 +70,8 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_accountId", ["accountId"])
-    .index("by_vkCampaignId", ["vkCampaignId"]),
+    .index("by_vkCampaignId", ["vkCampaignId"])
+    .index("by_accountId_vkCampaignId", ["accountId", "vkCampaignId"]),
 
   ads: defineTable({
     accountId: v.id("adAccounts"),
@@ -83,7 +84,8 @@ export default defineSchema({
     updatedAt: v.number(),
   })
     .index("by_campaignId", ["campaignId"])
-    .index("by_vkAdId", ["vkAdId"]),
+    .index("by_vkAdId", ["vkAdId"])
+    .index("by_accountId_vkAdId", ["accountId", "vkAdId"]),
 
   rules: defineTable({
     userId: v.id("users"),
