@@ -849,27 +849,50 @@ export const fixAccountCredentials = mutation({
   },
 });
 
-// TEMP: refresh user-level token with current credentials (without scope)
+// TEMP: refresh token using specific credentials
 export const refreshUserToken = action({
   args: {
     userId: v.id("users"),
+    clientId: v.optional(v.string()),
+    clientSecret: v.optional(v.string()),
   },
-  handler: async (ctx, args): Promise<{ success: boolean; accountId?: string; error?: string }> => {
+  handler: async (ctx, args): Promise<{ success: boolean; myTargetId?: number; username?: string; error?: string }> => {
     try {
-      // Get user credentials
-      const creds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
-        userId: args.userId,
-      });
+      // Use provided credentials, or user-level, or env vars
+      let clientId = args.clientId;
+      let clientSecret = args.clientSecret;
 
-      if (!creds?.clientId || !creds?.clientSecret) {
-        return { success: false, error: "No user-level credentials found" };
+      if (!clientId || !clientSecret) {
+        const creds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
+          userId: args.userId,
+        });
+        clientId = clientId || creds?.clientId;
+        clientSecret = clientSecret || creds?.clientSecret;
+      }
+
+      // Check env vars
+      const envClientId = process.env.VK_ADS_CLIENT_ID;
+      const envClientSecret = process.env.VK_ADS_CLIENT_SECRET;
+
+      // Return diagnostic info about what credentials are available
+      if (!clientId || !clientSecret) {
+        return {
+          success: false,
+          error: `No credentials found. env VK_ADS_CLIENT_ID=${envClientId ? 'SET' : 'NOT SET'}`,
+        };
       }
 
       // Get fresh token via client_credentials (no scope = full access)
       const tokenData = await ctx.runAction(internal.adAccounts.getTokenDataForCredentials, {
-        clientId: creds.clientId,
-        clientSecret: creds.clientSecret,
+        clientId,
+        clientSecret,
       });
+
+      // Check which myTarget account this token belongs to
+      const userResp = await fetch("https://target.my.com/api/v2/user.json", {
+        headers: { Authorization: `Bearer ${tokenData.accessToken}` },
+      });
+      const userData = await userResp.json();
 
       // Save to user record
       await ctx.runMutation(internal.users.updateVkAdsTokens, {
@@ -879,15 +902,11 @@ export const refreshUserToken = action({
         expiresIn: Math.floor((tokenData.tokenExpiresAt - Date.now()) / 1000),
       });
 
-      // Also update all accounts that have no per-account credentials
-      const accounts = await ctx.runQuery(api.adAccounts.list, { userId: args.userId });
-      for (const account of accounts) {
-        if (!account.clientId) {
-          await ctx.runMutation(api.adAccounts.updateSyncTime, { accountId: account._id });
-        }
-      }
-
-      return { success: true };
+      return {
+        success: true,
+        myTargetId: userData.id,
+        username: userData.username,
+      };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
     }
