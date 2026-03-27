@@ -515,45 +515,29 @@ export const fetchReport = action({
       return { accounts: [report], dateFrom: args.dateFrom, dateTo: args.dateTo };
     }
 
-    // Group non-agency accounts by userId (they share the same global token)
-    const regularAccounts = adAccounts.filter((a) => !a.vkAccountId.startsWith("agency_"));
-    const agencyAccounts = adAccounts.filter((a) => a.vkAccountId.startsWith("agency_"));
-
     const accountReports: AccountReport[] = [];
 
-    // Build report for regular accounts (one global token covers all)
-    if (regularAccounts.length > 0) {
+    // Build report for each account using per-account tokens
+    // Group accounts by clientId to avoid duplicate API calls for same credentials
+    const processedClientIds = new Set<string>();
+
+    for (const account of adAccounts) {
+      const clientKey = account.clientId || account._id;
+      if (processedClientIds.has(clientKey)) continue;
+      processedClientIds.add(clientKey);
+
       try {
         const accessToken = await ctx.runAction(
-          internal.auth.getValidVkAdsToken,
-          { userId: args.userId }
+          internal.auth.getValidTokenForAccount,
+          { accountId: account._id }
         );
         const report = await buildAccountReport(
-          accessToken, "", args.dateFrom, args.dateTo
-        );
-        // Use the first regular account's name if user.json didn't return one
-        if (!report.name || report.name === "Кабинет") {
-          report.name = regularAccounts[0].name;
-        }
-        accountReports.push(report);
-      } catch (err) {
-        console.error(
-          `[reports] Failed to fetch report for regular accounts:`,
-          err instanceof Error ? err.message : err
-        );
-      }
-    }
-
-    // Build report for each agency account (each has its own token)
-    for (const agency of agencyAccounts) {
-      try {
-        const report = await buildAccountReport(
-          agency.accessToken, agency.name, args.dateFrom, args.dateTo
+          accessToken, account.name, args.dateFrom, args.dateTo
         );
         accountReports.push(report);
       } catch (err) {
         console.error(
-          `[reports] Failed to fetch report for agency account ${agency.name}:`,
+          `[reports] Failed to fetch report for account ${account.name}:`,
           err instanceof Error ? err.message : err
         );
       }

@@ -1,6 +1,90 @@
 import { v } from "convex/values";
-import { mutation, query, action } from "./_generated/server";
+import { mutation, query, action, internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+
+const VK_ADS_API_BASE = "https://target.my.com";
+
+// Internal: get a fresh access token for given clientId/clientSecret
+export const getTokenForCredentials = internalAction({
+  args: {
+    clientId: v.string(),
+    clientSecret: v.string(),
+  },
+  handler: async (_ctx, args): Promise<string> => {
+    const data = await requestClientCredentials(args.clientId, args.clientSecret);
+    return data.access_token;
+  },
+});
+
+// Internal: get full token data (access + refresh + expiry) for given credentials
+export const getTokenDataForCredentials = internalAction({
+  args: {
+    clientId: v.string(),
+    clientSecret: v.string(),
+  },
+  handler: async (_ctx, args): Promise<{
+    accessToken: string;
+    refreshToken: string | undefined;
+    tokenExpiresAt: number;
+  }> => {
+    const data = await requestClientCredentials(args.clientId, args.clientSecret);
+    const expiresIn = data.expires_in || 86400;
+    return {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      tokenExpiresAt: Date.now() + expiresIn * 1000,
+    };
+  },
+});
+
+// Helper: request token via client_credentials grant, with token-limit cleanup
+async function requestClientCredentials(clientId: string, clientSecret: string) {
+  const doRequest = async () => {
+    const resp = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: "create_ads",
+      }).toString(),
+    });
+    return resp.json();
+  };
+
+  let data = await doRequest();
+
+  // If token limit reached, purge all app tokens and retry once
+  if (data.error) {
+    const errMsg = (data.error_description || data.error || "").toLowerCase();
+    if (errMsg.includes("token limit") || errMsg.includes("limit reached")) {
+      try {
+        await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token/delete.json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            client_id: clientId,
+            client_secret: clientSecret,
+          }).toString(),
+        });
+      } catch {
+        // Ignore
+      }
+      data = await doRequest();
+    }
+  }
+
+  if (data.error) {
+    const errorMsg = data.error_description || data.error || "";
+    if (errorMsg.toLowerCase().includes("invalid client")) {
+      throw new Error("Неверный Client ID или Client Secret. Проверьте данные в настройках VK Ads.");
+    }
+    throw new Error(errorMsg || "Не удалось получить токен VK Ads API");
+  }
+
+  return data;
+}
 
 // List all ad accounts for a user
 export const list = query({
@@ -34,6 +118,8 @@ export const connect = mutation({
     accessToken: v.string(),
     refreshToken: v.optional(v.string()),
     tokenExpiresAt: v.optional(v.number()),
+    clientId: v.optional(v.string()),
+    clientSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Check if account already connected
@@ -48,12 +134,19 @@ export const connect = mutation({
         name: args.name,
         accessToken: args.accessToken,
         status: "active" as const,
+        lastError: undefined,
       };
       if (args.refreshToken !== undefined) {
         patch.refreshToken = args.refreshToken;
       }
       if (args.tokenExpiresAt !== undefined) {
         patch.tokenExpiresAt = args.tokenExpiresAt;
+      }
+      if (args.clientId !== undefined) {
+        patch.clientId = args.clientId;
+      }
+      if (args.clientSecret !== undefined) {
+        patch.clientSecret = args.clientSecret;
       }
       await ctx.db.patch(existing._id, patch);
       return existing._id;
@@ -90,6 +183,8 @@ export const connect = mutation({
       accessToken: args.accessToken,
       refreshToken: args.refreshToken,
       tokenExpiresAt: args.tokenExpiresAt,
+      clientId: args.clientId,
+      clientSecret: args.clientSecret,
       status: "active",
       createdAt: Date.now(),
     });
@@ -180,6 +275,7 @@ export const clearAccountData = mutation({
 });
 
 // Fetch available accounts: own account + agency clients
+// Uses provided clientId/clientSecret to get a fresh token (not user-level)
 export const fetchAvailableAccounts = action({
   args: {
     userId: v.id("users"),
@@ -194,16 +290,26 @@ export const fetchAvailableAccounts = action({
       username: string;
     }>;
   }> => {
-    // Step 1: Get token (connectVkAds handles credential priority)
-    await ctx.runAction(api.auth.connectVkAds, {
-      userId: args.userId,
-      clientId: args.clientId,
-      clientSecret: args.clientSecret,
-    });
+    // Get credentials — prefer passed args, fallback to user record (for pre-fill)
+    let clientId = args.clientId;
+    let clientSecret = args.clientSecret;
 
-    // Step 2: Get valid token
-    const accessToken = await ctx.runAction(internal.auth.getValidVkAdsToken, {
-      userId: args.userId,
+    if (!clientId || !clientSecret) {
+      const creds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
+        userId: args.userId,
+      });
+      clientId = clientId || creds?.clientId;
+      clientSecret = clientSecret || creds?.clientSecret;
+    }
+
+    if (!clientId || !clientSecret) {
+      throw new Error("Не указаны Client ID / Client Secret");
+    }
+
+    // Get a fresh token directly using client_credentials grant
+    const accessToken = await ctx.runAction(internal.adAccounts.getTokenForCredentials, {
+      clientId,
+      clientSecret,
     });
 
     const accounts: Array<{
@@ -213,7 +319,7 @@ export const fetchAvailableAccounts = action({
       username: string;
     }> = [];
 
-    // Step 3: Get own account
+    // Get own account
     try {
       const user = await ctx.runAction(api.vkApi.getMtUser, { accessToken });
       accounts.push({
@@ -223,7 +329,6 @@ export const fetchAvailableAccounts = action({
         username: user.username,
       });
     } catch {
-      // If user endpoint fails, add a generic own account
       accounts.push({
         id: "vk_ads_main",
         name: "Мой кабинет VK Ads",
@@ -232,7 +337,7 @@ export const fetchAvailableAccounts = action({
       });
     }
 
-    // Step 4: Get agency clients (empty if not agency)
+    // Get agency clients (empty if not agency)
     try {
       const clients = await ctx.runAction(api.vkApi.getMtAgencyClients, { accessToken });
       for (const client of clients) {
@@ -252,9 +357,12 @@ export const fetchAvailableAccounts = action({
 });
 
 // Connect selected accounts from the wizard
+// Stores clientId/clientSecret per-account for independent token management
 export const connectSelectedAccounts = action({
   args: {
     userId: v.id("users"),
+    clientId: v.string(),
+    clientSecret: v.string(),
     accounts: v.array(
       v.object({
         id: v.string(),
@@ -263,9 +371,10 @@ export const connectSelectedAccounts = action({
     ),
   },
   handler: async (ctx, args): Promise<{ connected: number }> => {
-    // Get valid token
-    const accessToken = await ctx.runAction(internal.auth.getValidVkAdsToken, {
-      userId: args.userId,
+    // Get a fresh token using provided credentials
+    const tokenData = await ctx.runAction(internal.adAccounts.getTokenDataForCredentials, {
+      clientId: args.clientId,
+      clientSecret: args.clientSecret,
     });
 
     let connected = 0;
@@ -275,15 +384,17 @@ export const connectSelectedAccounts = action({
           userId: args.userId,
           vkAccountId: account.id,
           name: account.name,
-          accessToken,
+          accessToken: tokenData.accessToken,
+          refreshToken: tokenData.refreshToken,
+          tokenExpiresAt: tokenData.tokenExpiresAt,
+          clientId: args.clientId,
+          clientSecret: args.clientSecret,
         });
         connected++;
       } catch (err) {
-        // Skip accounts that are already connected by another user
         if (err instanceof Error && err.message.includes("другим пользователем")) {
           continue;
         }
-        // Re-throw limit errors
         if (err instanceof Error && err.message.includes("Лимит")) {
           throw err;
         }
@@ -337,42 +448,67 @@ export const connectAgencyAccount = action({
 export const fetchAndConnect = action({
   args: {
     userId: v.id("users"),
+    clientId: v.optional(v.string()),
+    clientSecret: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ connected: number; accounts: Array<{ account_id: string; account_name: string }> }> => {
-    // Get valid VK Ads API token (myTarget)
+    // Get credentials — prefer passed args, fallback to user record
+    let clientId = args.clientId;
+    let clientSecret = args.clientSecret;
+
+    if (!clientId || !clientSecret) {
+      const creds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
+        userId: args.userId,
+      });
+      clientId = clientId || creds?.clientId;
+      clientSecret = clientSecret || creds?.clientSecret;
+    }
+
+    if (!clientId || !clientSecret) {
+      throw new Error("Не указаны Client ID / Client Secret");
+    }
+
+    // Get valid token
     const accessToken = await ctx.runAction(internal.auth.getValidVkAdsToken, {
       userId: args.userId,
     });
 
-    // In myTarget API, the token IS the account — no separate accounts list.
-    // We create one adAccount entry representing the user's VK Ads cabinet.
-    // Then fetch campaigns to verify the token works.
+    // Get real account info from myTarget API
+    const userResp = await fetch("https://target.my.com/api/v2/user.json", {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const userData = await userResp.json();
+
+    // Use real myTarget user ID instead of hardcoded "vk_ads_main"
+    const mtUserId = userData.id ? String(userData.id) : "unknown";
+    const vkAccountId = `mt_${mtUserId}`;
+    const accountName = userData.username || `VK Ads (${mtUserId})`;
+
+    // Fetch campaigns to verify token works
     const campaigns = await ctx.runAction(api.vkApi.getMtCampaigns, {
       accessToken,
     });
 
-    // Connect as a single "VK Ads" account
-    const accountName = `VK Ads (${campaigns.length} кампаний)`;
-    const accountId = "vk_ads_main";
+    const displayName = `${accountName} (${campaigns.length} кампаний)`;
 
     try {
       await ctx.runMutation(api.adAccounts.connect, {
         userId: args.userId,
-        vkAccountId: accountId,
-        name: accountName,
+        vkAccountId,
+        name: displayName,
         accessToken,
+        clientId,
+        clientSecret,
       });
     } catch (err) {
-      // If already connected, update the name
       if (err instanceof Error && err.message.includes("уже подключён")) {
-        // Different user owns it — rethrow
         throw err;
       }
     }
 
     return {
       connected: 1,
-      accounts: [{ account_id: accountId, account_name: accountName }],
+      accounts: [{ account_id: vkAccountId, account_name: displayName }],
     };
   },
 });
@@ -439,13 +575,10 @@ export const syncNow = action({
     }
 
     try {
-      // For agency accounts, use the account's own token;
-      // for regular accounts, use the user's global VK Ads token
-      const accessToken = account.vkAccountId.startsWith("agency_")
-        ? account.accessToken
-        : await ctx.runAction(internal.auth.getValidVkAdsToken, {
-            userId: args.userId,
-          });
+      // Use per-account token (with fallback to user-level for old accounts)
+      const accessToken = await ctx.runAction(internal.auth.getValidTokenForAccount, {
+        accountId: args.accountId,
+      });
 
       // For agency accounts, clear old data before re-sync
       // (prevents stale campaigns from a previously used wrong token)
@@ -693,5 +826,40 @@ export const getVkApiStatus = query({
       tokenExpiresAt: user.vkAdsTokenExpiresAt,
       lastSyncAt: undefined as number | undefined,
     };
+  },
+});
+
+// TEMP migration: backfill existing accounts with user-level credentials
+import { internalMutation } from "./_generated/server";
+
+export const backfillAccountCredentials = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const accounts = await ctx.db.query("adAccounts").collect();
+    let updated = 0;
+
+    for (const account of accounts) {
+      // Skip accounts that already have their own credentials
+      if (account.clientId && account.clientSecret) continue;
+
+      // Get user-level credentials
+      const user = await ctx.db.get(account.userId);
+      if (!user) continue;
+
+      const clientId = (user as any).vkAdsClientId;
+      const clientSecret = (user as any).vkAdsClientSecret;
+
+      if (clientId && clientSecret) {
+        await ctx.db.patch(account._id, {
+          clientId,
+          clientSecret,
+        });
+        updated++;
+        console.log(`[backfill] Account ${account._id} (${account.name}): set clientId=${clientId}`);
+      }
+    }
+
+    console.log(`[backfill] Done. Updated ${updated} accounts.`);
+    return { updated };
   },
 });

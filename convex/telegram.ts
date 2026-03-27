@@ -567,8 +567,8 @@ export const handleWebhook = internalAction({
         if (actionLog) {
           try {
             const accessToken = await ctx.runAction(
-              internal.auth.getValidVkAdsToken,
-              { userId: actionLog.userId }
+              internal.auth.getValidTokenForAccount,
+              { accountId: actionLog.accountId }
             );
             await ctx.runAction(api.vkApi.restartAd, {
               accessToken,

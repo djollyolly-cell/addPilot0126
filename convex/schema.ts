@@ -47,6 +47,8 @@ export default defineSchema({
     accessToken: v.string(),
     refreshToken: v.optional(v.string()),
     tokenExpiresAt: v.optional(v.number()),
+    clientId: v.optional(v.string()),
+    clientSecret: v.optional(v.string()),
     status: v.union(
       v.literal("active"),
       v.literal("paused"),

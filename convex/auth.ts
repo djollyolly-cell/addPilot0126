@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalAction, mutation, query } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
@@ -580,6 +580,152 @@ export const getValidVkAdsToken = internalAction({
       return refreshed.accessToken;
     } catch {
       throw new Error("Не удалось обновить токен VK Ads. Подключите VK Ads заново.");
+    }
+  },
+});
+
+// ─── PER-ACCOUNT TOKEN MANAGEMENT ────────────────────────────────
+
+// Get a valid token for a specific adAccount (per-account credentials)
+export const getValidTokenForAccount = internalAction({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args): Promise<string> => {
+    const account = await ctx.runQuery(internal.auth.getAccountWithCredentials, {
+      accountId: args.accountId,
+    });
+
+    if (!account || !account.accessToken) {
+      throw new Error("Токен VK Ads не найден. Подключите кабинет заново.");
+    }
+
+    // If account has its own clientId — use per-account flow
+    if (account.clientId && account.clientSecret) {
+      const now = Date.now();
+      const BUFFER_MS = 5 * 60 * 1000;
+
+      if (account.tokenExpiresAt && account.tokenExpiresAt > now + BUFFER_MS) {
+        return account.accessToken;
+      }
+
+      // Token expired — try refresh
+      if (!account.refreshToken) {
+        throw new Error("Токен VK Ads истёк. Подключите кабинет заново.");
+      }
+
+      try {
+        const refreshed = await ctx.runAction(internal.auth.refreshTokenForAccount, {
+          accountId: args.accountId,
+          refreshToken: account.refreshToken,
+          clientId: account.clientId,
+          clientSecret: account.clientSecret,
+        });
+        return refreshed.accessToken;
+      } catch {
+        throw new Error("Не удалось обновить токен VK Ads. Подключите кабинет заново.");
+      }
+    }
+
+    // Fallback: old accounts without per-account credentials — use user-level token
+    return ctx.runAction(internal.auth.getValidVkAdsToken, {
+      userId: account.userId,
+    });
+  },
+});
+
+// Internal query to get account with credentials
+export const getAccountWithCredentials = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return null;
+    return {
+      accessToken: account.accessToken,
+      refreshToken: account.refreshToken,
+      tokenExpiresAt: account.tokenExpiresAt,
+      clientId: account.clientId,
+      clientSecret: account.clientSecret,
+      userId: account.userId,
+    };
+  },
+});
+
+// Refresh token for a specific account
+export const refreshTokenForAccount = internalAction({
+  args: {
+    accountId: v.id("adAccounts"),
+    refreshToken: v.string(),
+    clientId: v.string(),
+    clientSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const resp = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: args.refreshToken,
+        client_id: args.clientId,
+        client_secret: args.clientSecret,
+        scope: "create_ads",
+      }).toString(),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      throw new Error(data.error_description || data.error);
+    }
+
+    // Update this account AND any other accounts sharing the same clientId
+    await ctx.runMutation(internal.auth.updateAccountTokens, {
+      accountId: args.accountId,
+      clientId: args.clientId,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresIn: data.expires_in || 86400,
+    });
+
+    return {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresIn: data.expires_in || 86400,
+    };
+  },
+});
+
+// Update token for an account (and any accounts sharing the same clientId)
+export const updateAccountTokens = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    clientId: v.string(),
+    accessToken: v.string(),
+    refreshToken: v.optional(v.string()),
+    expiresIn: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const tokenExpiresAt = args.expiresIn > 0 ? now + args.expiresIn * 1000 : undefined;
+
+    // Find all accounts with the same clientId (they share one myTarget token)
+    const allAccounts = await ctx.db.query("adAccounts").collect();
+    const sameClientAccounts = allAccounts.filter(
+      (a) => a.clientId === args.clientId
+    );
+
+    for (const account of sameClientAccounts) {
+      await ctx.db.patch(account._id, {
+        accessToken: args.accessToken,
+        refreshToken: args.refreshToken ?? account.refreshToken,
+        tokenExpiresAt: tokenExpiresAt ?? account.tokenExpiresAt,
+      });
+    }
+
+    // If no accounts matched by clientId, update just this one
+    if (sameClientAccounts.length === 0) {
+      await ctx.db.patch(args.accountId, {
+        accessToken: args.accessToken,
+        refreshToken: args.refreshToken,
+        tokenExpiresAt,
+      });
     }
   },
 });

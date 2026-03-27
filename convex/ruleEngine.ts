@@ -1247,14 +1247,11 @@ export const checkAllRules = internalAction({
               // (base.vk.result) and Lead Ads API before stopping.
               if (rule.type === "clicks_no_leads" && rule.actions.stopAd && metricsSnapshot.leads === 0) {
                 try {
-                  // For agency accounts, use the account's own token
-                  const targetAccount = await ctx.runQuery(internal.ruleEngine.getAccountById, { accountId: targetAccountId });
-                  const accessToken = targetAccount && targetAccount.vkAccountId.startsWith("agency_")
-                    ? targetAccount.accessToken
-                    : await ctx.runAction(
-                        internal.auth.getValidVkAdsToken,
-                        { userId: account.userId }
-                      );
+                  // Use per-account token
+                  const accessToken = await ctx.runAction(
+                    internal.auth.getValidTokenForAccount,
+                    { accountId: targetAccountId }
+                  );
 
                   // Check statistics API for vk.result (most reliable source)
                   let freshLeads = 0;
@@ -1343,14 +1340,11 @@ export const checkAllRules = internalAction({
 
               if (rule.actions.stopAd) {
                 try {
-                  // For agency accounts, use the account's own token
-                  const stopAccount = await ctx.runQuery(internal.ruleEngine.getAccountById, { accountId: targetAccountId });
-                  const accessToken = stopAccount && stopAccount.vkAccountId.startsWith("agency_")
-                    ? stopAccount.accessToken
-                    : await ctx.runAction(
-                        internal.auth.getValidVkAdsToken,
-                        { userId: account.userId }
-                      );
+                  // Use per-account token
+                  const accessToken = await ctx.runAction(
+                    internal.auth.getValidTokenForAccount,
+                    { accountId: targetAccountId }
+                  );
                   await ctx.runAction(api.vkApi.stopAd, {
                     accessToken,
                     adId,

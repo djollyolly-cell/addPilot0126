@@ -432,17 +432,20 @@ export const updateVkAdsTokens = internalMutation({
       updatedAt: now,
     });
 
-    // Sync fresh token to all adAccounts for this user
+    // Note: per-account tokens are now managed independently via auth.updateAccountTokens.
+    // Only update accounts that don't have their own clientId (legacy accounts).
     const accounts = await ctx.db
       .query("adAccounts")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .collect();
     for (const account of accounts) {
-      await ctx.db.patch(account._id, {
-        accessToken: args.accessToken,
-        refreshToken: args.refreshToken ?? account.refreshToken,
-        tokenExpiresAt: tokenExpiresAt ?? account.tokenExpiresAt,
-      });
+      if (!account.clientId) {
+        await ctx.db.patch(account._id, {
+          accessToken: args.accessToken,
+          refreshToken: args.refreshToken ?? account.refreshToken,
+          tokenExpiresAt: tokenExpiresAt ?? account.tokenExpiresAt,
+        });
+      }
     }
   },
 });

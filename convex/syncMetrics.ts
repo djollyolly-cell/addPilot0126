@@ -32,14 +32,11 @@ export const syncAll = internalAction({
 
     for (const account of accounts) {
       try {
-        // For agency accounts, use the account's own token;
-        // for regular accounts, use the user's global VK Ads token
-        const accessToken = account.vkAccountId.startsWith("agency_")
-          ? account.accessToken
-          : await ctx.runAction(
-              internal.auth.getValidVkAdsToken,
-              { userId: account.userId }
-            );
+        // Use per-account token (with fallback to user-level for old accounts)
+        const accessToken = await ctx.runAction(
+          internal.auth.getValidTokenForAccount,
+          { accountId: account._id }
+        );
 
         // Fetch statistics, lead counts, and banners (for campaign mapping) in parallel
         const [stats, leadCounts, banners] = await Promise.all([

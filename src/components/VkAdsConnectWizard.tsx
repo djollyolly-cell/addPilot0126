@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useAction, useMutation, useQuery } from 'convex/react';
+import { useAction, useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from './ui/card';
@@ -34,10 +34,8 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
   const typedUserId = userId as Id<"users">;
   const navigate = useNavigate();
 
-  const savedCredentials = useQuery(api.users.getVkAdsCredentialsForFrontend, { userId: typedUserId });
   const limits = useQuery(api.users.getLimits, { userId: typedUserId });
 
-  const saveCredentials = useMutation(api.users.saveVkAdsCredentials);
   const fetchAvailableAccounts = useAction(api.adAccounts.fetchAvailableAccounts);
   const connectSelectedAccounts = useAction(api.adAccounts.connectSelectedAccounts);
 
@@ -49,8 +47,6 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
   const [accounts, setAccounts] = useState<AccountWithCustomName[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [connectingSelected, setConnectingSelected] = useState(false);
-  const [credentialsChecked, setCredentialsChecked] = useState(false);
-  const [autoFetchAttempted, setAutoFetchAttempted] = useState(false);
 
   // Calculate available slots
   const currentCount = limits?.usage.accounts ?? 0;
@@ -65,41 +61,31 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
     }
   }, [limits, availableSlots]);
 
-  // Pre-fill credentials from DB (but don't auto-skip if already failed)
-  useEffect(() => {
-    if (savedCredentials && step === 1 && !credentialsChecked && !autoFetchAttempted && availableSlots > 0) {
-      setClientId(savedCredentials.clientId);
-      setClientSecret(savedCredentials.clientSecret);
-      setAutoFetchAttempted(true);
-      setStep(2);
-    }
-  }, [savedCredentials, step, credentialsChecked, autoFetchAttempted, availableSlots]);
-
   // Step 2: auto-fetch accounts when entering this step
   useEffect(() => {
     if (step !== 2) return;
+    if (!clientId || !clientSecret) {
+      setError('Заполните Client ID и Client Secret');
+      setStep(1);
+      return;
+    }
 
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    const effectiveClientId = clientId || savedCredentials?.clientId;
-    const effectiveClientSecret = clientSecret || savedCredentials?.clientSecret;
-
     fetchAvailableAccounts({
       userId: typedUserId,
-      clientId: effectiveClientId || undefined,
-      clientSecret: effectiveClientSecret || undefined,
+      clientId,
+      clientSecret,
     })
       .then((result) => {
         if (cancelled) return;
-        // Add customName field to each account
         const accountsWithNames = result.accounts.map((a) => ({
           ...a,
           customName: a.name,
         }));
         setAccounts(accountsWithNames);
-        // Pre-select accounts up to available slots
         const toSelect = result.accounts.slice(0, availableSlots).map((a) => a.id);
         setSelected(new Set(toSelect));
         setStep(3);
@@ -107,7 +93,6 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
       .catch((err) => {
         if (cancelled) return;
         setError(err instanceof Error ? err.message : 'Не удалось загрузить кабинеты');
-        setCredentialsChecked(true);
         setStep(1);
       })
       .finally(() => {
@@ -116,29 +101,17 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
 
     return () => { cancelled = true; };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step, savedCredentials]);
+  }, [step]);
 
-  const handleSubmitCredentials = async () => {
+  const handleSubmitCredentials = () => {
     if (!clientId.trim() || !clientSecret.trim()) {
       setError('Заполните оба поля');
       return;
     }
-
-    setLoading(true);
     setError(null);
-    setCredentialsChecked(false);
-
-    try {
-      await saveCredentials({
-        userId: typedUserId,
-        clientId: clientId.trim(),
-        clientSecret: clientSecret.trim(),
-      });
-      setStep(2);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка сохранения');
-      setLoading(false);
-    }
+    setClientId(clientId.trim());
+    setClientSecret(clientSecret.trim());
+    setStep(2);
   };
 
   const toggleAccount = (id: string) => {
@@ -183,6 +156,8 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
     try {
       const result = await connectSelectedAccounts({
         userId: typedUserId,
+        clientId,
+        clientSecret,
         accounts: toConnect,
       });
       if (result.connected > 0) {
@@ -510,8 +485,6 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
                   onClick={() => {
                     setClientId('');
                     setClientSecret('');
-                    setCredentialsChecked(true); // Keep true to prevent auto-skip
-                    // Don't reset autoFetchAttempted - keep it true to prevent useEffect from auto-skipping
                     setAccounts([]);
                     setSelected(new Set());
                     setError(null);
