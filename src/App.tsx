@@ -14,7 +14,6 @@ const AuthCallback = lazy(() => import('./pages/AuthCallback').then(m => ({ defa
 const AdsCallback = lazy(() => import('./pages/AdsCallback').then(m => ({ default: m.AdsCallback })));
 const TelegramSettingsPage = lazy(() => import('./pages/TelegramSettingsPage').then(m => ({ default: m.TelegramSettingsPage })));
 const ReportsPage = lazy(() => import('./pages/ReportsPage').then(m => ({ default: m.ReportsPage })));
-const AnalyticsPage = lazy(() => import('./pages/AnalyticsPage').then(m => ({ default: m.AnalyticsPage })));
 const LogsPage = lazy(() => import('./pages/LogsPage').then(m => ({ default: m.LogsPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 const PricingPage = lazy(() => import('./pages/PricingPage').then(m => ({ default: m.PricingPage })));
@@ -110,7 +109,7 @@ function App() {
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/rules" element={<RulesPage />} />
         <Route path="/reports" element={<ReportsPage />} />
-        <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/analytics" element={<Navigate to="/dashboard" replace />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/telegram" element={<TelegramSettingsPage />} />

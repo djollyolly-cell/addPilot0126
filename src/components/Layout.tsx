@@ -4,7 +4,6 @@ import {
   LayoutDashboard,
   Building2,
   ListChecks,
-  BarChart3,
   FileBarChart,
   ScrollText,
   Settings,
@@ -21,7 +20,6 @@ const navigation = [
   { name: 'Кабинеты', href: '/accounts', icon: Building2 },
   { name: 'Правила', href: '/rules', icon: ListChecks },
   { name: 'Отчёты', href: '/reports', icon: FileBarChart },
-  { name: 'Аналитика', href: '/analytics', icon: BarChart3 },
   { name: 'Логи', href: '/logs', icon: ScrollText },
   { name: 'Тарифы', href: '/pricing', icon: Crown },
   { name: 'Настройки', href: '/settings', icon: Settings },
@@ -32,7 +30,7 @@ const bottomNavItems = [
   { name: 'Дашборд', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Кабинеты', href: '/accounts', icon: Building2 },
   { name: 'Правила', href: '/rules', icon: ListChecks },
-  { name: 'Аналитика', href: '/analytics', icon: BarChart3 },
+  { name: 'Отчёты', href: '/reports', icon: FileBarChart },
   { name: 'Настройки', href: '/settings', icon: Settings },
 ];
 

@@ -1,13 +1,55 @@
-import { useEffect, useRef, useState, memo } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect, memo } from 'react';
 import { useQuery, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Id } from '../../convex/_generated/dataModel';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Button } from '../components/ui/button';
-import { LayoutDashboard, Loader2, Trash2, Building2, TrendingUp, TrendingDown, Minus, Zap, ShieldOff, Bell, ListFilter, Clock, Inbox, AlertTriangle, Crown } from 'lucide-react';
+import {
+  LayoutDashboard, Loader2, Trash2, Building2, TrendingUp, TrendingDown, Minus,
+  Zap, ShieldOff, Bell, ListFilter, Clock, Inbox, AlertTriangle, Crown,
+  Download, Image, Lock,
+} from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Link, useNavigate } from 'react-router-dom';
+import {
+  LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
+  XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts';
+
+/* ───────────────────────── helpers ───────────────────────── */
+
+type PeriodPreset = '7' | '30' | '90' | 'custom';
+
+const PERIOD_OPTIONS: { value: PeriodPreset; label: string }[] = [
+  { value: '7', label: '7 дней' },
+  { value: '30', label: '30 дней' },
+  { value: '90', label: '90 дней' },
+  { value: 'custom', label: 'Свой период' },
+];
+
+const PIE_COLORS = ['#6366f1', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6'];
+
+function getDateRange(preset: PeriodPreset, customStart: string, customEnd: string) {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  if (preset === 'custom') {
+    const start = customStart ? new Date(customStart) : new Date(today.getTime() - 7 * 86400000);
+    const end = customEnd ? new Date(customEnd) : today;
+    return {
+      startDate: start.getTime(),
+      endDate: end.getTime() + 86400000 - 1,
+    };
+  }
+
+  const days = Number(preset);
+  const startDate = new Date(today.getTime() - (days - 1) * 86400000);
+  return {
+    startDate: startDate.getTime(),
+    endDate: today.getTime() + 86400000 - 1,
+  };
+}
 
 /** Animated counter hook */
 function useAnimatedNumber(target: number, duration = 800) {
@@ -39,164 +81,70 @@ function useAnimatedNumber(target: number, duration = 800) {
   return current;
 }
 
-/** Mini bar chart for 7-day savings */
-const SavingsChart = memo(function SavingsChart({ data }: { data: { date: string; amount: number }[] }) {
-  const max = Math.max(...data.map((d) => d.amount), 1);
+/** Export chart area as PNG via canvas */
+function useExportPng(ref: React.RefObject<HTMLDivElement | null>) {
+  return useCallback(async () => {
+    const el = ref.current;
+    if (!el) return;
+    const svg = el.querySelector('svg');
+    if (!svg) return;
 
+    const svgData = new XMLSerializer().serializeToString(svg);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    const img = new window.Image();
+    img.onload = () => {
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      const url = canvas.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'chart.png';
+      a.click();
+    };
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgData);
+  }, [ref]);
+}
+
+/** Export top-ads data as CSV */
+function exportCsv(
+  data: { adId: string; adName: string; totalSaved: number; totalSpent: number; triggers: number }[]
+) {
+  const header = 'ID объявления,Название,Сэкономлено (₽),Потрачено (₽),Срабатываний\n';
+  const rows = data
+    .map((d) => `${d.adId},"${d.adName}",${d.totalSaved},${d.totalSpent},${d.triggers}`)
+    .join('\n');
+  const blob = new Blob([header + rows], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'top-ads.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function EmptyChart({ message }: { message: string }) {
   return (
-    <div className="flex items-end gap-1 h-16" data-testid="savings-chart">
-      {data.map((d) => {
-        const height = Math.max((d.amount / max) * 100, 4);
-        return (
-          <div
-            key={d.date}
-            className="flex-1 bg-primary/20 rounded-t relative group"
-            style={{ height: `${height}%` }}
-          >
-            <div
-              className="absolute bottom-0 left-0 right-0 bg-primary rounded-t transition-all"
-              style={{ height: `${height}%` }}
-            />
-            <div className="absolute -top-8 left-1/2 -translate-x-1/2 hidden group-hover:block bg-foreground text-background text-xs px-1.5 py-0.5 rounded whitespace-nowrap z-10">
-              {d.amount.toLocaleString()}₽
-            </div>
-          </div>
-        );
-      })}
+    <div className="flex flex-col items-center justify-center py-12 text-muted-foreground" data-testid="no-data">
+      <Inbox className="w-10 h-10 mb-2 opacity-30" />
+      <p className="text-sm">{message}</p>
     </div>
   );
-});
+}
 
-/** Savings Widget */
-const SavingsWidget = memo(function SavingsWidget({ userId }: { userId: Id<"users"> }) {
-  const savedToday = useQuery(api.ruleEngine.getSavedToday, { userId });
-  const savedHistory = useQuery(api.ruleEngine.getSavedHistory, { userId });
+/* ───────────────────────── sub-components ───────────────────────── */
 
-  const todayValue = savedToday ?? 0;
-  const animatedValue = useAnimatedNumber(todayValue);
-
-  // Calculate percentage change vs previous 7 days
-  const historyData = savedHistory ?? [];
-  const thisWeekTotal = historyData.reduce((s, d) => s + d.amount, 0);
-
-  // For percentage change, we'd need previous week data.
-  // We'll compute based on the first half vs second half of available data.
-  const halfLen = Math.floor(historyData.length / 2);
-  const firstHalf = historyData.slice(0, halfLen).reduce((s, d) => s + d.amount, 0);
-  const secondHalf = historyData.slice(halfLen).reduce((s, d) => s + d.amount, 0);
-
-  let percentChange: number | null = null;
-  if (firstHalf > 0) {
-    percentChange = Math.round(((secondHalf - firstHalf) / firstHalf) * 100);
-  } else if (secondHalf > 0) {
-    percentChange = 100;
-  }
-
-  return (
-    <Card data-testid="savings-widget">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-lg">Экономия сегодня</CardTitle>
-        <CardDescription>Сумма сэкономленного бюджета</CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex items-baseline gap-3">
-          <span className="text-4xl font-bold tabular-nums" data-testid="savings-amount">
-            {animatedValue.toLocaleString()} ₽
-          </span>
-          {percentChange !== null && (
-            <span
-              className={cn(
-                'flex items-center gap-0.5 text-sm font-medium',
-                percentChange > 0
-                  ? 'text-green-600'
-                  : percentChange < 0
-                    ? 'text-red-600'
-                    : 'text-muted-foreground'
-              )}
-              data-testid="savings-change"
-            >
-              {percentChange > 0 ? (
-                <TrendingUp className="w-4 h-4" />
-              ) : percentChange < 0 ? (
-                <TrendingDown className="w-4 h-4" />
-              ) : (
-                <Minus className="w-4 h-4" />
-              )}
-              {percentChange > 0 ? '+' : ''}
-              {percentChange}%
-            </span>
-          )}
-          {percentChange === null && thisWeekTotal === 0 && (
-            <span className="text-sm text-muted-foreground" data-testid="savings-change">—</span>
-          )}
-        </div>
-
-        {historyData.length > 0 && <SavingsChart data={historyData} />}
-
-        <div className="flex justify-between text-xs text-muted-foreground">
-          {historyData.length > 0 && (
-            <>
-              <span>
-                {new Date(historyData[0].date).toLocaleDateString('ru-RU', {
-                  day: 'numeric',
-                  month: 'short',
-                })}
-              </span>
-              <span>Сегодня</span>
-            </>
-          )}
-        </div>
-      </CardContent>
-    </Card>
-  );
-});
-
-/** Activity Block — triggers, stops, notifications counts */
-const ActivityBlock = memo(function ActivityBlock({ userId }: { userId: Id<"users"> }) {
-  const stats = useQuery(api.ruleEngine.getActivityStats, { userId });
-
-  const items = [
-    {
-      label: 'Срабатываний',
-      value: stats?.triggers ?? 0,
-      icon: Zap,
-      color: 'text-amber-500',
-      bg: 'bg-amber-500/10',
-    },
-    {
-      label: 'Остановок',
-      value: stats?.stops ?? 0,
-      icon: ShieldOff,
-      color: 'text-red-500',
-      bg: 'bg-red-500/10',
-    },
-    {
-      label: 'Уведомлений',
-      value: stats?.notifications ?? 0,
-      icon: Bell,
-      color: 'text-blue-500',
-      bg: 'bg-blue-500/10',
-    },
-  ];
-
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4" data-testid="activity-block">
-      {items.map((item) => (
-        <Card key={item.label}>
-          <CardContent className="flex items-center gap-3 p-4">
-            <div className={cn('p-2 rounded-lg', item.bg)}>
-              <item.icon className={cn('w-5 h-5', item.color)} />
-            </div>
-            <div>
-              <p className="text-2xl font-bold tabular-nums">{item.value}</p>
-              <p className="text-xs text-muted-foreground">{item.label}</p>
-            </div>
-          </CardContent>
-        </Card>
-      ))}
-    </div>
-  );
-});
+/** Action type label mapping */
+const ACTION_TYPE_LABELS: Record<string, string> = {
+  stopped: 'Остановлено',
+  notified: 'Уведомление',
+  stopped_and_notified: 'Остановлено + уведомление',
+};
 
 /** Health indicator dot for account status */
 const HealthIndicator = memo(function HealthIndicator({ status }: { status: string }) {
@@ -221,13 +169,6 @@ const HealthIndicator = memo(function HealthIndicator({ status }: { status: stri
     />
   );
 });
-
-/** Action type label mapping */
-const ACTION_TYPE_LABELS: Record<string, string> = {
-  stopped: 'Остановлено',
-  notified: 'Уведомление',
-  stopped_and_notified: 'Остановлено + уведомление',
-};
 
 /** Event Feed — recent action logs with filters */
 const EventFeed = memo(function EventFeed({
@@ -424,10 +365,53 @@ const ExpiringSoonBanner = memo(function ExpiringSoonBanner({ expiresAt }: { exp
   );
 });
 
+/* ───────────────────────── main page ───────────────────────── */
+
 export function DashboardPage() {
   const { user } = useAuth();
   const typedUserId = user?.userId as Id<"users"> | undefined;
 
+  /* ── period state (analytics) ── */
+  const [period, setPeriod] = useState<PeriodPreset>('7');
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd, setCustomEnd] = useState('');
+  const [dateError, setDateError] = useState<string | null>(null);
+
+  const chartRef = useRef<HTMLDivElement | null>(null);
+  const handleExportPng = useExportPng(chartRef);
+
+  const { startDate, endDate } = useMemo(
+    () => getDateRange(period, customStart, customEnd),
+    [period, customStart, customEnd]
+  );
+
+  const handleCustomStartChange = (val: string) => {
+    setCustomStart(val);
+    setDateError(null);
+    if (val) {
+      const d = new Date(val);
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      if (d.getTime() > today.getTime()) {
+        setDateError('Дата не может быть в будущем');
+      }
+    }
+  };
+
+  const handleCustomEndChange = (val: string) => {
+    setCustomEnd(val);
+    setDateError(null);
+    if (val) {
+      const d = new Date(val);
+      const today = new Date();
+      today.setHours(23, 59, 59, 999);
+      if (d.getTime() > today.getTime()) {
+        setDateError('Дата не может быть в будущем');
+      }
+    }
+  };
+
+  /* ── queries: dashboard core ── */
   const accounts = useQuery(
     api.adAccounts.list,
     typedUserId ? { userId: typedUserId } : 'skip'
@@ -438,9 +422,69 @@ export function DashboardPage() {
     typedUserId ? { userId: typedUserId } : 'skip'
   );
 
+  const savedToday = useQuery(
+    api.ruleEngine.getSavedToday,
+    typedUserId ? { userId: typedUserId } : 'skip'
+  );
+
+  const activityStats = useQuery(
+    api.ruleEngine.getActivityStats,
+    typedUserId ? { userId: typedUserId } : 'skip'
+  );
+
+  /* ── queries: analytics ── */
+  const savingsData = useQuery(
+    api.ruleEngine.getAnalyticsSavings,
+    typedUserId ? { userId: typedUserId, startDate, endDate } : 'skip'
+  );
+
+  const typeData = useQuery(
+    api.ruleEngine.getAnalyticsByType,
+    typedUserId ? { userId: typedUserId, startDate, endDate } : 'skip'
+  );
+
+  const triggerData = useQuery(
+    api.ruleEngine.getAnalyticsTriggersByRule,
+    typedUserId ? { userId: typedUserId, startDate, endDate } : 'skip'
+  );
+
+  const topAdsData = useQuery(
+    api.ruleEngine.getTopAds,
+    typedUserId ? { userId: typedUserId, startDate, endDate } : 'skip'
+  );
+
+  const roiData = useQuery(
+    api.ruleEngine.getROI,
+    typedUserId ? { userId: typedUserId, startDate, endDate } : 'skip'
+  );
+
+  /* ── mutations ── */
   const setActiveAccount = useMutation(api.userSettings.setActiveAccount);
   const disconnectAccount = useMutation(api.adAccounts.disconnect);
 
+  /* ── animated today value ── */
+  const todayValue = savedToday ?? 0;
+  const animatedSaved = useAnimatedNumber(todayValue);
+
+  /* ── percentage change (savings history from analytics 7d) ── */
+  const savedHistory = useQuery(
+    api.ruleEngine.getSavedHistory,
+    typedUserId ? { userId: typedUserId } : 'skip'
+  );
+  const historyData = savedHistory ?? [];
+  const halfLen = Math.floor(historyData.length / 2);
+  const firstHalf = historyData.slice(0, halfLen).reduce((s, d) => s + d.amount, 0);
+  const secondHalf = historyData.slice(halfLen).reduce((s, d) => s + d.amount, 0);
+  const thisWeekTotal = historyData.reduce((s, d) => s + d.amount, 0);
+
+  let percentChange: number | null = null;
+  if (firstHalf > 0) {
+    percentChange = Math.round(((secondHalf - firstHalf) / firstHalf) * 100);
+  } else if (secondHalf > 0) {
+    percentChange = 100;
+  }
+
+  /* ── derived ── */
   if (!user) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -451,8 +495,8 @@ export function DashboardPage() {
 
   const isLoading = accounts === undefined || settings === undefined;
   const activeAccountId = settings?.activeAccountId;
+  const isFreemium = user.subscriptionTier === 'freemium';
 
-  // Check subscription status
   const isExpired = user.subscriptionTier !== 'freemium' &&
     user.subscriptionExpiresAt &&
     user.subscriptionExpiresAt < Date.now();
@@ -461,6 +505,18 @@ export function DashboardPage() {
     user.subscriptionExpiresAt &&
     user.subscriptionExpiresAt > Date.now() &&
     user.subscriptionExpiresAt < Date.now() + 7 * 24 * 60 * 60 * 1000;
+
+  const analyticsLoading =
+    savingsData === undefined ||
+    typeData === undefined ||
+    triggerData === undefined ||
+    topAdsData === undefined ||
+    roiData === undefined;
+
+  const hasData = savingsData && savingsData.some((d) => d.amount > 0);
+  const hasTypeData = typeData && typeData.some((d) => d.count > 0);
+  const hasTriggerData = triggerData && triggerData.length > 0;
+  const hasTopAds = topAdsData && topAdsData.length > 0;
 
   const handleSelectAccount = async (accountId: Id<"adAccounts">) => {
     if (!typedUserId) return;
@@ -473,40 +529,115 @@ export function DashboardPage() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6" data-testid="dashboard-page">
-      {/* Subscription banners */}
+    <div className="max-w-5xl mx-auto p-6 space-y-6" data-testid="dashboard-page">
+      {/* ── Subscription banners ── */}
       {isExpired && <ExpiredSubscriptionBanner />}
       {isExpiringSoon && user.subscriptionExpiresAt && (
         <ExpiringSoonBanner expiresAt={user.subscriptionExpiresAt} />
       )}
 
-      {/* Header */}
+      {/* ── Header ── */}
       <div>
         <h1 className="text-2xl font-bold text-foreground flex items-center gap-2">
           <LayoutDashboard className="w-7 h-7" />
           Дашборд
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          Выберите активный рекламный кабинет
+          Обзор автоматизации и аналитика
         </p>
       </div>
 
-      {/* Savings Widget */}
-      {typedUserId && <SavingsWidget userId={typedUserId} />}
+      {/* ── Today's stats row (4 compact cards) ── */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4" data-testid="today-stats-row">
+        {/* Savings today */}
+        <Card data-testid="savings-widget">
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-green-500/10">
+              <TrendingUp className="w-5 h-5 text-green-500" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold tabular-nums" data-testid="savings-amount">
+                {animatedSaved.toLocaleString()} <span className="text-base font-normal">₽</span>
+              </p>
+              <div className="flex items-center gap-1">
+                <p className="text-xs text-muted-foreground">Экономия сегодня</p>
+                {percentChange !== null && (
+                  <span
+                    className={cn(
+                      'flex items-center gap-0.5 text-xs font-medium',
+                      percentChange > 0
+                        ? 'text-green-600'
+                        : percentChange < 0
+                          ? 'text-red-600'
+                          : 'text-muted-foreground'
+                    )}
+                    data-testid="savings-change"
+                  >
+                    {percentChange > 0 ? (
+                      <TrendingUp className="w-3 h-3" />
+                    ) : percentChange < 0 ? (
+                      <TrendingDown className="w-3 h-3" />
+                    ) : (
+                      <Minus className="w-3 h-3" />
+                    )}
+                    {percentChange > 0 ? '+' : ''}
+                    {percentChange}%
+                  </span>
+                )}
+                {percentChange === null && thisWeekTotal === 0 && (
+                  <span className="text-xs text-muted-foreground" data-testid="savings-change">—</span>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
-      {/* Activity Block */}
-      {typedUserId && <ActivityBlock userId={typedUserId} />}
+        {/* Triggers */}
+        <Card data-testid="activity-block">
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-amber-500/10">
+              <Zap className="w-5 h-5 text-amber-500" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold tabular-nums">{activityStats?.triggers ?? 0}</p>
+              <p className="text-xs text-muted-foreground">Срабатываний</p>
+            </div>
+          </CardContent>
+        </Card>
 
-      {/* Event Feed */}
-      {typedUserId && <EventFeed userId={typedUserId} accounts={accounts} />}
+        {/* Stops */}
+        <Card>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-red-500/10">
+              <ShieldOff className="w-5 h-5 text-red-500" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold tabular-nums">{activityStats?.stops ?? 0}</p>
+              <p className="text-xs text-muted-foreground">Остановок</p>
+            </div>
+          </CardContent>
+        </Card>
 
-      {/* Content */}
+        {/* Notifications */}
+        <Card>
+          <CardContent className="flex items-center gap-3 p-4">
+            <div className="p-2 rounded-lg bg-blue-500/10">
+              <Bell className="w-5 h-5 text-blue-500" />
+            </div>
+            <div>
+              <p className="text-2xl font-bold tabular-nums">{activityStats?.notifications ?? 0}</p>
+              <p className="text-xs text-muted-foreground">Уведомлений</p>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* ── Account cards ── */}
       {isLoading ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="w-8 h-8 animate-spin text-primary" />
         </div>
       ) : accounts.length === 0 ? (
-        /* Empty state */
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 gap-4">
             <Building2 className="w-12 h-12 text-muted-foreground" />
@@ -530,7 +661,6 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       ) : (
-        /* Account cards */
         <Card>
           <CardHeader>
             <CardTitle className="text-lg">Рекламные кабинеты</CardTitle>
@@ -584,6 +714,303 @@ export function DashboardPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* ── Period selector ── */}
+      <div className="space-y-3" data-testid="period-selector">
+        <div className="flex gap-2">
+          {PERIOD_OPTIONS.map((opt) => (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => { setPeriod(opt.value); setDateError(null); }}
+              className={cn(
+                'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                period === opt.value
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-muted text-muted-foreground hover:bg-muted/80'
+              )}
+              data-testid={`period-${opt.value}`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {period === 'custom' && (
+          <div className="flex items-center gap-3">
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">С</label>
+              <input
+                type="date"
+                value={customStart}
+                onChange={(e) => handleCustomStartChange(e.target.value)}
+                className="block px-3 py-1.5 border rounded-lg text-sm bg-background"
+                data-testid="custom-start"
+              />
+            </div>
+            <span className="text-muted-foreground mt-5">—</span>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">По</label>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={(e) => handleCustomEndChange(e.target.value)}
+                className="block px-3 py-1.5 border rounded-lg text-sm bg-background"
+                data-testid="custom-end"
+              />
+            </div>
+          </div>
+        )}
+
+        {dateError && (
+          <p className="text-sm text-red-500" data-testid="date-error">{dateError}</p>
+        )}
+      </div>
+
+      {/* ── Analytics charts ── */}
+      {analyticsLoading ? (
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="w-8 h-8 animate-spin text-primary" />
+        </div>
+      ) : (
+        <div className="space-y-6">
+          {/* ROI Widget */}
+          <Card data-testid="roi-widget">
+            <CardHeader>
+              <CardTitle className="text-lg">ROI автоматизации</CardTitle>
+              <CardDescription>Отношение сэкономленного бюджета к потраченному</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {isFreemium ? (
+                <div className="flex items-center gap-3 py-4 text-muted-foreground">
+                  <Lock className="w-5 h-5" />
+                  <p className="text-sm">Оформите подписку для доступа к ROI-аналитике</p>
+                </div>
+              ) : roiData!.totalEvents > 0 ? (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums">{roiData!.roi}%</p>
+                    <p className="text-xs text-muted-foreground">ROI</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums">{roiData!.totalSaved.toLocaleString()} ₽</p>
+                    <p className="text-xs text-muted-foreground">Сэкономлено</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums">{roiData!.totalSpent.toLocaleString()} ₽</p>
+                    <p className="text-xs text-muted-foreground">Потрачено</p>
+                  </div>
+                  <div>
+                    <p className="text-2xl font-bold tabular-nums">{roiData!.totalEvents}</p>
+                    <p className="text-xs text-muted-foreground">Событий</p>
+                  </div>
+                </div>
+              ) : (
+                <EmptyChart message="Нет данных за период" />
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Line chart — savings over time */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5" />
+                    Экономия за период
+                  </CardTitle>
+                  <CardDescription>Сумма сэкономленного бюджета по дням</CardDescription>
+                </div>
+                {hasData && (
+                  <button
+                    type="button"
+                    onClick={handleExportPng}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border hover:bg-muted transition-colors"
+                    data-testid="export-png"
+                  >
+                    <Image className="w-3.5 h-3.5" />
+                    PNG
+                  </button>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent>
+              {hasData ? (
+                <div ref={chartRef} data-testid="savings-line-chart" className="h-64">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={savingsData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fontSize: 12 }}
+                        tickFormatter={(d: string) =>
+                          new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })
+                        }
+                      />
+                      <YAxis tick={{ fontSize: 12 }} />
+                      <Tooltip
+                        formatter={(value: number) => [`${value.toLocaleString()} ₽`, 'Экономия']}
+                        labelFormatter={(label: string) =>
+                          new Date(label).toLocaleDateString('ru-RU', {
+                            day: 'numeric',
+                            month: 'long',
+                            year: 'numeric',
+                          })
+                        }
+                      />
+                      <Line
+                        type="monotone"
+                        dataKey="amount"
+                        stroke="hsl(var(--primary))"
+                        strokeWidth={2}
+                        dot={false}
+                        activeDot={{ r: 4 }}
+                      />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              ) : (
+                <EmptyChart message="Нет данных за период" />
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Bar chart + Pie chart in 2-column grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Bar chart — action type breakdown */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Действия по типам</CardTitle>
+                <CardDescription>Количество срабатываний по типу действия</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {hasTypeData ? (
+                  <div data-testid="rules-bar-chart" className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={typeData}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+                        <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                        <YAxis tick={{ fontSize: 12 }} allowDecimals={false} />
+                        <Tooltip formatter={(value: number) => [value, 'Срабатываний']} />
+                        <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                          <Cell fill="#ef4444" />
+                          <Cell fill="#3b82f6" />
+                          <Cell fill="#f59e0b" />
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <EmptyChart message="Нет данных за период" />
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Pie chart — triggers by rule */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg">Срабатывания по правилам</CardTitle>
+                <CardDescription>Доля каждого правила в общем числе срабатываний</CardDescription>
+              </CardHeader>
+              <CardContent>
+                {hasTriggerData ? (
+                  <div data-testid="triggers-pie-chart" className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={triggerData}
+                          dataKey="count"
+                          nameKey="name"
+                          cx="50%"
+                          cy="50%"
+                          outerRadius={90}
+                          label={({ name, percent }: { name: string; percent: number }) =>
+                            `${name} (${(percent * 100).toFixed(0)}%)`
+                          }
+                          labelLine={false}
+                        >
+                          {triggerData!.map((_, i) => (
+                            <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip formatter={(value: number) => [value, 'Срабатываний']} />
+                        <Legend />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <EmptyChart message="Нет данных за период" />
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Top-10 Ads Table */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-lg">Топ-10 объявлений</CardTitle>
+                  <CardDescription>По сумме сэкономленного бюджета</CardDescription>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => hasTopAds && exportCsv(topAdsData!)}
+                  disabled={!hasTopAds}
+                  className={cn(
+                    'inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors',
+                    hasTopAds
+                      ? 'hover:bg-muted'
+                      : 'opacity-50 cursor-not-allowed'
+                  )}
+                  data-testid="export-csv"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  CSV
+                </button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {hasTopAds ? (
+                <div className="overflow-x-auto" data-testid="top-ads-table">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b text-left text-muted-foreground">
+                        <th className="pb-2 font-medium">#</th>
+                        <th className="pb-2 font-medium">Объявление</th>
+                        <th className="pb-2 font-medium text-right">Сэкономлено</th>
+                        <th className="pb-2 font-medium text-right">Потрачено</th>
+                        <th className="pb-2 font-medium text-right">Срабатываний</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {topAdsData!.map((ad, i) => (
+                        <tr key={ad.adId} className="border-b last:border-0">
+                          <td className="py-2.5 text-muted-foreground">{i + 1}</td>
+                          <td className="py-2.5 font-medium truncate max-w-[200px]">{ad.adName}</td>
+                          <td className="py-2.5 text-right text-green-600">
+                            {ad.totalSaved.toLocaleString()} ₽
+                          </td>
+                          <td className="py-2.5 text-right">
+                            {ad.totalSpent.toLocaleString()} ₽
+                          </td>
+                          <td className="py-2.5 text-right">{ad.triggers}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <EmptyChart message="Нет данных за период" />
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {/* ── Event Feed ── */}
+      {typedUserId && <EventFeed userId={typedUserId} accounts={accounts} />}
     </div>
   );
 }
