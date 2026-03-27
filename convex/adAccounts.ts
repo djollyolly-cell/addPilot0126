@@ -828,38 +828,26 @@ export const getVkApiStatus = query({
   },
 });
 
-// TEMP migration: backfill existing accounts with user-level credentials
-import { internalMutation } from "./_generated/server";
-
-export const backfillAccountCredentials = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const accounts = await ctx.db.query("adAccounts").collect();
-    let updated = 0;
-
-    for (const account of accounts) {
-      // Skip accounts that already have their own credentials
-      if (account.clientId && account.clientSecret) continue;
-
-      // Get user-level credentials
-      const user = await ctx.db.get(account.userId);
-      if (!user) continue;
-
-      const clientId = (user as any).vkAdsClientId;
-      const clientSecret = (user as any).vkAdsClientSecret;
-
-      if (clientId && clientSecret) {
-        await ctx.db.patch(account._id, {
-          clientId,
-          clientSecret,
-        });
-        updated++;
-        console.log(`[backfill] Account ${account._id} (${account.name}): set clientId=${clientId}`);
-      }
+// TEMP: clear wrong per-account credentials so system falls back to user-level token
+export const fixAccountCredentials = mutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account || account.userId !== args.userId) {
+      throw new Error("Кабинет не найден");
     }
-
-    console.log(`[backfill] Done. Updated ${updated} accounts.`);
-    return { updated };
+    // Clear ONLY per-account credentials (clientId/clientSecret)
+    // This forces fallback to user-level token in getValidTokenForAccount
+    await ctx.db.patch(args.accountId, {
+      clientId: undefined,
+      clientSecret: undefined,
+      status: "active",
+      lastError: undefined,
+    });
+    return { cleared: true, name: account.name };
   },
 });
 
