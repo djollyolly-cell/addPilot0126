@@ -277,6 +277,7 @@ export const connectVkAds = action({
           grant_type: "client_credentials",
           client_id: clientId,
           client_secret: clientSecret,
+          scope: "create_ads",
         }).toString(),
       });
       return resp.json();
@@ -508,6 +509,7 @@ export const refreshVkAdsToken = internalAction({
       refresh_token: args.refreshToken,
       client_id: clientId,
       client_secret: clientSecret,
+      scope: "create_ads",
     });
 
     const response = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
