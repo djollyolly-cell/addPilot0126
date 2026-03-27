@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, action, internalAction } from "./_generated/server";
+import { mutation, query, action, internalAction, internalMutation } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 
 const VK_ADS_API_BASE = "https://target.my.com";
@@ -907,6 +907,68 @@ export const checkEnvCredentials = action({
   },
 });
 
+// TEMP: reconnect an account with its own clientId/clientSecret
+export const reconnectAccount = action({
+  args: {
+    accountId: v.id("adAccounts"),
+    userId: v.id("users"),
+    clientId: v.string(),
+    clientSecret: v.string(),
+  },
+  handler: async (ctx, args): Promise<{
+    success: boolean;
+    myTargetId?: number;
+    username?: string;
+    error?: string;
+  }> => {
+    try {
+      // Validate: get account and check ownership
+      const account = await ctx.runQuery(api.adAccounts.get, {
+        accountId: args.accountId,
+      });
+      if (!account || account.userId !== args.userId) {
+        return { success: false, error: "Кабинет не найден" };
+      }
+
+      // Get fresh token for these credentials
+      const tokenData = await ctx.runAction(
+        internal.adAccounts.getTokenDataForCredentials,
+        {
+          clientId: args.clientId,
+          clientSecret: args.clientSecret,
+        }
+      );
+
+      // Check which myTarget account this token belongs to
+      const userResp = await fetch("https://target.my.com/api/v2/user.json", {
+        headers: { Authorization: `Bearer ${tokenData.accessToken}` },
+      });
+      const userData = await userResp.json();
+
+      // Save credentials + fresh token to the account
+      await ctx.runMutation(internal.adAccounts.updateAccountCredentials, {
+        accountId: args.accountId,
+        clientId: args.clientId,
+        clientSecret: args.clientSecret,
+        accessToken: tokenData.accessToken,
+        refreshToken: tokenData.refreshToken,
+        tokenExpiresAt: tokenData.tokenExpiresAt,
+      });
+
+      return {
+        success: true,
+        myTargetId: userData.id,
+        username: userData.username,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        error: err instanceof Error ? err.message : "Unknown error",
+      };
+    }
+  },
+});
+
 // TEMP: refresh token using specific credentials
 export const refreshUserToken = action({
   args: {
@@ -971,4 +1033,25 @@ export const refreshUserToken = action({
   },
 });
 
-
+// Internal mutation: save per-account credentials + token
+export const updateAccountCredentials = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    clientId: v.string(),
+    clientSecret: v.string(),
+    accessToken: v.string(),
+    refreshToken: v.optional(v.string()),
+    tokenExpiresAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.accountId, {
+      clientId: args.clientId,
+      clientSecret: args.clientSecret,
+      accessToken: args.accessToken,
+      refreshToken: args.refreshToken,
+      tokenExpiresAt: args.tokenExpiresAt,
+      status: "active",
+      lastError: undefined,
+    });
+  },
+});
