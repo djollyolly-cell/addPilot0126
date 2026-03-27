@@ -20,6 +20,8 @@ const PricingPage = lazy(() => import('./pages/PricingPage').then(m => ({ defaul
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage').then(m => ({ default: m.PrivacyPage })));
 const TermsPage = lazy(() => import('./pages/TermsPage').then(m => ({ default: m.TermsPage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
+const CreativesPage = lazy(() => import('./pages/CreativesPage').then(m => ({ default: m.CreativesPage })));
+const VideosPage = lazy(() => import('./pages/VideosPage').then(m => ({ default: m.VideosPage })));
 
 // Loading spinner component
 function PageLoader() {
@@ -109,6 +111,8 @@ function App() {
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/rules" element={<RulesPage />} />
         <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/creatives" element={<CreativesPage />} />
+        <Route path="/videos" element={<VideosPage />} />
         <Route path="/analytics" element={<Navigate to="/dashboard" replace />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />

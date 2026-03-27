@@ -12,6 +12,8 @@ import {
   Wallet,
   Crown,
   Shield,
+  Sparkles,
+  Film,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -20,6 +22,8 @@ const navigation = [
   { name: 'Кабинеты', href: '/accounts', icon: Building2 },
   { name: 'Правила', href: '/rules', icon: ListChecks },
   { name: 'Отчёты', href: '/reports', icon: FileBarChart },
+  { name: 'Креативы', href: '/creatives', icon: Sparkles },
+  { name: 'Видео', href: '/videos', icon: Film },
   { name: 'Логи', href: '/logs', icon: ScrollText },
   { name: 'Тарифы', href: '/pricing', icon: Crown },
   { name: 'Настройки', href: '/settings', icon: Settings },

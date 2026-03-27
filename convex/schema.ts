@@ -288,6 +288,90 @@ export default defineSchema({
     .index("by_userId", ["userId"])
     .index("by_orderId", ["orderId"])
     .index("by_token", ["token"]),
+  // AI-generated banner creatives
+  creatives: defineTable({
+    userId: v.id("users"),
+    accountId: v.id("adAccounts"),
+    offer: v.string(),           // Main offer (60 chars)
+    bullets: v.string(),         // Bullet points (120 chars)
+    benefit: v.string(),         // Benefit (50 chars)
+    cta: v.string(),             // CTA (40 chars)
+    storageId: v.optional(v.id("_storage")),
+    imageUrl: v.optional(v.string()),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("generating"),
+      v.literal("ready"),
+      v.literal("failed")
+    ),
+    errorMessage: v.optional(v.string()),
+    createdAt: v.number(),
+    expiresAt: v.number(),       // createdAt + 2 days, for cron cleanup
+  })
+    .index("by_userId", ["userId"])
+    .index("by_accountId", ["accountId"])
+    .index("by_expiresAt", ["expiresAt"]),
+
+  // Video creatives uploaded to VK
+  videos: defineTable({
+    userId: v.id("users"),
+    accountId: v.id("adAccounts"),
+    filename: v.string(),
+    fileSize: v.optional(v.number()),
+    duration: v.optional(v.number()),
+    vkMediaId: v.optional(v.string()),
+    vkMediaUrl: v.optional(v.string()),
+    direction: v.optional(v.string()),  // Business direction tag
+    isActive: v.boolean(),
+    uploadStatus: v.union(
+      v.literal("queued"),
+      v.literal("uploading"),
+      v.literal("processing"),
+      v.literal("ready"),
+      v.literal("failed")
+    ),
+    uploadProgress: v.optional(v.number()),
+    transcription: v.optional(v.string()),
+    aiScore: v.optional(v.number()),
+    aiScoreLabel: v.optional(v.string()),
+    aiAnalysis: v.optional(v.object({
+      watchRates: v.optional(v.object({
+        p25: v.optional(v.number()),
+        p50: v.optional(v.number()),
+        p75: v.optional(v.number()),
+        p95: v.optional(v.number()),
+      })),
+      avgWatchTime: v.optional(v.number()),
+      totalViews: v.optional(v.number()),
+      recommendations: v.optional(v.array(v.object({
+        field: v.string(),
+        original: v.string(),
+        suggested: v.string(),
+        reason: v.optional(v.string()),
+      }))),
+      transcriptMatch: v.optional(v.string()),
+    })),
+    errorMessage: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_accountId", ["accountId"])
+    .index("by_uploadStatus", ["uploadStatus"]),
+
+  // AI generation usage tracking for rate limiting
+  aiGenerations: defineTable({
+    userId: v.id("users"),
+    type: v.union(
+      v.literal("text"),
+      v.literal("image"),
+      v.literal("analysis")
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_userId_type", ["userId", "type"])
+    .index("by_createdAt", ["createdAt"]),
+
   // Audit log for credential changes (clientId, clientSecret, tokens)
   credentialHistory: defineTable({
     accountId: v.id("adAccounts"),

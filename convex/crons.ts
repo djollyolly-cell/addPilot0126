@@ -45,6 +45,20 @@ crons.interval(
   internal.billing.processExpiredSubscriptions
 );
 
+// Clean up expired creatives (banners older than 2 days) — every 6 hours
+crons.interval(
+  "cleanup-expired-creatives",
+  { hours: 6 },
+  internal.creatives.cleanupExpired
+);
+
+// Clean up old AI generation records (older than 60 days) — daily at 04:00 UTC
+crons.cron(
+  "cleanup-old-ai-generations",
+  "0 4 * * *",
+  internal.aiLimits.cleanupOldRecords
+);
+
 // Clean up old token history (older than 10 days) — daily at 03:00 UTC
 crons.cron(
   "cleanup-credential-history",
