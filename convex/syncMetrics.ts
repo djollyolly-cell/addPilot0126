@@ -20,13 +20,6 @@ function todayStr(): string {
 export const syncAll = internalAction({
   args: {},
   handler: async (ctx) => {
-    // TEMP: one-time backfill of per-account credentials (safe to re-run, skips already filled)
-    try {
-      await ctx.runMutation(internal.adAccounts.backfillAccountCredentials, {});
-    } catch (e) {
-      console.error("[syncMetrics] backfill error:", e);
-    }
-
     // Get all active ad accounts
     const accounts = await ctx.runQuery(internal.syncMetrics.listActiveAccounts);
 
