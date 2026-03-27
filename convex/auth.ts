@@ -709,6 +709,23 @@ export const updateAccountTokens = internalMutation({
     );
 
     for (const account of sameClientAccounts) {
+      // Audit log token changes
+      for (const field of ["accessToken", "refreshToken"] as const) {
+        const oldVal = account[field] as string | undefined;
+        const newVal = field === "accessToken" ? args.accessToken : (args.refreshToken ?? account.refreshToken);
+        if (oldVal !== newVal && newVal) {
+          const mask = (val: string | undefined) =>
+            val && val.length > 8 ? val.slice(0, 4) + "..." + val.slice(-4) : val;
+          await ctx.db.insert("credentialHistory", {
+            accountId: account._id,
+            field,
+            oldValue: mask(oldVal),
+            newValue: mask(newVal),
+            changedAt: Date.now(),
+            changedBy: "updateAccountTokens",
+          });
+        }
+      }
       await ctx.db.patch(account._id, {
         accessToken: args.accessToken,
         refreshToken: args.refreshToken ?? account.refreshToken,
@@ -718,6 +735,25 @@ export const updateAccountTokens = internalMutation({
 
     // If no accounts matched by clientId, update just this one
     if (sameClientAccounts.length === 0) {
+      const thisAccount = await ctx.db.get(args.accountId);
+      if (thisAccount) {
+        for (const field of ["accessToken", "refreshToken"] as const) {
+          const oldVal = thisAccount[field] as string | undefined;
+          const newVal = field === "accessToken" ? args.accessToken : args.refreshToken;
+          if (oldVal !== newVal && newVal) {
+            const mask = (val: string | undefined) =>
+              val && val.length > 8 ? val.slice(0, 4) + "..." + val.slice(-4) : val;
+            await ctx.db.insert("credentialHistory", {
+              accountId: args.accountId,
+              field,
+              oldValue: mask(oldVal),
+              newValue: mask(newVal),
+              changedAt: Date.now(),
+              changedBy: "updateAccountTokens",
+            });
+          }
+        }
+      }
       await ctx.db.patch(args.accountId, {
         accessToken: args.accessToken,
         refreshToken: args.refreshToken,

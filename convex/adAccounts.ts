@@ -128,6 +128,36 @@ export const connect = mutation({
       .first();
 
     if (existing && existing.userId === args.userId) {
+      // Audit log credential changes
+      const credChanges: Record<string, { old: string | undefined; new: string | undefined }> = {};
+      if (args.accessToken !== existing.accessToken) {
+        credChanges.accessToken = { old: existing.accessToken, new: args.accessToken };
+      }
+      if (args.refreshToken !== undefined && args.refreshToken !== existing.refreshToken) {
+        credChanges.refreshToken = { old: existing.refreshToken, new: args.refreshToken };
+      }
+      if (args.clientId !== undefined && args.clientId !== existing.clientId) {
+        credChanges.clientId = { old: existing.clientId, new: args.clientId };
+      }
+      if (args.clientSecret !== undefined && args.clientSecret !== existing.clientSecret) {
+        credChanges.clientSecret = { old: existing.clientSecret, new: args.clientSecret };
+      }
+      for (const [field, vals] of Object.entries(credChanges)) {
+        const mask = (val: string | undefined) => {
+          if (!val) return undefined;
+          if (field !== "clientId" && val.length > 8) return val.slice(0, 4) + "..." + val.slice(-4);
+          return val;
+        };
+        await ctx.db.insert("credentialHistory", {
+          accountId: existing._id,
+          field,
+          oldValue: mask(vals.old),
+          newValue: mask(vals.new),
+          changedAt: Date.now(),
+          changedBy: "connect",
+        });
+      }
+
       // Update existing account
       const patch: Record<string, unknown> = {
         name: args.name,
@@ -828,17 +858,40 @@ export const getVkApiStatus = query({
   },
 });
 
-// TEMP: clear wrong per-account credentials so system falls back to user-level token
+// Clear per-account credentials (with audit log + force protection)
 export const fixAccountCredentials = mutation({
   args: {
     accountId: v.id("adAccounts"),
     userId: v.id("users"),
+    force: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const account = await ctx.db.get(args.accountId);
     if (!account || account.userId !== args.userId) {
       throw new Error("Кабинет не найден");
     }
+
+    // Protection: refuse to wipe credentials without force flag
+    if ((account.clientId || account.clientSecret) && !args.force) {
+      throw new Error("Нельзя очистить credentials без force:true. clientId и clientSecret будут утеряны безвозвратно.");
+    }
+
+    // Audit log before wiping
+    for (const field of ["clientId", "clientSecret"] as const) {
+      const oldValue = account[field];
+      if (!oldValue) continue;
+      await ctx.db.insert("credentialHistory", {
+        accountId: args.accountId,
+        field,
+        oldValue: field === "clientSecret" && oldValue.length > 8
+          ? oldValue.slice(0, 4) + "..." + oldValue.slice(-4)
+          : oldValue,
+        newValue: undefined,
+        changedAt: Date.now(),
+        changedBy: "fixAccountCredentials",
+      });
+    }
+
     await ctx.db.patch(args.accountId, {
       clientId: undefined,
       clientSecret: undefined,
@@ -1033,7 +1086,7 @@ export const refreshUserToken = action({
   },
 });
 
-// Internal mutation: save per-account credentials + token
+// Internal mutation: save per-account credentials + token (with audit log)
 export const updateAccountCredentials = internalMutation({
   args: {
     accountId: v.id("adAccounts"),
@@ -1044,6 +1097,29 @@ export const updateAccountCredentials = internalMutation({
     tokenExpiresAt: v.number(),
   },
   handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) throw new Error("Аккаунт не найден");
+
+    // Audit log: track all credential changes
+    const tracked = { clientId: args.clientId, clientSecret: args.clientSecret, accessToken: args.accessToken, refreshToken: args.refreshToken };
+    for (const [field, newValue] of Object.entries(tracked)) {
+      const oldValue = (account as Record<string, unknown>)[field] as string | undefined;
+      if (oldValue === newValue) continue;
+      const mask = (val: string | undefined) => {
+        if (!val) return undefined;
+        if (field !== "clientId" && val.length > 8) return val.slice(0, 4) + "..." + val.slice(-4);
+        return val;
+      };
+      await ctx.db.insert("credentialHistory", {
+        accountId: args.accountId,
+        field,
+        oldValue: mask(oldValue),
+        newValue: mask(newValue),
+        changedAt: Date.now(),
+        changedBy: "updateAccountCredentials",
+      });
+    }
+
     await ctx.db.patch(args.accountId, {
       clientId: args.clientId,
       clientSecret: args.clientSecret,

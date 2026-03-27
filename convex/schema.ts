@@ -288,4 +288,15 @@ export default defineSchema({
     .index("by_userId", ["userId"])
     .index("by_orderId", ["orderId"])
     .index("by_token", ["token"]),
+  // Audit log for credential changes (clientId, clientSecret, tokens)
+  credentialHistory: defineTable({
+    accountId: v.id("adAccounts"),
+    field: v.string(), // "clientId" | "clientSecret" | "accessToken" | "refreshToken"
+    oldValue: v.optional(v.string()),
+    newValue: v.optional(v.string()),
+    changedAt: v.number(),
+    changedBy: v.optional(v.string()), // mutation name or userId
+  })
+    .index("by_accountId", ["accountId"])
+    .index("by_field_changedAt", ["field", "changedAt"]),
 }, { schemaValidation: false });

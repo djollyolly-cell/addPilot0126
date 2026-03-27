@@ -14,6 +14,7 @@ import type * as auth from "../auth.js";
 import type * as authEmail from "../authEmail.js";
 import type * as authInternal from "../authInternal.js";
 import type * as billing from "../billing.js";
+import type * as credentialHistory from "../credentialHistory.js";
 import type * as crons from "../crons.js";
 import type * as email from "../email.js";
 import type * as http from "../http.js";
@@ -41,6 +42,7 @@ declare const fullApi: ApiFromModules<{
   authEmail: typeof authEmail;
   authInternal: typeof authInternal;
   billing: typeof billing;
+  credentialHistory: typeof credentialHistory;
   crons: typeof crons;
   email: typeof email;
   http: typeof http;

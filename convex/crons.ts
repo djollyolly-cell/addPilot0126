@@ -45,4 +45,11 @@ crons.interval(
   internal.billing.processExpiredSubscriptions
 );
 
+// Clean up old token history (older than 10 days) — daily at 03:00 UTC
+crons.cron(
+  "cleanup-credential-history",
+  "0 3 * * *",
+  internal.credentialHistory.cleanupOldTokenHistory
+);
+
 export default crons;
