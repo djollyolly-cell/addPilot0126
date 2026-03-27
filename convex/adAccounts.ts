@@ -839,8 +839,6 @@ export const fixAccountCredentials = mutation({
     if (!account || account.userId !== args.userId) {
       throw new Error("Кабинет не найден");
     }
-    // Clear ONLY per-account credentials (clientId/clientSecret)
-    // This forces fallback to user-level token in getValidTokenForAccount
     await ctx.db.patch(args.accountId, {
       clientId: undefined,
       clientSecret: undefined,
@@ -848,6 +846,51 @@ export const fixAccountCredentials = mutation({
       lastError: undefined,
     });
     return { cleared: true, name: account.name };
+  },
+});
+
+// TEMP: refresh user-level token with current credentials (without scope)
+export const refreshUserToken = action({
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args): Promise<{ success: boolean; accountId?: string; error?: string }> => {
+    try {
+      // Get user credentials
+      const creds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
+        userId: args.userId,
+      });
+
+      if (!creds?.clientId || !creds?.clientSecret) {
+        return { success: false, error: "No user-level credentials found" };
+      }
+
+      // Get fresh token via client_credentials (no scope = full access)
+      const tokenData = await ctx.runAction(internal.adAccounts.getTokenDataForCredentials, {
+        clientId: creds.clientId,
+        clientSecret: creds.clientSecret,
+      });
+
+      // Save to user record
+      await ctx.runMutation(internal.users.updateVkAdsTokens, {
+        userId: args.userId,
+        accessToken: tokenData.accessToken,
+        refreshToken: tokenData.refreshToken,
+        expiresIn: Math.floor((tokenData.tokenExpiresAt - Date.now()) / 1000),
+      });
+
+      // Also update all accounts that have no per-account credentials
+      const accounts = await ctx.runQuery(api.adAccounts.list, { userId: args.userId });
+      for (const account of accounts) {
+        if (!account.clientId) {
+          await ctx.runMutation(api.adAccounts.updateSyncTime, { accountId: account._id });
+        }
+      }
+
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : "Unknown error" };
+    }
   },
 });
 
