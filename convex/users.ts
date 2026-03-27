@@ -535,46 +535,6 @@ export const getVkAdsCredentialsForFrontend = query({
   },
 });
 
-// TEMP: public mutation to fix tokens (remove after use)
-export const tempFixTokens = mutation({
-  args: {
-    userId: v.id("users"),
-    accessToken: v.string(),
-    refreshToken: v.string(),
-    expiresIn: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const now = Date.now();
-    const tokenExpiresAt = args.expiresIn > 0 ? now + args.expiresIn * 1000 : undefined;
-
-    const user = await ctx.db.get(args.userId);
-    if (!user) throw new Error("User not found");
-
-    await ctx.db.patch(args.userId, {
-      vkAdsAccessToken: args.accessToken,
-      vkAdsRefreshToken: args.refreshToken,
-      vkAdsTokenExpiresAt: tokenExpiresAt,
-      updatedAt: now,
-    });
-
-    const accounts = await ctx.db
-      .query("adAccounts")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-      .collect();
-    for (const account of accounts) {
-      await ctx.db.patch(account._id, {
-        accessToken: args.accessToken,
-        refreshToken: args.refreshToken,
-        tokenExpiresAt: tokenExpiresAt,
-        status: "active",
-        lastError: undefined,
-      });
-    }
-
-    return { updated: accounts.length };
-  },
-});
-
 // Delete user and all related data
 export const deleteUser = mutation({
   args: {
