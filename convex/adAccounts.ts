@@ -863,3 +863,56 @@ export const backfillAccountCredentials = internalMutation({
     return { updated };
   },
 });
+
+// TEMP: force-refresh tokens for all accounts with proper scope
+// Call from browser console, then remove
+export const forceRefreshAllTokens = action({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args): Promise<{ refreshed: number; errors: string[] }> => {
+    // First run backfill to ensure all accounts have credentials
+    await ctx.runMutation(internal.adAccounts.backfillAccountCredentials, {});
+
+    const accounts = await ctx.runQuery(api.adAccounts.list, { userId: args.userId });
+    let refreshed = 0;
+    const errors: string[] = [];
+
+    for (const account of accounts) {
+      const clientId = account.clientId;
+      const clientSecret = account.clientSecret;
+
+      if (!clientId || !clientSecret) {
+        errors.push(`${account.name}: no credentials`);
+        continue;
+      }
+
+      try {
+        // Get fresh token with scope=create_ads
+        const tokenData = await ctx.runAction(internal.adAccounts.getTokenDataForCredentials, {
+          clientId,
+          clientSecret,
+        });
+
+        // Update account with new token
+        await ctx.runMutation(api.adAccounts.connect, {
+          userId: args.userId,
+          vkAccountId: account.vkAccountId,
+          name: account.name,
+          accessToken: tokenData.accessToken,
+          refreshToken: tokenData.refreshToken,
+          tokenExpiresAt: tokenData.tokenExpiresAt,
+          clientId,
+          clientSecret,
+        });
+
+        refreshed++;
+        console.log(`[forceRefresh] ${account.name}: token refreshed OK`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${account.name}: ${msg}`);
+        console.error(`[forceRefresh] ${account.name}: ${msg}`);
+      }
+    }
+
+    return { refreshed, errors };
+  },
+});
