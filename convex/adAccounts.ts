@@ -851,11 +851,59 @@ export const fixAccountCredentials = mutation({
 
 // TEMP: check what credentials are in env vars
 export const checkEnvCredentials = action({
-  args: {},
-  handler: async (): Promise<{ envClientId: string | null; envSecret: boolean; userClientIds: string[] }> => {
+  args: {
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args): Promise<{
+    envClientId: string | null;
+    envSecret: boolean;
+    userCreds: { clientId: string | null; hasSecret: boolean };
+    accounts: Array<{
+      id: string;
+      name: string;
+      vkAccountId: string;
+      hasClientId: boolean;
+      clientId: string | null;
+      hasClientSecret: boolean;
+      hasAccessToken: boolean;
+      hasRefreshToken: boolean;
+      tokenExpiresAt: number | null;
+      status: string;
+    }>;
+  }> => {
     const envClientId = process.env.VK_ADS_CLIENT_ID || null;
     const envSecret = !!process.env.VK_ADS_CLIENT_SECRET;
-    return { envClientId, envSecret, userClientIds: [] };
+
+    // Get user-level credentials
+    const creds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
+      userId: args.userId,
+    });
+
+    // Get all accounts for this user
+    const accounts = await ctx.runQuery(api.adAccounts.list, {
+      userId: args.userId,
+    });
+
+    return {
+      envClientId,
+      envSecret,
+      userCreds: {
+        clientId: creds?.clientId || null,
+        hasSecret: !!(creds?.clientSecret),
+      },
+      accounts: accounts.map((a: any) => ({
+        id: a._id,
+        name: a.name,
+        vkAccountId: a.vkAccountId,
+        hasClientId: !!a.clientId,
+        clientId: a.clientId || null,
+        hasClientSecret: !!a.clientSecret,
+        hasAccessToken: !!a.accessToken,
+        hasRefreshToken: !!a.refreshToken,
+        tokenExpiresAt: a.tokenExpiresAt || null,
+        status: a.status,
+      })),
+    };
   },
 });
 
