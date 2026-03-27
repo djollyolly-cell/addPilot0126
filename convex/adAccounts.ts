@@ -849,6 +849,16 @@ export const fixAccountCredentials = mutation({
   },
 });
 
+// TEMP: check what credentials are in env vars
+export const checkEnvCredentials = action({
+  args: {},
+  handler: async (): Promise<{ envClientId: string | null; envSecret: boolean; userClientIds: string[] }> => {
+    const envClientId = process.env.VK_ADS_CLIENT_ID || null;
+    const envSecret = !!process.env.VK_ADS_CLIENT_SECRET;
+    return { envClientId, envSecret, userClientIds: [] };
+  },
+});
+
 // TEMP: refresh token using specific credentials
 export const refreshUserToken = action({
   args: {
