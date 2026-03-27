@@ -47,7 +47,6 @@ async function requestClientCredentials(clientId: string, clientSecret: string) 
         grant_type: "client_credentials",
         client_id: clientId,
         client_secret: clientSecret,
-        scope: "create_ads",
       }).toString(),
     });
     return resp.json();
@@ -861,6 +860,46 @@ export const backfillAccountCredentials = internalMutation({
 
     console.log(`[backfill] Done. Updated ${updated} accounts.`);
     return { updated };
+  },
+});
+
+// TEMP: force-refresh all account tokens (without scope restriction)
+export const forceRefreshAllTokens = action({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args): Promise<{ refreshed: number; errors: string[] }> => {
+    await ctx.runMutation(internal.adAccounts.backfillAccountCredentials, {});
+    const accounts = await ctx.runQuery(api.adAccounts.list, { userId: args.userId });
+    let refreshed = 0;
+    const errors: string[] = [];
+
+    for (const account of accounts) {
+      if (!account.clientId || !account.clientSecret) {
+        errors.push(`${account.name}: no credentials`);
+        continue;
+      }
+      try {
+        const tokenData = await ctx.runAction(internal.adAccounts.getTokenDataForCredentials, {
+          clientId: account.clientId,
+          clientSecret: account.clientSecret,
+        });
+        await ctx.runMutation(api.adAccounts.connect, {
+          userId: args.userId,
+          vkAccountId: account.vkAccountId,
+          name: account.name,
+          accessToken: tokenData.accessToken,
+          refreshToken: tokenData.refreshToken,
+          tokenExpiresAt: tokenData.tokenExpiresAt,
+          clientId: account.clientId,
+          clientSecret: account.clientSecret,
+        });
+        refreshed++;
+        console.log(`[forceRefresh] ${account.name}: OK`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        errors.push(`${account.name}: ${msg}`);
+      }
+    }
+    return { refreshed, errors };
   },
 });
 
