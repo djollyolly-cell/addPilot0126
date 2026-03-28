@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, action, internalAction, internalMutation } from "./_generated/server";
+import { mutation, query, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 
 const VK_ADS_API_BASE = "https://target.my.com";
@@ -809,6 +809,50 @@ export const updateSyncTime = mutation({
       lastSyncAt: Date.now(),
       status: "active" as const,
     });
+  },
+});
+
+// Update business profile fields
+export const updateBusinessProfile = mutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    companyName: v.optional(v.string()),
+    industry: v.optional(v.string()),
+    tone: v.optional(v.string()),
+    website: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { accountId, ...updates } = args;
+    const filtered: Record<string, unknown> = {};
+    for (const [k, val] of Object.entries(updates)) {
+      if (val !== undefined) filtered[k] = val;
+    }
+    if (Object.keys(filtered).length > 0) {
+      await ctx.db.patch(accountId, filtered);
+    }
+  },
+});
+
+// Get account business profile (for AI prompts)
+export const getBusinessProfile = query({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return null;
+    return {
+      companyName: account.companyName,
+      industry: account.industry,
+      tone: account.tone,
+      website: account.website,
+    };
+  },
+});
+
+// Internal get (for AI prompts in actions)
+export const getInternal = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.accountId);
   },
 });
 
