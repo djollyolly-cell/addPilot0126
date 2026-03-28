@@ -14,7 +14,6 @@ import {
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { cn } from '@/lib/utils';
 
 const TONE_OPTIONS = [
   { value: 'friendly', label: 'Дружелюбный' },
