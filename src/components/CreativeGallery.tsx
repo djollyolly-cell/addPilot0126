@@ -87,12 +87,13 @@ export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalle
                         </p>
                       )}
                     </div>
-                    {/* Bottom-right: CTA button — last point of Z-scan */}
+                    {/* Bottom-right: CTA text */}
                     {creative.cta && (
                       <div className="flex justify-end">
-                        <span className="inline-block bg-primary text-primary-foreground text-sm font-bold px-4 py-2 rounded-lg shadow-lg">
+                        <p className="text-sm font-bold drop-shadow-lg"
+                           style={{ textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
                           {creative.cta}
-                        </span>
+                        </p>
                       </div>
                     )}
                   </div>
