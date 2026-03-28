@@ -6,6 +6,7 @@ import {
   Loader2,
   Sparkles,
   FileText,
+  Link2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -35,6 +36,7 @@ interface VideoData {
     transcriptMatch?: string;
   };
   createdAt: number;
+  vkAdId?: string;
 }
 
 interface VideoItemProps {
@@ -46,6 +48,8 @@ interface VideoItemProps {
   deleting: boolean;
   transcribing: boolean;
   analyzing: boolean;
+  onLinkToAd: (videoId: string, vkAdId: string) => void;
+  ads?: Array<{ _id: string; vkAdId: string; name: string; status: string }>;
 }
 
 export function VideoItem({
@@ -57,6 +61,8 @@ export function VideoItem({
   deleting,
   transcribing,
   analyzing,
+  onLinkToAd,
+  ads,
 }: VideoItemProps) {
   const [expanded, setExpanded] = useState(false);
 
@@ -146,6 +152,44 @@ export function VideoItem({
       {/* Expanded content */}
       {expanded && (
         <div className="border-t border-border p-4 space-y-4">
+          {/* Ad linking */}
+          {!video.vkAdId ? (
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <Link2 className="h-4 w-4 text-primary" />
+                <h4 className="font-medium text-sm">Привязка к объявлению</h4>
+              </div>
+              {ads && ads.length > 0 ? (
+                <select
+                  className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  defaultValue=""
+                  onChange={(e) => {
+                    if (e.target.value) {
+                      onLinkToAd(video._id, e.target.value);
+                    }
+                  }}
+                >
+                  <option value="" disabled>Выберите объявление...</option>
+                  {ads.map((ad) => (
+                    <option key={ad._id} value={ad.vkAdId}>
+                      {ad.name} ({ad.status})
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Нет объявлений. Видео привяжется автоматически при следующей синхронизации.
+                </p>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Link2 className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Привязано к объявлению</span>
+              <Badge variant="secondary">{video.vkAdId}</Badge>
+            </div>
+          )}
+
           {/* Transcription */}
           <div className="space-y-2">
             <div className="flex items-center gap-2">
