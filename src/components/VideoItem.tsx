@@ -5,7 +5,6 @@ import {
   Trash2,
   Loader2,
   Sparkles,
-  Play,
   FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';

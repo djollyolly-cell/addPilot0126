@@ -209,7 +209,7 @@ export const uploadToVk = action({
         errorMessage: error instanceof Error ? error.message : "Ошибка загрузки",
       });
       // Clean up temp storage on error
-      try { await ctx.storage.delete(args.storageId); } catch {}
+      try { await ctx.storage.delete(args.storageId); } catch { /* ignore cleanup errors */ }
       throw error;
     }
   },

@@ -10,10 +10,13 @@
 
 import type * as adAccounts from "../adAccounts.js";
 import type * as admin from "../admin.js";
+import type * as aiLimits from "../aiLimits.js";
 import type * as auth from "../auth.js";
 import type * as authEmail from "../authEmail.js";
 import type * as authInternal from "../authInternal.js";
 import type * as billing from "../billing.js";
+import type * as creativeAnalytics from "../creativeAnalytics.js";
+import type * as creatives from "../creatives.js";
 import type * as credentialHistory from "../credentialHistory.js";
 import type * as crons from "../crons.js";
 import type * as email from "../email.js";
@@ -27,6 +30,7 @@ import type * as syncMetrics from "../syncMetrics.js";
 import type * as telegram from "../telegram.js";
 import type * as userSettings from "../userSettings.js";
 import type * as users from "../users.js";
+import type * as videos from "../videos.js";
 import type * as vkApi from "../vkApi.js";
 
 import type {
@@ -38,10 +42,13 @@ import type {
 declare const fullApi: ApiFromModules<{
   adAccounts: typeof adAccounts;
   admin: typeof admin;
+  aiLimits: typeof aiLimits;
   auth: typeof auth;
   authEmail: typeof authEmail;
   authInternal: typeof authInternal;
   billing: typeof billing;
+  creativeAnalytics: typeof creativeAnalytics;
+  creatives: typeof creatives;
   credentialHistory: typeof credentialHistory;
   crons: typeof crons;
   email: typeof email;
@@ -55,6 +62,7 @@ declare const fullApi: ApiFromModules<{
   telegram: typeof telegram;
   userSettings: typeof userSettings;
   users: typeof users;
+  videos: typeof videos;
   vkApi: typeof vkApi;
 }>;
 
