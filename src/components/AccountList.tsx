@@ -12,11 +12,12 @@ interface Account {
 
 interface AccountListProps {
   accounts: Account[];
+  userId: string;
   onSync: (accountId: string) => Promise<void>;
   onDisconnect: (accountId: string) => void;
 }
 
-export function AccountList({ accounts, onSync, onDisconnect }: AccountListProps) {
+export function AccountList({ accounts, userId, onSync, onDisconnect }: AccountListProps) {
   if (accounts.length === 0) {
     return (
       <div
@@ -40,6 +41,7 @@ export function AccountList({ accounts, onSync, onDisconnect }: AccountListProps
         <AccountCard
           key={account._id}
           account={account}
+          userId={userId}
           onSync={onSync}
           onDisconnect={onDisconnect}
         />

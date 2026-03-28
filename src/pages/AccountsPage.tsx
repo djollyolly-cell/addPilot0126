@@ -281,6 +281,7 @@ export function AccountsPage() {
                 lastSyncAt: a.lastSyncAt,
                 lastError: a.lastError,
               }))}
+              userId={user.userId}
               onSync={handleSync}
               onDisconnect={handleDisconnect}
             />

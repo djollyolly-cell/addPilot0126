@@ -3,6 +3,7 @@ import { useMutation, useQuery } from 'convex/react';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
+import { BusinessProfileEditor } from '@/components/BusinessProfileEditor';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -27,6 +28,7 @@ import {
   Wifi,
   WifiOff,
   AlertTriangle,
+  Briefcase,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
@@ -47,7 +49,7 @@ const BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || 'AddPilotBot'
 
 export function SettingsPage() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api'>('profile');
+  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business'>('profile');
 
   if (!user) {
     return (
@@ -107,6 +109,18 @@ export function SettingsPage() {
           >
             API
           </button>
+          <button
+            data-testid="tab-business"
+            onClick={() => setActiveTab('business')}
+            className={cn(
+              'pb-3 px-1 text-sm font-medium border-b-2 transition-colors',
+              activeTab === 'business'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            Бизнес
+          </button>
         </nav>
       </div>
 
@@ -115,8 +129,10 @@ export function SettingsPage() {
         <ProfileTab user={user} />
       ) : activeTab === 'telegram' ? (
         <TelegramTab userId={user.userId as Id<'users'>} />
-      ) : (
+      ) : activeTab === 'api' ? (
         <ApiTab userId={user.userId as Id<'users'>} />
+      ) : (
+        <BusinessTab userId={user.userId} />
       )}
     </div>
   );
@@ -722,6 +738,36 @@ function ApiTab({ userId }: { userId: Id<'users'> }) {
       </Card>
     </div>
   );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Security Info Card (VK OAuth - no local password)
+   ═══════════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════════
+   Business Tab
+   ═══════════════════════════════════════════════════════════ */
+
+function BusinessTab({ userId }: { userId: string }) {
+  const settings = useQuery(
+    api.userSettings.get,
+    userId ? { userId: userId as Id<"users"> } : 'skip'
+  );
+  const accountId = settings?.activeAccountId;
+
+  if (!accountId) {
+    return (
+      <div className="text-center py-12">
+        <Briefcase className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+        <h3 className="text-lg font-medium mb-2">Выберите аккаунт</h3>
+        <p className="text-muted-foreground">
+          Выберите активный аккаунт на вкладке Профиль
+        </p>
+      </div>
+    );
+  }
+
+  return <BusinessProfileEditor accountId={accountId} userId={userId} />;
 }
 
 /* ═══════════════════════════════════════════════════════════

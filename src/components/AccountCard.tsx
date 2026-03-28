@@ -3,6 +3,7 @@ import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Trash2, ChevronDow
 import { Card, CardContent } from './ui/card';
 import { SyncButton } from './SyncButton';
 import { CampaignList } from './CampaignList';
+import { BusinessProfileEditor } from './BusinessProfileEditor';
 import { cn } from '../lib/utils';
 
 interface AccountCardProps {
@@ -14,6 +15,7 @@ interface AccountCardProps {
     lastSyncAt?: number;
     lastError?: string;
   };
+  userId: string;
   onSync: (accountId: string) => Promise<void>;
   onDisconnect: (accountId: string) => void;
 }
@@ -39,8 +41,9 @@ const statusConfig = {
   },
 };
 
-export const AccountCard = memo(function AccountCard({ account, onSync, onDisconnect }: AccountCardProps) {
+export const AccountCard = memo(function AccountCard({ account, userId, onSync, onDisconnect }: AccountCardProps) {
   const [showCampaigns, setShowCampaigns] = useState(false);
+  const [showProfile, setShowProfile] = useState(false);
   const status = statusConfig[account.status];
   const StatusIcon = status.icon;
 
@@ -112,6 +115,28 @@ export const AccountCard = memo(function AccountCard({ account, onSync, onDiscon
           {showCampaigns && (
             <div className="mt-2">
               <CampaignList accountId={account._id} />
+            </div>
+          )}
+        </div>
+
+        {/* Business profile toggle */}
+        <div className="mt-3 pt-3 border-t">
+          <button
+            type="button"
+            onClick={() => setShowProfile(!showProfile)}
+            className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-foreground transition-colors"
+            data-testid="toggle-profile"
+          >
+            {showProfile ? (
+              <ChevronDown className="w-4 h-4" />
+            ) : (
+              <ChevronRight className="w-4 h-4" />
+            )}
+            Профиль бизнеса
+          </button>
+          {showProfile && (
+            <div className="mt-3">
+              <BusinessProfileEditor accountId={account._id} userId={userId} />
             </div>
           )}
         </div>
