@@ -65,6 +65,20 @@ export const update = mutation({
   },
 });
 
+// Link video to a VK ad (banner) for statistics tracking
+export const linkToAd = mutation({
+  args: {
+    videoId: v.id("videos"),
+    vkAdId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.videoId, {
+      vkAdId: args.vkAdId,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
 // Delete single video
 export const deleteVideo = mutation({
   args: { id: v.id("videos") },
@@ -206,6 +220,17 @@ export const getInternal = internalQuery({
   args: { id: v.id("videos") },
   handler: async (ctx, args) => {
     return await ctx.db.get(args.id);
+  },
+});
+
+// Get all videos linked to ads (have vkAdId) that need stats check
+export const listLinkedVideos = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const allVideos = await ctx.db.query("videos").collect();
+    return allVideos.filter(
+      (v) => v.vkAdId && v.isActive && v.uploadStatus === "ready"
+    );
   },
 });
 
