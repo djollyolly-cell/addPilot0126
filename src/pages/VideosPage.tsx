@@ -58,6 +58,11 @@ export function VideosPage() {
   const uploadToVk = useAction(api.videos.uploadToVk);
   const transcribeVideo = useAction(api.videos.transcribeVideo);
   const analyzeVideo = useAction(api.videos.analyzeVideo);
+  const linkToAd = useMutation(api.videos.linkToAd);
+  const ads = useQuery(
+    api.videos.listAdsByAccount,
+    accountId ? { accountId: accountId as Id<"adAccounts"> } : 'skip'
+  );
 
   const isLoading = videos === undefined;
 
@@ -211,6 +216,16 @@ export function VideosPage() {
     }
   };
 
+  const handleLinkToAd = async (videoId: string, vkAdId: string) => {
+    try {
+      await linkToAd({ videoId: videoId as Id<"videos">, vkAdId });
+      setSuccess('Видео привязано к объявлению');
+      setTimeout(() => setSuccess(null), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка привязки');
+    }
+  };
+
   const totalProgress = queue.length === 0
     ? 0
     : Math.round(queue.reduce((sum, q) => sum + q.progress, 0) / queue.length);
@@ -333,6 +348,8 @@ export function VideosPage() {
                     onDelete={handleDelete}
                     onTranscribe={handleTranscribe}
                     onAnalyze={handleAnalyze}
+                    onLinkToAd={handleLinkToAd}
+                    ads={ads || undefined}
                     deleting={deletingId === video._id}
                     transcribing={transcribingId === video._id}
                     analyzing={analyzingId === video._id}
