@@ -145,10 +145,18 @@ export interface MtCampaign {
   updated: string;
 }
 
+export interface MtBannerContentSlot {
+  id: number;
+  type?: string; // "static" | "video"
+  variants?: Record<string, { media_type: string; url?: string; [key: string]: unknown }>;
+  [key: string]: unknown;
+}
+
 export interface MtBanner {
   id: number;
   campaign_id: number;
   textblocks?: Record<string, { text: string }>;
+  content?: Record<string, MtBannerContentSlot>;
   status: string;
   moderation_status: string;
   created: string;
@@ -550,7 +558,7 @@ export const getMtBanners = action({
   },
   handler: async (_, args): Promise<MtBanner[]> => {
     const params: Record<string, string> = {
-      fields: "id,campaign_id,textblocks,status,moderation_status,created,updated",
+      fields: "id,campaign_id,textblocks,status,moderation_status,created,updated,content",
       limit: "250",
     };
     if (args.campaignId) {
