@@ -239,10 +239,10 @@ export function BusinessProfileEditor({ accountId, userId }: BusinessProfileEdit
             </select>
           </div>
           <div>
-            <Label>Сайт</Label>
+            <Label>Сайт или профиль VK</Label>
             <input
               className="w-full mt-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
-              placeholder="https://example.com"
+              placeholder="https://example.com или https://vk.com/group"
               value={website}
               onChange={(e) => setWebsite(e.target.value)}
             />
