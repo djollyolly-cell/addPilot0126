@@ -10,6 +10,8 @@ interface Creative {
   bullets: string;
   benefit: string;
   cta: string;
+  adTitle?: string;
+  adText?: string;
   imageUrl?: string;
   status: 'draft' | 'generating' | 'ready' | 'failed';
   errorMessage?: string;
@@ -102,6 +104,19 @@ export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalle
                 <ImageIcon className="h-12 w-12 text-muted-foreground" />
               )}
             </div>
+
+            {/* Ad text preview */}
+            {(creative.adTitle || creative.adText) && (
+              <div className="space-y-1 p-3 rounded-md bg-muted/50 border border-border">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">Текст объявления</p>
+                {creative.adTitle && (
+                  <p className="text-sm font-semibold leading-tight">{creative.adTitle}</p>
+                )}
+                {creative.adText && (
+                  <p className="text-xs text-muted-foreground leading-relaxed">{creative.adText}</p>
+                )}
+              </div>
+            )}
 
             {/* Footer */}
             <div className="flex items-center justify-between">

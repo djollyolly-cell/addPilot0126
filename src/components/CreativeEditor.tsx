@@ -1,28 +1,30 @@
-import { useState } from 'react';
 import { Sparkles, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { cn } from '@/lib/utils';
 
 interface TextFieldConfig {
-  key: 'offer' | 'bullets' | 'benefit' | 'cta';
+  key: 'offer' | 'bullets' | 'benefit' | 'cta' | 'adTitle' | 'adText';
   label: string;
   maxLength: number;
   placeholder: string;
   rows: number;
+  section?: 'banner' | 'ad';
 }
 
 const FIELDS: TextFieldConfig[] = [
-  { key: 'offer', label: 'Основной оффер', maxLength: 60, placeholder: 'Введите основной оффер...', rows: 3 },
-  { key: 'bullets', label: 'Буллеты', maxLength: 120, placeholder: 'Введите буллеты...', rows: 3 },
-  { key: 'benefit', label: 'Выгода', maxLength: 50, placeholder: 'Введите выгоду...', rows: 3 },
-  { key: 'cta', label: 'CTA (призыв к действию)', maxLength: 40, placeholder: 'Введите cta (призыв к действию)...', rows: 3 },
+  { key: 'offer', label: 'Оффер на баннере', maxLength: 60, placeholder: 'Главное предложение на картинке...', rows: 2, section: 'banner' },
+  { key: 'bullets', label: 'Буллеты на баннере', maxLength: 120, placeholder: 'Ключевые выгоды через « • »...', rows: 2, section: 'banner' },
+  { key: 'benefit', label: 'Выгода на баннере', maxLength: 50, placeholder: 'Конкретный результат для клиента...', rows: 2, section: 'banner' },
+  { key: 'cta', label: 'CTA на баннере', maxLength: 40, placeholder: 'Призыв к действию...', rows: 2, section: 'banner' },
+  { key: 'adTitle', label: 'Заголовок объявления', maxLength: 90, placeholder: 'Заголовок, который остановит скролл...', rows: 2, section: 'ad' },
+  { key: 'adText', label: 'Текст объявления', maxLength: 220, placeholder: 'Рекламный текст: боль → решение → результат → CTA...', rows: 4, section: 'ad' },
 ];
 
 interface CreativeEditorProps {
-  values: { offer: string; bullets: string; benefit: string; cta: string };
+  values: { offer: string; bullets: string; benefit: string; cta: string; adTitle: string; adText: string };
   onChange: (field: string, value: string) => void;
-  onGenerateField: (field: 'offer' | 'bullets' | 'benefit' | 'cta') => Promise<void>;
+  onGenerateField: (field: 'offer' | 'bullets' | 'benefit' | 'cta' | 'adTitle' | 'adText') => Promise<void>;
   generatingField: string | null;
   disabled?: boolean;
 }
@@ -34,9 +36,10 @@ export function CreativeEditor({
   generatingField,
   disabled,
 }: CreativeEditorProps) {
-  return (
-    <div className="space-y-6">
-      {FIELDS.map((field) => (
+  const bannerFields = FIELDS.filter(f => f.section === 'banner');
+  const adFields = FIELDS.filter(f => f.section === 'ad');
+
+  const renderField = (field: TextFieldConfig) => (
         <div
           key={field.key}
           className="rounded-lg border border-border p-4 space-y-2"
@@ -83,10 +86,25 @@ export function CreativeEditor({
             </Button>
           </div>
           <div className="text-xs text-muted-foreground">
-            {values[field.key].length}/{field.maxLength} символов
+            {(values[field.key] || '').length}/{field.maxLength} символов
           </div>
         </div>
-      ))}
+  );
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Текст на баннере</h3>
+        <div className="space-y-4">
+          {bannerFields.map(renderField)}
+        </div>
+      </div>
+      <div className="border-t border-border pt-6">
+        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">Текст объявления VK</h3>
+        <div className="space-y-4">
+          {adFields.map(renderField)}
+        </div>
+      </div>
     </div>
   );
 }

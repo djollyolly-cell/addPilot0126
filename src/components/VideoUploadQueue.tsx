@@ -12,6 +12,12 @@ interface QueuedFile {
   error?: string;
 }
 
+interface BusinessDirection {
+  _id: string;
+  name: string;
+  isActive: boolean;
+}
+
 interface VideoUploadQueueProps {
   queue: QueuedFile[];
   direction: string;
@@ -21,6 +27,7 @@ interface VideoUploadQueueProps {
   onClearQueue: () => void;
   uploading: boolean;
   totalProgress: number;
+  directions?: BusinessDirection[];
 }
 
 export function VideoUploadQueue({
@@ -32,6 +39,7 @@ export function VideoUploadQueue({
   onClearQueue,
   uploading,
   totalProgress,
+  directions,
 }: VideoUploadQueueProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -48,9 +56,13 @@ export function VideoUploadQueue({
           onChange={(e) => onDirectionChange(e.target.value)}
         >
           <option value="">Выберите направление</option>
-          <option value="AI-таргетолог">AI-таргетолог</option>
-          <option value="Цифровой менеджер">Цифровой менеджер</option>
-          <option value="Маркетолог">Маркетолог</option>
+          {directions && directions.length > 0 ? (
+            directions.filter(d => d.isActive).map((dir) => (
+              <option key={dir._id} value={dir.name}>{dir.name}</option>
+            ))
+          ) : (
+            <option value="" disabled>Нет направлений — добавьте в Кабинетах</option>
+          )}
         </select>
         <p className="text-xs text-muted-foreground mt-1">
           Все загружаемые креативы будут привязаны к этому направлению

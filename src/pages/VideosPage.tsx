@@ -358,6 +358,7 @@ export function VideosPage() {
               onClearQueue={handleClearQueue}
               uploading={uploading}
               totalProgress={totalProgress}
+              directions={directions as any}
             />
           </CardContent>
         </Card>

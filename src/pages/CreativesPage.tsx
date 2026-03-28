@@ -25,6 +25,8 @@ export function CreativesPage() {
     bullets: '',
     benefit: '',
     cta: '',
+    adTitle: '',
+    adText: '',
   });
   const [generatingField, setGeneratingField] = useState<string | null>(null);
   const [generatingImage, setGeneratingImage] = useState(false);
@@ -94,7 +96,7 @@ export function CreativesPage() {
     setValues((prev) => ({ ...prev, [field]: value }));
   };
 
-  const handleGenerateField = async (field: 'offer' | 'bullets' | 'benefit' | 'cta') => {
+  const handleGenerateField = async (field: 'offer' | 'bullets' | 'benefit' | 'cta' | 'adTitle' | 'adText') => {
     if (!user?.userId) return;
     setError(null);
     setGeneratingField(field);
@@ -145,6 +147,8 @@ export function CreativesPage() {
         bullets: values.bullets,
         benefit: values.benefit,
         cta: values.cta,
+        adTitle: values.adTitle || undefined,
+        adText: values.adText || undefined,
       });
 
       // Generate image

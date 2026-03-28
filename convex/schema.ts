@@ -311,6 +311,8 @@ export default defineSchema({
     bullets: v.string(),         // Bullet points (120 chars)
     benefit: v.string(),         // Benefit (50 chars)
     cta: v.string(),             // CTA (40 chars)
+    adTitle: v.optional(v.string()),     // Ad title for VK (90 chars)
+    adText: v.optional(v.string()),      // Ad body text for VK (220 chars)
     storageId: v.optional(v.id("_storage")),
     imageUrl: v.optional(v.string()),
     status: v.union(
