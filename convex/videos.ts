@@ -136,14 +136,29 @@ export const updateUploadStatus = internalMutation({
   },
 });
 
+// Get account access token (internal)
+export const getAccountToken = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    return account?.accessToken || null;
+  },
+});
+
 // Upload video to VK via myTarget API
 export const uploadToVk = action({
   args: {
     videoId: v.id("videos"),
     storageId: v.id("_storage"),
-    accessToken: v.string(),
+    accountId: v.id("adAccounts"),
   },
   handler: async (ctx, args) => {
+    // Get access token from account
+    const accessToken = await ctx.runQuery(internal.videos.getAccountToken, {
+      accountId: args.accountId,
+    });
+    if (!accessToken) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
+
     // Mark as uploading
     await ctx.runMutation(internal.videos.updateUploadStatus, {
       id: args.videoId,
@@ -171,7 +186,7 @@ export const uploadToVk = action({
         {
           method: "POST",
           headers: {
-            Authorization: `Bearer ${args.accessToken}`,
+            Authorization: `Bearer ${accessToken}`,
           },
           body: formData,
         }

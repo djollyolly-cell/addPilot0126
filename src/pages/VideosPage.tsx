@@ -100,9 +100,6 @@ export function VideosPage() {
     setUploading(true);
     setError(null);
 
-    // Get access token for VK
-    const accounts = await fetch(''); // TODO: get account's accessToken
-
     for (let i = 0; i < queue.length; i++) {
       const item = queue[i];
       if (item.status !== 'queued') continue;
@@ -134,17 +131,12 @@ export function VideosPage() {
 
         const { storageId } = await uploadResponse.json();
 
-        // Upload from Convex to VK
-        // Note: accessToken should come from the account
-        // For now we'll skip the actual VK upload and just mark as ready
-        // TODO: integrate with actual VK upload when account tokens are available
-        /*
+        // Upload from Convex to VK via myTarget API
         await uploadToVk({
           videoId,
-          storageId,
-          accessToken: account.accessToken,
+          storageId: storageId as Id<"_storage">,
+          accountId: accountId as Id<"adAccounts">,
         });
-        */
 
         setQueue((prev) =>
           prev.map((q, idx) => (idx === i ? { ...q, status: 'done' as const, progress: 100 } : q))
