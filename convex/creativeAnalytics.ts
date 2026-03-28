@@ -330,6 +330,58 @@ ${video.transcription ? `Транскрипция (первые 500 символ
       });
 
       console.log(`[creativeAnalytics] Video ${video.filename}: score=${analysis.score} (${isReanalysis ? "re-analysis" : "first analysis"})`);
+
+      // Send Telegram notification
+      try {
+        const user = await ctx.runQuery(internal.users.getById, { userId: video.userId });
+        if (user?.telegramChatId) {
+          let shouldNotify = false;
+          let prevScore: number | undefined;
+
+          if (!isReanalysis) {
+            // First analysis — always notify
+            shouldNotify = true;
+          } else {
+            // Re-analysis — notify only if score changed ≥15 points
+            prevScore = latestStat.aiWatchScore ?? undefined;
+            if (prevScore !== undefined) {
+              shouldNotify = Math.abs(analysis.score - prevScore) >= 15;
+            } else {
+              shouldNotify = true; // no previous score, treat as first
+            }
+          }
+
+          if (shouldNotify) {
+            const funnel = `100% → ${retention.p3s}% (3с) → ${retention.p25}% (25%) → ${retention.p50}% (50%) → ${retention.p100}% (100%)`;
+
+            let text: string;
+            if (!isReanalysis) {
+              const recs = (analysis.recommendations || [])
+                .slice(0, 3)
+                .map((r: any) => `• ${r.issue}`)
+                .join("\n");
+
+              text = `📊 <b>Анализ видео «${video.filename}»</b>\n\nОценка удержания: <b>${analysis.score}/100 — ${analysis.scoreLabel}</b>\nВоронка: ${funnel}${recs ? `\n\n⚠️ Рекомендации:\n${recs}` : ""}`;
+            } else {
+              const diff = analysis.score - (prevScore || 0);
+              const sign = diff > 0 ? "+" : "";
+              const emoji = diff > 0 ? "📈" : "📉";
+
+              text = `📊 <b>Ре-анализ видео «${video.filename}»</b>\n\nОценка удержания: <b>${analysis.score}/100 — ${analysis.scoreLabel}</b>\n${emoji} Изменение: ${prevScore} → ${analysis.score} (${sign}${diff} за 7 дней)\nВоронка: ${funnel}`;
+            }
+
+            await ctx.runAction(internal.telegram.sendMessage, {
+              chatId: user.telegramChatId,
+              text,
+            });
+          }
+        }
+      } catch (tgError) {
+        console.error(
+          `[creativeAnalytics] Telegram notification error:`,
+          tgError instanceof Error ? tgError.message : tgError
+        );
+      }
     } catch (error) {
       console.error(
         `[creativeAnalytics] Error analyzing video ${args.videoId}:`,
