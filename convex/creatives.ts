@@ -234,6 +234,7 @@ export const generateImage = action({
     await ctx.runMutation(internal.creatives.markGenerating, { id: args.creativeId });
 
     const apiKey = process.env.OPENAI_API_KEY;
+    const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com";
     if (!apiKey) throw new Error("OPENAI_API_KEY не настроен");
 
     try {
@@ -247,12 +248,15 @@ Call to action: ${args.cta}${bizCtx}
 
 Style: Professional marketing banner, bright colors, clean typography, Russian text. Size 1080x1080.`;
 
-      const response = await fetch("https://api.openai.com/v1/images/generations", {
+      const openaiHeaders: Record<string, string> = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${apiKey}`,
+      };
+      if (process.env.OPENAI_BASE_URL) openaiHeaders["x-target-api"] = "openai";
+
+      const response = await fetch(`${openaiBaseUrl}/v1/images/generations`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: openaiHeaders,
         body: JSON.stringify({
           model: "dall-e-3",
           prompt,

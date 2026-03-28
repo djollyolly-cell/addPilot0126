@@ -315,6 +315,7 @@ export const transcribeVideo = action({
     if (!video?.vkMediaUrl) throw new Error("Видео ещё не загружено в VK");
 
     const apiKey = process.env.OPENAI_API_KEY;
+    const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com";
     if (!apiKey) throw new Error("OPENAI_API_KEY не настроен");
 
     try {
@@ -330,11 +331,14 @@ export const transcribeVideo = action({
       formData.append("model", "whisper-1");
       formData.append("language", "ru");
 
-      const whisperResponse = await fetch("https://api.openai.com/v1/audio/transcriptions", {
+      const whisperHeaders: Record<string, string> = {
+        Authorization: `Bearer ${apiKey}`,
+      };
+      if (process.env.OPENAI_BASE_URL) whisperHeaders["x-target-api"] = "openai";
+
+      const whisperResponse = await fetch(`${openaiBaseUrl}/v1/audio/transcriptions`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: whisperHeaders,
         body: formData,
       });
 
