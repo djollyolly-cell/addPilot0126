@@ -234,6 +234,76 @@ export const listLinkedVideos = internalQuery({
   },
 });
 
+// Auto-link videos to ads by matching vkMediaId with banner content.video_id
+export const autoLinkVideos = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    bannerVideoMap: v.array(v.object({
+      bannerId: v.string(),
+      videoMediaId: v.string(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    if (args.bannerVideoMap.length === 0) return;
+
+    // Get all videos for this account that don't have vkAdId yet
+    const allVideos = await ctx.db
+      .query("videos")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .collect();
+
+    const unlinkedVideos = allVideos.filter(
+      (v) => !v.vkAdId && v.vkMediaId && v.uploadStatus === "ready"
+    );
+
+    if (unlinkedVideos.length === 0) return;
+
+    let linked = 0;
+    for (const mapping of args.bannerVideoMap) {
+      const video = unlinkedVideos.find(
+        (v) => v.vkMediaId === mapping.videoMediaId
+      );
+      if (video) {
+        await ctx.db.patch(video._id, {
+          vkAdId: mapping.bannerId,
+          updatedAt: Date.now(),
+        });
+        linked++;
+        console.log(
+          `[autoLink] Linked video "${video.filename}" → banner ${mapping.bannerId}`
+        );
+      }
+    }
+
+    if (linked > 0) {
+      console.log(
+        `[autoLink] Account ${args.accountId}: auto-linked ${linked} videos`
+      );
+    }
+  },
+});
+
+// List all ads for an account (for manual linking dropdown)
+export const listAdsByAccount = query({
+  args: {
+    accountId: v.id("adAccounts"),
+  },
+  handler: async (ctx, args) => {
+    const ads = await ctx.db
+      .query("ads")
+      .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", args.accountId))
+      .collect();
+    return ads
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+      .map((ad) => ({
+        _id: ad._id,
+        vkAdId: ad.vkAdId,
+        name: ad.name,
+        status: ad.status,
+      }));
+  },
+});
+
 // Transcribe video using Whisper API
 export const transcribeVideo = action({
   args: {
