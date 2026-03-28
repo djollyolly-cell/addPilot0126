@@ -66,4 +66,11 @@ crons.cron(
   internal.credentialHistory.cleanupOldTokenHistory
 );
 
+// Analyze video creatives 24h+ after upload, re-analyze every 7 days — every 2 hours
+crons.interval(
+  "analyze-new-creatives",
+  { hours: 2 },
+  internal.creativeAnalytics.checkNewCreatives
+);
+
 export default crons;
