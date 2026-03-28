@@ -9,6 +9,7 @@ import {
   AlertCircle,
   RefreshCw,
   Trash2,
+  Building2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -40,6 +41,12 @@ export function VideosPage() {
     user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
   );
   const accountId = settings?.activeAccountId;
+
+  const accounts = useQuery(
+    api.adAccounts.list,
+    user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
+  );
+  const setActiveAccount = useMutation(api.userSettings.setActiveAccount);
 
   // Queries
   const videos = useQuery(
@@ -238,11 +245,35 @@ export function VideosPage() {
           <h1 className="text-2xl font-bold">Видео</h1>
         </div>
         <div className="text-center py-12">
-          <Film className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+          <Building2 className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
           <h3 className="text-lg font-medium mb-2">Выберите аккаунт</h3>
-          <p className="text-muted-foreground">
-            Перейдите в Настройки и выберите активный рекламный аккаунт
-          </p>
+          {accounts && accounts.length > 0 ? (
+            <div className="max-w-xs mx-auto mt-4">
+              <select
+                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+                defaultValue=""
+                onChange={async (e) => {
+                  if (e.target.value && user?.userId) {
+                    await setActiveAccount({
+                      userId: user.userId as Id<"users">,
+                      accountId: e.target.value as Id<"adAccounts">,
+                    });
+                  }
+                }}
+              >
+                <option value="" disabled>Выберите рекламный аккаунт...</option>
+                {accounts.map((acc) => (
+                  <option key={acc._id} value={acc._id}>
+                    {acc.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <p className="text-muted-foreground">
+              Подключите рекламный аккаунт в разделе Кабинеты
+            </p>
+          )}
         </div>
       </div>
     );
