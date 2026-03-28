@@ -239,14 +239,14 @@ export const generateImage = action({
 
     try {
       const bizCtx = args.businessContext ? `\nBrand context: ${args.businessContext}` : "";
-      const prompt = `Create a professional advertising banner for VK Ads (Russian social media). The banner should be modern, clean, and visually appealing with bold text overlay.
+      const prompt = `Create a professional advertising background image for a social media ad banner. DO NOT include any text, letters, words, or typography in the image — only visual elements.
 
-Main offer: ${args.offer}
-Key benefits: ${args.bullets}
-Value proposition: ${args.benefit}
-Call to action: ${args.cta}${bizCtx}
+Theme based on the ad concept:
+- Product/service: ${args.offer}
+- Benefits: ${args.bullets}
+- Value: ${args.benefit}${bizCtx}
 
-Style: Professional marketing banner, bright colors, clean typography, Russian text. Size 1080x1080.`;
+Style: Modern, clean, professional marketing visual. Bright vibrant colors, abstract geometric shapes or relevant lifestyle imagery. No text, no letters, no words anywhere in the image. Size 1080x1080.`;
 
       const openaiHeaders: Record<string, string> = {
         "Content-Type": "application/json",
