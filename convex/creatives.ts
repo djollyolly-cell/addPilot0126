@@ -206,7 +206,7 @@ export const generateText = action({
   },
 });
 
-// Generate banner image using DALL-E
+// Generate banner image using Google Gemini
 export const generateImage = action({
   args: {
     creativeId: v.id("creatives"),
@@ -233,53 +233,91 @@ export const generateImage = action({
     // Set status to generating
     await ctx.runMutation(internal.creatives.markGenerating, { id: args.creativeId });
 
-    const apiKey = process.env.OPENAI_API_KEY;
-    const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com";
-    if (!apiKey) throw new Error("OPENAI_API_KEY не настроен");
+    const bflApiKey = process.env.BFL_API_KEY;
+    if (!bflApiKey) throw new Error("BFL_API_KEY не настроен");
 
     try {
       const bizCtx = args.businessContext ? `\nBrand context: ${args.businessContext}` : "";
-      const prompt = `Create a professional advertising background image for a social media ad banner. DO NOT include any text, letters, words, or typography in the image — only visual elements.
+      // Use Claude to translate Russian ad text into English visual keywords
+      const anthropicKey = process.env.ANTHROPIC_API_KEY;
+      const anthropicBase = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
+      let visualKeywords = "professional business scene";
+      if (anthropicKey) {
+        try {
+          const translateResp = await fetch(`${anthropicBase}/v1/messages`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": anthropicKey,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 100,
+              system: "Translate the Russian advertising text into an English image prompt. Describe a candid, editorial-style photo — real environment, natural imperfections, authentic moment. Avoid: generic stock photo clichés (smiling person at desk, handshake, thumbs up), screens, phones, UI, charts, graphs, text. Instead focus on: real workspace details, hands working, close-up product shots, atmospheric environments, abstract concepts through objects. Output ONLY the prompt, no explanations.",
+              messages: [{ role: "user", content: `${args.offer}. ${args.bullets}. ${args.benefit}. ${args.businessContext || ""}` }],
+            }),
+          });
+          if (translateResp.ok) {
+            const trData = await translateResp.json();
+            visualKeywords = trData.content?.[0]?.text || visualKeywords;
+          }
+        } catch { /* fallback to default */ }
+      }
 
-Theme based on the ad concept:
-- Product/service: ${args.offer}
-- Benefits: ${args.bullets}
-- Value: ${args.benefit}${bizCtx}
+      const prompt = `${visualKeywords}. Editorial photography, natural lighting, authentic composition, slight grain. No text, no letters, no words, no watermarks.`;
 
-Style: Modern, clean, professional marketing visual. Bright vibrant colors, abstract geometric shapes or relevant lifestyle imagery. No text, no letters, no words anywhere in the image. Size 1080x1080.`;
-
-      const openaiHeaders: Record<string, string> = {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      };
-      if (process.env.OPENAI_BASE_URL) openaiHeaders["x-target-api"] = "openai";
-
-      const response = await fetch(`${openaiBaseUrl}/v1/images/generations`, {
+      // Submit generation request to FLUX API
+      const submitResp = await fetch("https://api.bfl.ai/v1/flux-dev", {
         method: "POST",
-        headers: openaiHeaders,
+        headers: {
+          "Content-Type": "application/json",
+          "x-key": bflApiKey,
+        },
         body: JSON.stringify({
-          model: "dall-e-3",
           prompt,
-          n: 1,
-          size: "1024x1024",
-          response_format: "url",
+          width: 1024,
+          height: 1024,
         }),
       });
 
-      if (!response.ok) {
-        const text = await response.text();
-        throw new Error(`DALL-E API error: ${response.status} ${text}`);
+      if (!submitResp.ok) {
+        const text = await submitResp.text();
+        throw new Error(`FLUX API submit error: ${submitResp.status} ${text}`);
       }
 
-      const data = await response.json();
-      const imageUrl = data.data?.[0]?.url;
-      if (!imageUrl) throw new Error("Не удалось получить URL изображения");
+      const submitData = await submitResp.json();
+      const taskId = submitData.id;
+      const pollingUrl = submitData.polling_url || `https://api.bfl.ai/v1/get_result?id=${taskId}`;
 
-      // Download image and store in Convex
-      const imageResponse = await fetch(imageUrl);
-      if (!imageResponse.ok) throw new Error("Не удалось скачать изображение");
+      // Poll for result (max 60 seconds)
+      let imageUrl: string | null = null;
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const pollResp = await fetch(pollingUrl, {
+          headers: { "x-key": bflApiKey },
+        });
+        if (!pollResp.ok) continue;
+        const pollData = await pollResp.json();
+        if (pollData.status === "Ready") {
+          imageUrl = pollData.result?.sample;
+          break;
+        }
+        if (pollData.status === "Error" || pollData.status === "Failed") {
+          throw new Error(`FLUX generation failed: ${pollData.status}`);
+        }
+      }
 
-      const imageBlob = await imageResponse.blob();
+      if (!imageUrl) {
+        throw new Error("FLUX: таймаут генерации изображения");
+      }
+
+      // Download image from FLUX signed URL
+      const imgResp = await fetch(imageUrl);
+      if (!imgResp.ok) throw new Error("Не удалось скачать изображение от FLUX");
+      const imgBlob = await imgResp.blob();
+      const mimeType = imgBlob.type || "image/jpeg";
+      const imageBlob = new Blob([await imgBlob.arrayBuffer()], { type: mimeType });
       const storageId = await ctx.storage.store(imageBlob);
 
       // Save to creative
