@@ -49,6 +49,11 @@ export default defineSchema({
     tokenExpiresAt: v.optional(v.number()),
     clientId: v.optional(v.string()),
     clientSecret: v.optional(v.string()),
+    // Business profile
+    companyName: v.optional(v.string()),
+    industry: v.optional(v.string()),
+    tone: v.optional(v.string()),
+    website: v.optional(v.string()),
     status: v.union(
       v.literal("active"),
       v.literal("paused"),
@@ -60,6 +65,16 @@ export default defineSchema({
   })
     .index("by_userId", ["userId"])
     .index("by_vkAccountId", ["vkAccountId"]),
+
+  businessDirections: defineTable({
+    accountId: v.id("adAccounts"),
+    name: v.string(),
+    targetAudience: v.optional(v.string()),
+    usp: v.optional(v.string()),
+    isActive: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_accountId", ["accountId"]),
 
   campaigns: defineTable({
     accountId: v.id("adAccounts"),
