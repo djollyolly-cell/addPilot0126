@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronRight,
   Briefcase,
+  Info,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
@@ -253,6 +254,19 @@ export function BusinessProfileEditor({ accountId, userId }: BusinessProfileEdit
           </Button>
         </CardContent>
       </Card>
+
+      {/* Hint about directions */}
+      {directions !== undefined && directions.length === 0 && (
+        <div className="flex items-start gap-2.5 p-3 rounded-lg bg-primary/5 border border-primary/20 text-sm">
+          <Info className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium text-foreground">Добавьте направления бизнеса</p>
+            <p className="text-muted-foreground mt-0.5">
+              Направления нужны для точной AI-генерации текстов и креативов. Укажите название, целевую аудиторию и УТП для каждого направления.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Directions */}
       <Card>

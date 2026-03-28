@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Trash2,
   Building2,
+  Info,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
@@ -47,6 +48,17 @@ export function VideosPage() {
     user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
   );
   const setActiveAccount = useMutation(api.userSettings.setActiveAccount);
+
+  // Business profile & directions
+  const profile = useQuery(
+    api.adAccounts.getBusinessProfile,
+    accountId ? { accountId: accountId as Id<"adAccounts"> } : 'skip'
+  );
+  const directions = useQuery(
+    api.businessDirections.list,
+    accountId ? { accountId: accountId as Id<"adAccounts"> } : 'skip'
+  );
+  const activeDirections = directions?.filter((d: any) => d.isActive) || [];
 
   // Queries
   const videos = useQuery(
@@ -302,6 +314,27 @@ export function VideosPage() {
       {success && (
         <div className="p-3 rounded-lg bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
           {success}
+        </div>
+      )}
+
+      {/* Business profile hint */}
+      {profile !== undefined && directions !== undefined && (
+        !profile?.companyName || !profile?.industry || activeDirections.length === 0
+      ) && (
+        <div className="flex items-start gap-2.5 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-sm">
+          <Info className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium text-foreground">Заполните профиль бизнеса для точного анализа</p>
+            <p className="text-muted-foreground mt-0.5">
+              {!profile?.companyName || !profile?.industry
+                ? 'Укажите название компании и нишу в '
+                : 'Добавьте направления бизнеса в '}
+              <a href="/accounts" className="text-primary hover:underline font-medium">
+                разделе Кабинеты
+              </a>
+              {' '}→ Профиль бизнеса. Это улучшит AI-анализ ваших видео.
+            </p>
+          </div>
         </div>
       )}
 
