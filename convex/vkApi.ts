@@ -294,6 +294,26 @@ export interface MtStatItem {
   total?: MtStatRow;
 }
 
+export interface MtVideoStats {
+  started?: number;
+  first_second?: number;
+  viewed_3_seconds?: number;
+  viewed_10_seconds?: number;
+  viewed_25_percent?: number;
+  viewed_50_percent?: number;
+  viewed_75_percent?: number;
+  viewed_100_percent?: number;
+  viewed_3_seconds_rate?: number;
+  viewed_25_percent_rate?: number;
+  viewed_50_percent_rate?: number;
+  viewed_75_percent_rate?: number;
+  viewed_100_percent_rate?: number;
+  depth_of_view?: number;
+  started_cost?: string;
+  viewed_3_seconds_cost?: string;
+  viewed_100_percent_cost?: string;
+}
+
 // Get banner (ad) statistics via myTarget API v2
 // `id` param is required per docs — without it stats return zeros
 export const getMtStatistics = action({
@@ -334,6 +354,31 @@ export const getMtStatistics = action({
         date_from: args.dateFrom,
         date_to: args.dateTo,
         metrics: "base,events",
+      }
+    );
+    return data.items || [];
+  },
+});
+
+// Get banner statistics WITH video metrics (started, viewed 25/50/75/100%)
+// myTarget API v2: metrics=base,video returns video completion data
+// Verified: API returns video.started, video.viewed_25_percent, etc.
+export const getMtVideoStatistics = action({
+  args: {
+    accessToken: v.string(),
+    dateFrom: v.string(),
+    dateTo: v.string(),
+    bannerIds: v.string(), // comma-separated banner IDs (required)
+  },
+  handler: async (_, args): Promise<MtStatItem[]> => {
+    const data = await callMtApi<{ items: MtStatItem[]; total: any }>(
+      "statistics/banners/day.json",
+      args.accessToken,
+      {
+        id: args.bannerIds,
+        date_from: args.dateFrom,
+        date_to: args.dateTo,
+        metrics: "base,video",
       }
     );
     return data.items || [];
