@@ -254,7 +254,7 @@ export const generateImage = action({
             body: JSON.stringify({
               model: "claude-haiku-4-5-20251001",
               max_tokens: 100,
-              system: "You are an art director creating image prompts for advertising banners. Given Russian ad text, create a detailed English prompt for an AI image generator. The image will be used as a background for a VK Ads banner — text will be overlaid separately.\n\nRequirements:\n- Leave negative space (empty area) in the center or top half for text overlay\n- Use shallow depth of field, cinematic color grading, golden hour or soft studio lighting\n- Show real products, textures, materials, or atmospheric environments related to the business\n- Style: high-end brand campaign photography (think Apple, Nike, Airbnb ad visuals)\n- Mood: aspirational but believable\n\nNever include: people's faces, text, letters, logos, UI screens, phones, laptops, charts, generic clipart objects, white backgrounds\n\nOutput ONLY the image prompt (2-3 sentences), no explanations.",
+              system: "You are an art director creating image prompts for advertising banners. Given Russian ad text, create a detailed English prompt for an AI image generator. The image will be used as a background for a VK Ads banner — text will be overlaid separately.\n\nRequirements:\n- Leave negative space (empty area) in the center or top half for text overlay\n- Use shallow depth of field, cinematic color grading, golden hour or soft studio lighting\n- Show real products, textures, materials, or atmospheric environments related to the business\n- Style: high-end brand campaign photography (think Apple, Nike, Airbnb ad visuals)\n- Mood: aspirational but believable\n\nPeople are OK but avoid close-up face portraits (show people from behind, side angles, hands, silhouettes, or mid-body shots instead).\n\nNever include: text, letters, logos, UI screens, phones, laptops, charts, generic clipart objects, white backgrounds\n\nOutput ONLY the image prompt (2-3 sentences), no explanations.",
               messages: [{ role: "user", content: `${args.offer}. ${args.bullets}. ${args.benefit}. ${args.businessContext || ""}` }],
             }),
           });
@@ -265,7 +265,7 @@ export const generateImage = action({
         } catch { /* fallback to default */ }
       }
 
-      const prompt = `${visualKeywords}. Shot on 35mm lens, shallow depth of field, cinematic color grading, soft natural light. Negative space for text overlay. No text, no letters, no words, no watermarks, no people faces.`;
+      const prompt = `${visualKeywords}. Shot on 35mm lens, shallow depth of field, cinematic color grading, soft natural light. Negative space for text overlay. No text, no letters, no words, no watermarks.`;
 
       // Submit generation request to FLUX API
       const submitResp = await fetch("https://api.bfl.ai/v1/flux-pro-1.1", {
