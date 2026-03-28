@@ -145,6 +145,7 @@ export const generateText = action({
     }
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
+    const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY не настроен");
 
     const fieldConfig: Record<string, { maxLen: number; prompt: string }> = {
@@ -172,7 +173,7 @@ export const generateText = action({
       systemPrompt += `\n\nКонтекст объявления: ${args.context}`;
     }
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

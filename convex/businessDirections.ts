@@ -92,6 +92,7 @@ export const suggestTargetAudience = action({
   handler: async (ctx, args) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY не настроен");
+    const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
 
     const usage = await ctx.runQuery(internal.aiLimits.getUsageInternal, {
       userId: args.userId,
@@ -104,7 +105,7 @@ export const suggestTargetAudience = action({
       throw new Error("Лимит генераций исчерпан. Обновите тариф.");
     }
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -155,6 +156,7 @@ export const suggestUsp = action({
   handler: async (ctx, args) => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY не настроен");
+    const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
 
     const usage = await ctx.runQuery(internal.aiLimits.getUsageInternal, {
       userId: args.userId,
@@ -169,7 +171,7 @@ export const suggestUsp = action({
 
     const audienceCtx = args.targetAudience ? `\nЦелевая аудитория: ${args.targetAudience}` : "";
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

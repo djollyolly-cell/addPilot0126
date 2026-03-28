@@ -398,6 +398,7 @@ export const analyzeVideo = action({
     if (!video?.transcription) throw new Error("Сначала выполните транскрибацию видео");
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
+    const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY не настроен");
 
     const systemPrompt = `Ты — эксперт по рекламным видео для VK Ads. Проанализируй транскрипцию рекламного видео и выдай JSON с оценкой.
@@ -424,7 +425,7 @@ export const analyzeVideo = action({
 - Структура: боль → решение → выгода → CTA
 - Длина и плотность контента`;
 
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

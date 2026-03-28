@@ -216,6 +216,7 @@ export const analyzeWatchRates = internalAction({
     const isReanalysis = !!video.lastAnalyzedAt;
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
+    const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
     if (!apiKey) {
       console.error("[creativeAnalytics] ANTHROPIC_API_KEY не настроен");
       return;
@@ -292,7 +293,7 @@ ${video.transcription ? `Транскрипция (первые 500 символ
 - 100%: ${totals.videoViewed100} (${retention.p100}%)`;
 
     try {
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
+      const response = await fetch(`${baseUrl}/v1/messages`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
