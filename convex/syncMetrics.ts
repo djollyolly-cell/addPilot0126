@@ -135,6 +135,70 @@ export const syncAll = internalAction({
           }
         }
 
+        // Collect video stats for linked creatives
+        try {
+          const linkedVideos = await ctx.runQuery(internal.videos.listLinkedVideos, {});
+          const accountVideos = linkedVideos.filter((v: any) => v.accountId === account._id);
+
+          if (accountVideos.length > 0) {
+            const videoAdIds = accountVideos
+              .map((v: any) => v.vkAdId)
+              .filter(Boolean)
+              .join(",");
+
+            if (videoAdIds) {
+              const videoStats = await ctx.runAction(api.vkApi.getMtVideoStatistics, {
+                accessToken,
+                dateFrom: date,
+                dateTo: date,
+                bannerIds: videoAdIds,
+              });
+
+              for (const item of videoStats) {
+                const adId = String(item.id);
+                const linkedVideo = accountVideos.find((v: any) => v.vkAdId === adId);
+
+                for (const row of item.rows) {
+                  const base = (row as any).base || row;
+                  const vid = (row as any).video || {};
+
+                  await ctx.runMutation(internal.creativeAnalytics.saveCreativeStats, {
+                    accountId: account._id,
+                    videoId: linkedVideo?._id,
+                    adId,
+                    date: row.date,
+                    impressions: base.shows || 0,
+                    clicks: base.clicks || 0,
+                    spent: parseFloat(base.spent || "0") || 0,
+                    videoStarted: vid.started || undefined,
+                    videoViewed3s: vid.viewed_3_seconds || undefined,
+                    videoViewed10s: vid.viewed_10_seconds || undefined,
+                    videoViewed25: vid.viewed_25_percent || undefined,
+                    videoViewed50: vid.viewed_50_percent || undefined,
+                    videoViewed75: vid.viewed_75_percent || undefined,
+                    videoViewed100: vid.viewed_100_percent || undefined,
+                    depthOfView: vid.depth_of_view || undefined,
+                    viewed3sRate: vid.viewed_3_seconds_rate || undefined,
+                    viewed25Rate: vid.viewed_25_percent_rate || undefined,
+                    viewed50Rate: vid.viewed_50_percent_rate || undefined,
+                    viewed75Rate: vid.viewed_75_percent_rate || undefined,
+                    viewed100Rate: vid.viewed_100_percent_rate || undefined,
+                  });
+                }
+              }
+
+              console.log(
+                `[syncMetrics] Account ${account._id}: ${accountVideos.length} video creatives stats synced`
+              );
+            }
+          }
+        } catch (error) {
+          console.error(
+            `[syncMetrics] Error fetching video stats for account ${account._id}:`,
+            error instanceof Error ? error.message : error
+          );
+        }
+
         // Update sync time
         await ctx.runMutation(api.adAccounts.updateSyncTime, {
           accountId: account._id,
