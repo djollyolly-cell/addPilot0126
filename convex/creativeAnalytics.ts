@@ -314,7 +314,9 @@ ${video.transcription ? `Транскрипция (первые 500 символ
       }
 
       const data = await response.json();
-      const text = data.content?.[0]?.text || "";
+      let text = (data.content?.[0]?.text || "").trim();
+      // Strip markdown code fences if present
+      text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
       const analysis = JSON.parse(text);
 
       // Save analysis to the latest creativeStats record

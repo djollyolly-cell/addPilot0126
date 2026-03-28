@@ -129,12 +129,15 @@ export const suggestTargetAudience = action({
     }
 
     const data = await response.json();
-    const text = data.content?.[0]?.text || "[]";
+    let text = (data.content?.[0]?.text || "[]").trim();
 
     await ctx.runMutation(internal.aiLimits.recordGeneration, {
       userId: args.userId,
       type: "text",
     });
+
+    // Strip markdown code fences if present
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
 
     try {
       return JSON.parse(text) as string[];
@@ -195,12 +198,15 @@ export const suggestUsp = action({
     }
 
     const data = await response.json();
-    const text = data.content?.[0]?.text || "[]";
+    let text = (data.content?.[0]?.text || "[]").trim();
 
     await ctx.runMutation(internal.aiLimits.recordGeneration, {
       userId: args.userId,
       type: "text",
     });
+
+    // Strip markdown code fences if present
+    text = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
 
     try {
       return JSON.parse(text) as string[];

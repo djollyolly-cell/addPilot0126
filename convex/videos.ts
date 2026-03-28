@@ -453,7 +453,9 @@ export const analyzeVideo = action({
     }
 
     const data = await response.json();
-    const responseText = data.content?.[0]?.text || "";
+    let responseText = (data.content?.[0]?.text || "").trim();
+    // Strip markdown code fences if present
+    responseText = responseText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
 
     try {
       const analysis = JSON.parse(responseText);
