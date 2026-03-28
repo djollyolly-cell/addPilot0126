@@ -40,8 +40,8 @@ export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalle
       {creatives.map((creative) => (
         <Card key={creative._id} data-testid={`creative-card-${creative._id}`}>
           <CardContent className="p-4 space-y-3">
-            {/* Image preview */}
-            <div className="aspect-square rounded-md overflow-hidden bg-muted flex items-center justify-center">
+            {/* Banner preview with text overlay */}
+            <div className="aspect-square rounded-md overflow-hidden bg-muted flex items-center justify-center relative">
               {creative.status === 'generating' ? (
                 <div className="flex flex-col items-center gap-2">
                   <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
@@ -55,20 +55,41 @@ export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalle
                   </span>
                 </div>
               ) : creative.imageUrl ? (
-                <img
-                  src={creative.imageUrl}
-                  alt={creative.offer}
-                  className="w-full h-full object-cover"
-                />
+                <>
+                  <img
+                    src={creative.imageUrl}
+                    alt={creative.offer}
+                    className="w-full h-full object-cover"
+                  />
+                  {/* Dark gradient overlay for text readability */}
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
+                  {/* Text overlay */}
+                  <div className="absolute inset-0 flex flex-col justify-end p-4 text-white">
+                    <p className="text-base font-bold leading-tight drop-shadow-lg line-clamp-2">
+                      {creative.offer}
+                    </p>
+                    {creative.bullets && (
+                      <p className="text-xs mt-1 opacity-90 leading-tight line-clamp-2 drop-shadow">
+                        {creative.bullets}
+                      </p>
+                    )}
+                    {creative.benefit && (
+                      <p className="text-xs mt-1 font-medium opacity-95 drop-shadow">
+                        {creative.benefit}
+                      </p>
+                    )}
+                    {creative.cta && (
+                      <div className="mt-2">
+                        <span className="inline-block bg-white text-black text-xs font-bold px-3 py-1.5 rounded-md">
+                          {creative.cta}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </>
               ) : (
                 <ImageIcon className="h-12 w-12 text-muted-foreground" />
               )}
-            </div>
-
-            {/* Text preview */}
-            <div className="space-y-1">
-              <p className="text-sm font-medium line-clamp-1">{creative.offer || 'Без оффера'}</p>
-              <p className="text-xs text-muted-foreground line-clamp-1">{creative.cta}</p>
             </div>
 
             {/* Footer */}
