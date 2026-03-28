@@ -61,26 +61,36 @@ export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalle
                     alt={creative.offer}
                     className="w-full h-full object-cover"
                   />
-                  {/* Dark gradient overlay for text readability */}
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/20 to-transparent" />
-                  {/* Text overlay */}
-                  <div className="absolute inset-0 flex flex-col justify-end p-4 text-white">
-                    <p className="text-base font-bold leading-tight drop-shadow-lg line-clamp-2">
-                      {creative.offer}
-                    </p>
-                    {creative.bullets && (
-                      <p className="text-xs mt-1 opacity-90 leading-tight line-clamp-2 drop-shadow">
-                        {creative.bullets}
+                  {/* Gradient overlays: top for headline, bottom for CTA */}
+                  <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/50" />
+                  {/* Z-pattern text layout: headline top → details middle → CTA bottom-right */}
+                  <div className="absolute inset-0 flex flex-col justify-between p-4 text-white">
+                    {/* Top: main offer headline — first thing the eye sees */}
+                    <div>
+                      <p className="text-lg font-extrabold leading-snug drop-shadow-lg line-clamp-2"
+                         style={{ textShadow: '0 2px 8px rgba(0,0,0,0.8)' }}>
+                        {creative.offer}
                       </p>
-                    )}
-                    {creative.benefit && (
-                      <p className="text-xs mt-1 font-medium opacity-95 drop-shadow">
-                        {creative.benefit}
-                      </p>
-                    )}
+                    </div>
+                    {/* Middle: bullets + benefit */}
+                    <div className="space-y-1">
+                      {creative.bullets && (
+                        <p className="text-xs leading-snug drop-shadow line-clamp-2"
+                           style={{ textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
+                          {creative.bullets}
+                        </p>
+                      )}
+                      {creative.benefit && (
+                        <p className="text-sm font-semibold drop-shadow"
+                           style={{ textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
+                          {creative.benefit}
+                        </p>
+                      )}
+                    </div>
+                    {/* Bottom-right: CTA button — last point of Z-scan */}
                     {creative.cta && (
-                      <div className="mt-2">
-                        <span className="inline-block bg-white text-black text-xs font-bold px-3 py-1.5 rounded-md">
+                      <div className="flex justify-end">
+                        <span className="inline-block bg-primary text-primary-foreground text-sm font-bold px-4 py-2 rounded-lg shadow-lg">
                           {creative.cta}
                         </span>
                       </div>
