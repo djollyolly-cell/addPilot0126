@@ -321,6 +321,8 @@ export default defineSchema({
     duration: v.optional(v.number()),
     vkMediaId: v.optional(v.string()),
     vkMediaUrl: v.optional(v.string()),
+    vkAdId: v.optional(v.string()),         // Links video to VK ad (banner) for stats
+    lastAnalyzedAt: v.optional(v.number()), // When AI last analyzed this video's watch rates
     direction: v.optional(v.string()),  // Business direction tag
     isActive: v.boolean(),
     uploadStatus: v.union(
@@ -371,6 +373,45 @@ export default defineSchema({
   })
     .index("by_userId_type", ["userId", "type"])
     .index("by_createdAt", ["createdAt"]),
+
+  // Creative performance statistics (accumulated from VK API)
+  creativeStats: defineTable({
+    accountId: v.id("adAccounts"),
+    videoId: v.optional(v.id("videos")),
+    adId: v.string(),           // VK banner ID
+    date: v.string(),           // "YYYY-MM-DD"
+    impressions: v.number(),
+    clicks: v.number(),
+    spent: v.number(),
+    // Video watch funnel (from myTarget API: statistics/banners/day.json?metrics=base,video)
+    videoStarted: v.optional(v.number()),
+    videoViewed3s: v.optional(v.number()),
+    videoViewed10s: v.optional(v.number()),
+    videoViewed25: v.optional(v.number()),
+    videoViewed50: v.optional(v.number()),
+    videoViewed75: v.optional(v.number()),
+    videoViewed100: v.optional(v.number()),
+    depthOfView: v.optional(v.number()),   // avg % of video watched
+    // Pre-calculated rates from API (0-100%)
+    viewed3sRate: v.optional(v.number()),
+    viewed25Rate: v.optional(v.number()),
+    viewed50Rate: v.optional(v.number()),
+    viewed75Rate: v.optional(v.number()),
+    viewed100Rate: v.optional(v.number()),
+    // AI analysis results
+    aiAnalyzedAt: v.optional(v.number()),
+    aiWatchScore: v.optional(v.number()),        // 0-100
+    aiWatchScoreLabel: v.optional(v.string()),   // "Плохо" | "Средне" | "Хорошо" | "Отлично"
+    aiRecommendations: v.optional(v.array(v.object({
+      issue: v.string(),
+      suggestion: v.string(),
+      priority: v.string(),   // "high" | "medium" | "low"
+    }))),
+    createdAt: v.number(),
+  })
+    .index("by_adId_date", ["adId", "date"])
+    .index("by_videoId", ["videoId"])
+    .index("by_accountId_date", ["accountId", "date"]),
 
   // Audit log for credential changes (clientId, clientSecret, tokens)
   credentialHistory: defineTable({
