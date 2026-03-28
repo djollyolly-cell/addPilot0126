@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { CreativeEditor } from '@/components/CreativeEditor';
+import { Label } from '@/components/ui/label';
 import { CreativeGallery } from '@/components/CreativeGallery';
 
 const GENERATION_LIMITS: Record<string, Record<string, number>> = {
@@ -45,6 +46,17 @@ export function CreativesPage() {
   );
   const setActiveAccount = useMutation(api.userSettings.setActiveAccount);
 
+  const directions = useQuery(
+    api.businessDirections.list,
+    accountId ? { accountId: accountId as Id<"adAccounts"> } : 'skip'
+  );
+  const profile = useQuery(
+    api.adAccounts.getBusinessProfile,
+    accountId ? { accountId: accountId as Id<"adAccounts"> } : 'skip'
+  );
+
+  const [selectedDirectionId, setSelectedDirectionId] = useState<string>('');
+
   // Queries
   const creatives = useQuery(
     api.creatives.list,
@@ -71,6 +83,13 @@ export function CreativesPage() {
 
   const isLoading = creatives === undefined;
 
+  // Auto-select if only one direction
+  const activeDirections = directions?.filter((d: any) => d.isActive) || [];
+  if (activeDirections.length === 1 && !selectedDirectionId && activeDirections[0]._id) {
+    setSelectedDirectionId(activeDirections[0]._id);
+  }
+  const selectedDirection = activeDirections.find((d: any) => d._id === selectedDirectionId);
+
   const handleFieldChange = (field: string, value: string) => {
     setValues((prev) => ({ ...prev, [field]: value }));
   };
@@ -80,15 +99,25 @@ export function CreativesPage() {
     setError(null);
     setGeneratingField(field);
     try {
-      const context = Object.entries(values)
+      const fieldContext = Object.entries(values)
         .filter(([k, v]) => k !== field && v)
         .map(([k, v]) => `${k}: ${v}`)
         .join('; ');
 
+      const bizParts: string[] = [];
+      if (profile?.companyName) bizParts.push(`Компания: ${profile.companyName}`);
+      if (profile?.industry) bizParts.push(`Ниша: ${profile.industry}`);
+      if (profile?.tone) bizParts.push(`Тон: ${profile.tone}`);
+      if (selectedDirection?.name) bizParts.push(`Направление: ${selectedDirection.name}`);
+      if (selectedDirection?.targetAudience) bizParts.push(`ЦА: ${selectedDirection.targetAudience}`);
+      if (selectedDirection?.usp) bizParts.push(`УТП: ${selectedDirection.usp}`);
+
+      const context = [fieldContext, ...bizParts].filter(Boolean).join('; ') || undefined;
+
       const generated = await generateText({
         userId: user.userId as Id<"users">,
         field,
-        context: context || undefined,
+        context,
       });
       setValues((prev) => ({ ...prev, [field]: generated }));
     } catch (err) {
@@ -247,6 +276,25 @@ export function CreativesPage() {
             generatingField={generatingField}
             disabled={generatingImage}
           />
+
+          {/* Direction selector */}
+          {activeDirections.length > 0 && (
+            <div className="mt-4">
+              <Label>Направление бизнеса</Label>
+              <div className="flex gap-2 mt-1">
+                <select
+                  className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
+                  value={selectedDirectionId}
+                  onChange={(e) => setSelectedDirectionId(e.target.value)}
+                >
+                  <option value="">Выберите направление...</option>
+                  {activeDirections.map((dir: any) => (
+                    <option key={dir._id} value={dir._id}>{dir.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
 
           <div className="mt-6">
             <Button
