@@ -11,6 +11,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { AiScoreBadge } from './AiScoreBadge';
+import { WatchRateChart } from './WatchRateChart';
 import { cn } from '@/lib/utils';
 
 interface VideoData {
@@ -198,28 +199,15 @@ export function VideoItem({
                 label={video.aiScoreLabel}
               />
 
-              {/* Watch rates */}
-              {video.aiAnalysis?.watchRates && (
-                <div className="space-y-1">
-                  <p className="text-sm font-medium">Досмотры видео</p>
-                  <div className="grid grid-cols-4 gap-2">
-                    {(['p25', 'p50', 'p75', 'p95'] as const).map((key) => {
-                      const pct = key.replace('p', '');
-                      const val = video.aiAnalysis?.watchRates?.[key];
-                      return (
-                        <div key={key} className="bg-muted rounded-md p-2 text-center">
-                          <div className="text-xs text-muted-foreground">{pct}%</div>
-                          <div className="text-lg font-bold">{val ?? '—'}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {video.aiAnalysis?.totalViews && val
-                              ? `${((val / video.aiAnalysis.totalViews) * 100).toFixed(1)}% от просмотров`
-                              : ''}
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+              {/* Watch rates funnel */}
+              {video.aiAnalysis?.watchRates && video.aiAnalysis?.totalViews && (
+                <WatchRateChart
+                  videoStarted={video.aiAnalysis.totalViews}
+                  p25={video.aiAnalysis.watchRates.p25 || 0}
+                  p50={video.aiAnalysis.watchRates.p50 || 0}
+                  p75={video.aiAnalysis.watchRates.p75 || 0}
+                  p100={video.aiAnalysis.watchRates.p95 || 0}
+                />
               )}
 
               {/* Transcript match */}
@@ -247,6 +235,22 @@ export function VideoItem({
                       )}
                     </div>
                   ))}
+                </div>
+              )}
+
+              {/* Watch score */}
+              {video.aiAnalysis?.watchRates && video.aiScore !== undefined && (
+                <div className="bg-muted/50 rounded-lg p-3">
+                  <p className="text-sm">
+                    <span className="text-muted-foreground">Оценка удержания: </span>
+                    <span className={cn(
+                      'font-bold',
+                      video.aiScore >= 61 ? 'text-green-600' :
+                      video.aiScore >= 41 ? 'text-amber-600' : 'text-destructive'
+                    )}>
+                      {video.aiScore}/100 — {video.aiScoreLabel}
+                    </span>
+                  </p>
                 </div>
               )}
             </div>
