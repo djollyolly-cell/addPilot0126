@@ -214,6 +214,7 @@ export const generateImage = action({
     bullets: v.string(),
     benefit: v.string(),
     cta: v.string(),
+    businessContext: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Check limits
@@ -235,12 +236,13 @@ export const generateImage = action({
     if (!apiKey) throw new Error("OPENAI_API_KEY не настроен");
 
     try {
+      const bizCtx = args.businessContext ? `\nBrand context: ${args.businessContext}` : "";
       const prompt = `Create a professional advertising banner for VK Ads (Russian social media). The banner should be modern, clean, and visually appealing with bold text overlay.
 
 Main offer: ${args.offer}
 Key benefits: ${args.bullets}
 Value proposition: ${args.benefit}
-Call to action: ${args.cta}
+Call to action: ${args.cta}${bizCtx}
 
 Style: Professional marketing banner, bright colors, clean typography, Russian text. Size 1080x1080.`;
 

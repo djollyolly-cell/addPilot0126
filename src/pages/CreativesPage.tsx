@@ -148,6 +148,12 @@ export function CreativesPage() {
       });
 
       // Generate image
+      const bizParts: string[] = [];
+      if (profile?.companyName) bizParts.push(profile.companyName);
+      if (profile?.industry) bizParts.push(profile.industry);
+      if (selectedDirection?.name) bizParts.push(selectedDirection.name);
+      const businessContext = bizParts.length > 0 ? bizParts.join(', ') : undefined;
+
       await generateImage({
         creativeId,
         userId: user.userId as Id<"users">,
@@ -155,6 +161,7 @@ export function CreativesPage() {
         bullets: values.bullets,
         benefit: values.benefit,
         cta: values.cta,
+        businessContext,
       });
 
       setSuccess('Креатив сгенерирован!');

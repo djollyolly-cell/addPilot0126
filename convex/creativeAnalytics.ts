@@ -250,6 +250,30 @@ export const analyzeWatchRates = internalAction({
 - Падение перед финалом = нет CTA / видео слишком длинное
 - Глубина просмотра <30% = видео не соответствует аудитории`;
 
+    // Add business context if available
+    let businessCtx = "";
+    try {
+      const account = await ctx.runQuery(internal.adAccounts.getInternal, { accountId: video.accountId });
+      if (account?.companyName || account?.industry) {
+        const parts: string[] = [];
+        if (account.companyName) parts.push(`Компания: ${account.companyName}`);
+        if (account.industry) parts.push(`Ниша: ${account.industry}`);
+
+        const allDirections = await ctx.runQuery(internal.businessDirections.listInternal, { accountId: video.accountId });
+        if (allDirections.length > 0) {
+          const dir = allDirections[0];
+          if (dir.name) parts.push(`Направление: ${dir.name}`);
+          if (dir.targetAudience) parts.push(`ЦА: ${dir.targetAudience}`);
+        }
+
+        businessCtx = `\n\nКонтекст бизнеса: ${parts.join(", ")}`;
+      }
+    } catch {
+      // Business context is optional
+    }
+
+    const systemPromptFinal = systemPrompt + businessCtx;
+
     const userMessage = `${isReanalysis ? "ПОВТОРНЫЙ АНАЛИЗ (через 7 дней). Сравни с предыдущими ориентирами и оцени динамику.\n\n" : ""}Видео: "${video.filename}"
 ${video.transcription ? `Транскрипция (первые 500 символов): ${video.transcription.slice(0, 500)}` : "Транскрипция недоступна"}
 
@@ -278,7 +302,7 @@ ${video.transcription ? `Транскрипция (первые 500 символ
         body: JSON.stringify({
           model: "claude-sonnet-4-20250514",
           max_tokens: 1000,
-          system: systemPrompt,
+          system: systemPromptFinal,
           messages: [{ role: "user", content: userMessage }],
         }),
       });
