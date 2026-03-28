@@ -134,10 +134,15 @@ export function VideoUploadQueue({
           {queue.map((item, idx) => (
             <div
               key={idx}
-              className="flex items-center gap-2 p-2 rounded-md bg-muted/50"
+              className="space-y-1 p-2 rounded-md bg-muted/50"
             >
-              <span className="text-sm truncate flex-1">{item.file.name}</span>
-              <QueueStatusBadge status={item.status} />
+              <div className="flex items-center gap-2">
+                <span className="text-sm truncate flex-1">{item.file.name}</span>
+                <QueueStatusBadge status={item.status} />
+              </div>
+              {item.error && (
+                <p className="text-xs text-destructive">{item.error}</p>
+              )}
             </div>
           ))}
         </div>
