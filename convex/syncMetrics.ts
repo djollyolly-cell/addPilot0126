@@ -59,6 +59,43 @@ export const syncAll = internalAction({
           bannerCampaignMap.set(String(b.id), String(b.campaign_id));
         }
 
+        // Auto-link videos to banners by matching content.video_id with videos.vkMediaId
+        try {
+          const bannerVideoMap: { bannerId: string; videoMediaId: string }[] = [];
+          for (const banner of banners) {
+            if (!banner.content) continue;
+            for (const slotKey of Object.keys(banner.content)) {
+              const slot = banner.content[slotKey];
+              // Check if this slot contains a video
+              const isVideo =
+                slot.type === "video" ||
+                (slot.variants &&
+                  Object.values(slot.variants).some(
+                    (v: any) => v.media_type === "video"
+                  ));
+              if (isVideo && slot.id) {
+                bannerVideoMap.push({
+                  bannerId: String(banner.id),
+                  videoMediaId: String(slot.id),
+                });
+                break; // one video per banner is enough
+              }
+            }
+          }
+
+          if (bannerVideoMap.length > 0) {
+            await ctx.runMutation(internal.videos.autoLinkVideos, {
+              accountId: account._id,
+              bannerVideoMap,
+            });
+          }
+        } catch (error) {
+          console.error(
+            `[syncMetrics] Auto-link error for account ${account._id}:`,
+            error instanceof Error ? error.message : error
+          );
+        }
+
         if (!stats || stats.length === 0) {
           console.log(
             `[syncMetrics] Empty stats for account ${account._id}, skipping`
