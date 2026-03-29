@@ -198,20 +198,27 @@ export const uploadToVk = action({
       const fileUrl = await ctx.storage.getUrl(args.storageId);
       if (!fileUrl) throw new Error("Файл не найден в хранилище");
 
-      const fileResponse = await fetch(fileUrl);
-      if (!fileResponse.ok) throw new Error("Не удалось скачать файл из хранилища");
-
-      const fileBlob = await fileResponse.blob();
       const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
-
-      // Upload to VK Ads media library via myTarget API v3
-      // ?account= is REQUIRED — uses mtAdvertiserId (VK Ads advertiser ID, NOT myTarget user ID)
-      const formData = new FormData();
-      formData.append("file", fileBlob, video?.filename || "video.mp4");
-      formData.append("data", JSON.stringify({ width: 0, height: 0 }));
+      const filename = video?.filename || "video.mp4";
+      const fileSize = video?.fileSize || 0;
 
       const endpoint = `${MT_API_BASE}/api/v3/content/video.json?account=${mtAdvertiserId}`;
-      console.log(`[video upload] Uploading to ${endpoint}...`);
+      console.log(`[video upload] Uploading ${filename} (${(fileSize / (1024*1024)).toFixed(1)} MB) to ${endpoint}`);
+
+      // Step 1: Download file from Convex storage
+      console.log(`[video upload] Step 1: downloading from storage...`);
+      const dlStart = Date.now();
+      const fileResponse = await fetch(fileUrl);
+      if (!fileResponse.ok) throw new Error(`Не удалось скачать файл из хранилища: ${fileResponse.status}`);
+      const fileBlob = await fileResponse.blob();
+      console.log(`[video upload] Step 1 done: ${(fileBlob.size / (1024*1024)).toFixed(1)} MB downloaded in ${Date.now() - dlStart}ms`);
+
+      // Step 2: Upload to myTarget API
+      console.log(`[video upload] Step 2: uploading to myTarget...`);
+      const ulStart = Date.now();
+      const formData = new FormData();
+      formData.append("file", fileBlob, filename);
+      formData.append("data", JSON.stringify({ width: 0, height: 0 }));
 
       const resp = await fetch(endpoint, {
         method: "POST",
@@ -219,12 +226,14 @@ export const uploadToVk = action({
         body: formData,
       });
 
+      const respText = await resp.text();
+      console.log(`[video upload] Step 2 done in ${Date.now() - ulStart}ms: status=${resp.status} body=${respText.substring(0, 500)}`);
+
       if (!resp.ok) {
-        const errorText = await resp.text();
-        throw new Error(`VK Ads API error: ${resp.status} ${errorText}`);
+        throw new Error(`VK Ads API: ${resp.status} ${respText}`);
       }
 
-      const uploadData = await resp.json();
+      const uploadData = JSON.parse(respText);
       console.log(`[video upload] Success, id=${uploadData?.id}`);
 
       // Update video record with VK media ID
