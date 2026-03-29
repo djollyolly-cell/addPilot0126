@@ -163,42 +163,6 @@ export const getAccountCredentials = internalQuery({
 // VK Ads API base (ads.vk.com) — the user's actual ad platform
 const VK_ADS_API_BASE = "https://ads.vk.com";
 
-/**
- * Get a fresh access token from VK Ads API (ads.vk.com).
- */
-async function getVkAdsToken(
-  credentials: { clientId: string | null; clientSecret: string | null }
-): Promise<string> {
-  const { clientId, clientSecret } = credentials;
-
-  if (!clientId || !clientSecret) {
-    throw new Error("Нет Client ID / Client Secret для аккаунта. Переподключите аккаунт.");
-  }
-
-  const resp = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "client_credentials",
-      client_id: clientId,
-      client_secret: clientSecret,
-    }).toString(),
-  });
-
-  if (!resp.ok) {
-    const errText = await resp.text();
-    throw new Error(`Ошибка авторизации VK Ads: ${resp.status} ${errText}`);
-  }
-
-  const data = await resp.json();
-  if (!data.access_token) {
-    throw new Error(`VK Ads не вернул токен: ${JSON.stringify(data)}`);
-  }
-
-  console.log("[video upload] Got fresh token from ads.vk.com");
-  return data.access_token;
-}
-
 // Upload video to VK Ads media library
 export const uploadToVk = action({
   args: {
@@ -207,11 +171,11 @@ export const uploadToVk = action({
     accountId: v.id("adAccounts"),
   },
   handler: async (ctx, args) => {
-    // Get account credentials and token
-    const creds = await ctx.runQuery(internal.videos.getAccountCredentials, {
+    // Get stored access token (shared OAuth between target.my.com and ads.vk.com)
+    const accessToken = await ctx.runQuery(internal.videos.getAccountToken, {
       accountId: args.accountId,
     });
-    if (!creds) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
+    if (!accessToken) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
 
     // Mark as uploading and save storageId for transcription
     await ctx.runMutation(internal.videos.updateUploadStatus, {
@@ -232,9 +196,6 @@ export const uploadToVk = action({
       const fileBlob = await fileResponse.blob();
       const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
 
-      // Get fresh token from VK Ads API (ads.vk.com)
-      const token = await getVkAdsToken(creds);
-
       // Upload to VK Ads media library
       const formData = new FormData();
       formData.append("file", fileBlob, video?.filename || "video.mp4");
@@ -245,7 +206,7 @@ export const uploadToVk = action({
 
       const resp = await fetch(endpoint, {
         method: "POST",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${accessToken}` },
         body: formData,
       });
 
