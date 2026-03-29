@@ -9,6 +9,10 @@ import {
   Link2,
   Eye,
   EyeOff,
+  Upload,
+  CheckCircle,
+  AlertCircle,
+  Clock,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -39,6 +43,8 @@ interface VideoData {
   };
   createdAt: number;
   vkAdId?: string;
+  vkMediaId?: string;
+  errorMessage?: string;
 }
 
 interface VideoItemProps {
@@ -97,6 +103,28 @@ export function VideoItem({
             {video.direction}
           </Badge>
         )}
+
+        {video.uploadStatus === 'ready' ? (
+          <Badge variant="success" className="shrink-0 gap-1">
+            <CheckCircle className="h-3 w-3" />
+            <span className="hidden sm:inline">VK</span>
+          </Badge>
+        ) : video.uploadStatus === 'failed' ? (
+          <Badge variant="destructive" className="shrink-0 gap-1">
+            <AlertCircle className="h-3 w-3" />
+            <span className="hidden sm:inline">Ошибка</span>
+          </Badge>
+        ) : video.uploadStatus === 'uploading' || video.uploadStatus === 'processing' ? (
+          <Badge variant="warning" className="shrink-0 gap-1">
+            <Upload className="h-3 w-3 animate-pulse" />
+            <span className="hidden sm:inline">Загрузка</span>
+          </Badge>
+        ) : video.uploadStatus === 'queued' ? (
+          <Badge variant="outline" className="shrink-0 gap-1">
+            <Clock className="h-3 w-3" />
+            <span className="hidden sm:inline">В очереди</span>
+          </Badge>
+        ) : null}
 
         {video.aiScore !== undefined && video.aiScore >= 0 && (
           <div className="shrink-0 hidden sm:block">
@@ -190,6 +218,22 @@ export function VideoItem({
               <Link2 className="h-4 w-4 text-muted-foreground" />
               <span className="text-xs text-muted-foreground">Привязано к объявлению</span>
               <Badge variant="secondary">{video.vkAdId}</Badge>
+            </div>
+          )}
+
+          {/* Upload status details */}
+          {video.uploadStatus === 'failed' && video.errorMessage && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              <span>{video.errorMessage}</span>
+            </div>
+          )}
+
+          {video.vkMediaId && (
+            <div className="flex items-center gap-2">
+              <Upload className="h-4 w-4 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">VK Media ID:</span>
+              <Badge variant="outline">{video.vkMediaId}</Badge>
             </div>
           )}
 

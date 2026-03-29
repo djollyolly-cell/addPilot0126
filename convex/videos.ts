@@ -178,10 +178,17 @@ export const uploadToVk = action({
 
       const fileBlob = await fileResponse.blob();
 
-      // Upload to myTarget API
+      // Upload to myTarget API (unified for VK Ads and myTarget)
       const formData = new FormData();
       const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
       formData.append("file", fileBlob, video?.filename || "video.mp4");
+
+      // width and height are required by the API — use reasonable defaults
+      // (VK will re-encode the video regardless of these values)
+      formData.append("data", JSON.stringify({
+        width: 1280,
+        height: 720,
+      }));
 
       const mtResponse = await fetch(
         "https://target.my.com/api/v2/content/video.json",
