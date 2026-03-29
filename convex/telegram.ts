@@ -8,6 +8,7 @@ import {
   query,
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { Doc, Id } from "./_generated/dataModel";
 
 const TELEGRAM_API_BASE = "https://api.telegram.org/bot";
 
@@ -526,7 +527,7 @@ export const handleWebhook = internalAction({
         const result = await ctx.runMutation(
           internal.ruleEngine.revertAction,
           {
-            actionLogId: parsed.actionLogId as any,
+            actionLogId: parsed.actionLogId as Id<"actionLogs">,
             revertedBy: `telegram:${cb.from.id}`,
           }
         );
@@ -561,7 +562,7 @@ export const handleWebhook = internalAction({
         // Revert succeeded — restart the ad via VK API
         const actionLog = await ctx.runQuery(
           internal.ruleEngine.getActionLog,
-          { actionLogId: parsed.actionLogId as any }
+          { actionLogId: parsed.actionLogId as Id<"actionLogs"> }
         );
 
         if (actionLog) {
@@ -1045,7 +1046,7 @@ export const flushPendingNotifications = internalAction({
 
     // Reconstruct events from stored data
     const events: RuleNotificationEvent[] = pending
-      .map((n: any) => n.data as RuleNotificationEvent | null)
+      .map((n: Doc<"notifications">) => n.data as RuleNotificationEvent | null)
       .filter((e: RuleNotificationEvent | null): e is RuleNotificationEvent => e !== null);
 
     const message =
@@ -1061,7 +1062,7 @@ export const flushPendingNotifications = internalAction({
         text: message,
       });
       await ctx.runMutation(internal.telegram.markNotificationsSent, {
-        notificationIds: pending.map((n: any) => n._id),
+        notificationIds: pending.map((n: Doc<"notifications">) => n._id),
       });
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : "Unknown error";
@@ -1299,7 +1300,7 @@ export const sendDailyDigest = internalAction({
         { userId: recipient.userId, since, until }
       );
 
-      const events: DigestActionLogSummary[] = logs.map((log: any) => ({
+      const events: DigestActionLogSummary[] = logs.map((log: Doc<"actionLogs">) => ({
         adName: log.adName,
         adId: log.adId,
         accountId: log.accountId,
@@ -1489,7 +1490,7 @@ export const sendWeeklyDigest = internalAction({
 
     for (const recipient of recipients) {
       // Get user's timezone
-      const settings: any = await ctx.runQuery(
+      const settings: Doc<"userSettings"> | null = await ctx.runQuery(
         internal.userSettings.getInternal,
         { userId: recipient.userId }
       );
@@ -1546,7 +1547,7 @@ export const sendWeeklyDigest = internalAction({
         { userId: recipient.userId, since, until }
       );
 
-      const events: DigestActionLogSummary[] = logs.map((log: any) => ({
+      const events: DigestActionLogSummary[] = logs.map((log: Doc<"actionLogs">) => ({
         adName: log.adName,
         adId: log.adId,
         accountId: log.accountId,
@@ -1559,7 +1560,7 @@ export const sendWeeklyDigest = internalAction({
       // Update events with end-of-day metrics (same fix as daily digest)
       for (const event of events) {
         // Find the date of the event from actionLog createdAt
-        const logEntry = logs.find((l: any) => l.adId === event.adId && l.reason === event.reason);
+        const logEntry = logs.find((l: Doc<"actionLogs">) => l.adId === event.adId && l.reason === event.reason);
         const eventDate = logEntry
           ? new Date(logEntry.createdAt).toISOString().slice(0, 10)
           : dates[dates.length - 1];
@@ -1746,7 +1747,7 @@ export const sendMonthlyDigest = internalAction({
 
     for (const recipient of recipients) {
       // Get user's timezone
-      const settings: any = await ctx.runQuery(
+      const settings: Doc<"userSettings"> | null = await ctx.runQuery(
         internal.userSettings.getInternal,
         { userId: recipient.userId }
       );
@@ -1820,7 +1821,7 @@ export const sendMonthlyDigest = internalAction({
         { userId: recipient.userId, since, until }
       );
 
-      const events: DigestActionLogSummary[] = logs.map((log: any) => ({
+      const events: DigestActionLogSummary[] = logs.map((log: Doc<"actionLogs">) => ({
         adName: log.adName,
         adId: log.adId,
         accountId: log.accountId,

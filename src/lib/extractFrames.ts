@@ -4,23 +4,49 @@ import { toBlobURL } from '@ffmpeg/util';
 let ffmpegInstance: FFmpeg | null = null;
 let ffmpegLoading: Promise<FFmpeg> | null = null;
 
+// Multiple CDN sources for reliability
+const FFMPEG_CDNS = [
+  'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm',
+  'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm',
+];
+
+/**
+ * Try loading ffmpeg from a specific CDN base URL.
+ */
+async function tryLoadFromCDN(baseURL: string): Promise<FFmpeg> {
+  const ffmpeg = new FFmpeg();
+  const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
+  const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+  await ffmpeg.load({ coreURL, wasmURL });
+  return ffmpeg;
+}
+
 /**
  * Get or create a singleton FFmpeg instance.
  * Uses single-threaded core (no SharedArrayBuffer / COOP/COEP needed).
- * Downloads WASM from CDN on first use, then caches as blob URL.
+ * Tries multiple CDNs for reliability.
  */
 async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpegInstance?.loaded) return ffmpegInstance;
   if (ffmpegLoading) return ffmpegLoading;
 
   ffmpegLoading = (async () => {
-    const ffmpeg = new FFmpeg();
-    const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm';
-    const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
-    const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
-    await ffmpeg.load({ coreURL, wasmURL });
-    ffmpegInstance = ffmpeg;
-    return ffmpeg;
+    let lastError: Error | null = null;
+    for (const cdn of FFMPEG_CDNS) {
+      try {
+        console.log(`[ffmpeg] Loading from ${cdn}...`);
+        const ffmpeg = await tryLoadFromCDN(cdn);
+        console.log(`[ffmpeg] Loaded successfully from ${cdn}`);
+        ffmpegInstance = ffmpeg;
+        return ffmpeg;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        console.warn(`[ffmpeg] Failed to load from ${cdn}:`, lastError.message);
+      }
+    }
+    // Reset so next call retries
+    ffmpegLoading = null;
+    throw new Error(`Не удалось загрузить ffmpeg.wasm ни с одного CDN: ${lastError?.message}`);
   })();
 
   return ffmpegLoading;
@@ -60,7 +86,7 @@ export async function extractFramesFromBlob(
     try {
       const data = await ffmpeg.readFile(filename);
       if (data instanceof Uint8Array && data.length > 0) {
-        frames.push(new Blob([data], { type: 'image/jpeg' }));
+        frames.push(new Blob([data as BlobPart], { type: 'image/jpeg' }));
       }
       await ffmpeg.deleteFile(filename);
     } catch {
@@ -69,6 +95,10 @@ export async function extractFramesFromBlob(
   }
 
   try { await ffmpeg.deleteFile('input.mp4'); } catch { /* ignore */ }
+
+  if (frames.length === 0) {
+    console.warn('[ffmpeg] No frames extracted — video may use unsupported codec');
+  }
 
   return frames;
 }

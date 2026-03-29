@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { expect, test, describe, beforeEach } from "vitest";
+import { expect, test, describe } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
 

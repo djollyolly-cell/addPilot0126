@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import type { MtVideoStats } from "./vkApi";
 
 // Today's date in YYYY-MM-DD format
 function todayStr(): string {
@@ -71,7 +72,7 @@ export const syncAll = internalAction({
                 slot.type === "video" ||
                 (slot.variants &&
                   Object.values(slot.variants).some(
-                    (v: any) => v.media_type === "video"
+                    (variant) => variant.media_type === "video"
                   ));
               if (isVideo && slot.id) {
                 bannerVideoMap.push({
@@ -109,7 +110,7 @@ export const syncAll = internalAction({
 
           for (const row of item.rows) {
             // myTarget API v2 nests metrics under row.base
-            const base = (row as any).base || row;
+            const base = row.base;
             const spent = parseFloat(base.spent || "0") || 0;
             const impressions = base.shows || 0;
             const clicks = base.clicks || 0;
@@ -125,7 +126,7 @@ export const syncAll = internalAction({
 
             // Count leads from events (VK lead forms report here, not in base.goals)
             let eventsGoals = 0;
-            const events = (row as any).events;
+            const events = row.events;
             if (events && typeof events === "object") {
               for (const [, eventData] of Object.entries(events)) {
                 const ed = eventData as { count?: number | string } | number | undefined;
@@ -175,11 +176,11 @@ export const syncAll = internalAction({
         // Collect video stats for linked creatives
         try {
           const linkedVideos = await ctx.runQuery(internal.videos.listLinkedVideos, {});
-          const accountVideos = linkedVideos.filter((v: any) => v.accountId === account._id);
+          const accountVideos = linkedVideos.filter((vid) => vid.accountId === account._id);
 
           if (accountVideos.length > 0) {
             const videoAdIds = accountVideos
-              .map((v: any) => v.vkAdId)
+              .map((vid) => vid.vkAdId)
               .filter(Boolean)
               .join(",");
 
@@ -193,11 +194,11 @@ export const syncAll = internalAction({
 
               for (const item of videoStats) {
                 const adId = String(item.id);
-                const linkedVideo = accountVideos.find((v: any) => v.vkAdId === adId);
+                const linkedVideo = accountVideos.find((vid) => vid.vkAdId === adId);
 
                 for (const row of item.rows) {
-                  const base = (row as any).base || row;
-                  const vid = (row as any).video || {};
+                  const base = row.base;
+                  const vid: MtVideoStats = row.video || {};
 
                   await ctx.runMutation(internal.creativeAnalytics.saveCreativeStats, {
                     accountId: account._id,
@@ -317,7 +318,7 @@ export const debugMetrics = query({
     const users = await ctx.db.query("users").collect();
     const usersTg = users.map((u) => ({
       id: u._id,
-      telegramChatId: (u as any).telegramChatId ?? null,
+      telegramChatId: u.telegramChatId ?? null,
     }));
 
     // Get notifications
@@ -326,7 +327,7 @@ export const debugMetrics = query({
       status: n.status,
       type: n.type,
       title: n.title,
-      errorMessage: (n as any).errorMessage ?? null,
+      errorMessage: n.errorMessage ?? null,
       createdAt: new Date(n.createdAt).toISOString(),
     }));
 
@@ -373,7 +374,7 @@ export const backfillVkResults = action({
     let updated = 0;
     for (const item of stats) {
       const adId = String(item.id);
-      for (const row of (item as any).rows) {
+      for (const row of item.rows) {
         const vk = row.base?.vk;
         const vkResult = vk ? Math.max(Number(vk.result) || 0, Number(vk.goals) || 0) : 0;
         if (vkResult > 0) {

@@ -163,7 +163,6 @@ export const connect = mutation({
         name: args.name,
         accessToken: args.accessToken,
         status: "active" as const,
-        lastError: undefined,
       };
       if (args.refreshToken !== undefined) {
         patch.refreshToken = args.refreshToken;
@@ -1095,7 +1094,7 @@ export const refreshUserToken = action({
       if (!clientId || !clientSecret) {
         return {
           success: false,
-          error: `No credentials found. env VK_ADS_CLIENT_ID=${envClientId ? 'SET' : 'NOT SET'}`,
+          error: `No credentials found. env VK_ADS_CLIENT_ID=${envClientId ? 'SET' : 'NOT SET'}, VK_ADS_CLIENT_SECRET=${envClientSecret ? 'SET' : 'NOT SET'}`,
         };
       }
 

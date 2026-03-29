@@ -250,6 +250,7 @@ export function VideosPage() {
       if (!storageUrl) throw new Error('Файл видео не найден в хранилище. Перезагрузите видео.');
 
       const video = videos?.find((v: any) => v._id === id);
+      if (!video) throw new Error('Видео не найдено. Обновите страницу.');
 
       // Step 1: Extract audio from stored video
       setSuccess('Скачиваем видео для извлечения аудио...');
@@ -271,7 +272,7 @@ export function VideosPage() {
 
       // Step 2: Use pre-extracted frames stored during upload
       // If no frames were stored, try extracting now as fallback
-      let frameStorageIds: Id<"_storage">[] = video?.frameStorageIds || [];
+      const frameStorageIds: Id<"_storage">[] = video?.frameStorageIds || [];
 
       if (frameStorageIds.length === 0) {
         setSuccess('Извлекаем кадры из видео...');
@@ -299,6 +300,7 @@ export function VideosPage() {
           }
         } catch (frameErr) {
           console.error('Ошибка извлечения кадров:', frameErr);
+          throw new Error(`Не удалось извлечь кадры: ${frameErr instanceof Error ? frameErr.message : 'Неизвестная ошибка'}`);
         }
       }
 
@@ -328,7 +330,7 @@ export function VideosPage() {
       const video = videos?.find((v: any) => v._id === id);
 
       // Extract frames from video for Vision analysis
-      let frameStorageIds: Id<"_storage">[] = [];
+      const frameStorageIds: Id<"_storage">[] = [];
 
       const storageUrl = video?.storageId
         ? await convex.query(api.videos.getStorageUrl, { videoId: id as Id<"videos"> })

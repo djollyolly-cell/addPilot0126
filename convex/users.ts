@@ -1,5 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
+import type { Id } from "./_generated/dataModel";
 
 // Subscription tier limits
 export const TIER_LIMITS = {
@@ -144,8 +146,8 @@ export const updateTier = mutation({
 
 // Helper function to handle downgrade
 async function handleDowngrade(
-  ctx: any,
-  userId: any,
+  ctx: MutationCtx,
+  userId: Id<"users">,
   newTier: "freemium" | "start" | "pro"
 ) {
   const limits = TIER_LIMITS[newTier];
@@ -153,10 +155,10 @@ async function handleDowngrade(
   // Get user's rules and deactivate excess ones
   const rules = await ctx.db
     .query("rules")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .withIndex("by_userId", (q) => q.eq("userId", userId))
     .collect();
 
-  const activeRules = rules.filter((r: any) => r.isActive);
+  const activeRules = rules.filter((r) => r.isActive);
   if (activeRules.length > limits.rules) {
     const rulesToDeactivate = activeRules.slice(limits.rules);
     for (const rule of rulesToDeactivate) {
@@ -190,7 +192,7 @@ export const updateProfile = mutation({
       throw new Error("User not found");
     }
 
-    const updates: any = { updatedAt: Date.now() };
+    const updates: { updatedAt: number; name?: string; email?: string } = { updatedAt: Date.now() };
     if (args.name !== undefined) updates.name = args.name;
     if (args.email !== undefined) updates.email = args.email;
 
@@ -240,7 +242,8 @@ export const disconnectTelegram = mutation({
     }
 
     // Create new object without telegramChatId
-    const { telegramChatId: _, _id, _creationTime, ...rest } = user;
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { telegramChatId: _removed, _id: _docId, _creationTime: _docTime, ...rest } = user;
     await ctx.db.replace(args.userId, {
       ...rest,
       updatedAt: Date.now(),

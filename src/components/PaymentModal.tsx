@@ -153,7 +153,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
       } else {
         setError(result.error || 'Ошибка создания платежа');
       }
-    } catch (err) {
+    } catch {
       setError('Произошла ошибка при создании платежа');
     } finally {
       setBepaidLoading(false);
@@ -185,7 +185,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
       } else {
         setError(result.error || 'Ошибка оплаты');
       }
-    } catch (err) {
+    } catch {
       setError('Произошла ошибка при обработке платежа');
     } finally {
       setIsProcessing(false);

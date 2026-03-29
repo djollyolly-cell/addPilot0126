@@ -277,6 +277,12 @@ export const getMtAgencyClients = action({
 // myTarget statistics types
 // API v2 nests metrics under row.base: { date, base: { shows, clicks, spent, goals, ... } }
 // When events metrics requested: row.events: { event_name: { count, ... }, ... }
+export interface MtStatVk {
+  result?: number;
+  goals?: number;
+  [key: string]: unknown;
+}
+
 export interface MtStatBase {
   shows: number;
   clicks: number;
@@ -288,12 +294,14 @@ export interface MtStatBase {
   cpm?: string;
   cr?: number;
   ctr?: number;
+  vk?: MtStatVk;
 }
 
 export interface MtStatRow {
   date: string;
   base: MtStatBase;
   events?: Record<string, { count: number; [key: string]: unknown }>;
+  video?: MtVideoStats;
 }
 
 export interface MtStatItem {
@@ -354,7 +362,7 @@ export const getMtStatistics = action({
       ids = allBanners.map((b: MtBanner) => String(b.id)).join(",");
     }
 
-    const data = await callMtApi<{ items: MtStatItem[]; total: any }>(
+    const data = await callMtApi<{ items: MtStatItem[]; total: MtStatRow | null }>(
       "statistics/banners/day.json",
       args.accessToken,
       {
@@ -379,7 +387,7 @@ export const getMtVideoStatistics = action({
     bannerIds: v.string(), // comma-separated banner IDs (required)
   },
   handler: async (_, args): Promise<MtStatItem[]> => {
-    const data = await callMtApi<{ items: MtStatItem[]; total: any }>(
+    const data = await callMtApi<{ items: MtStatItem[]; total: MtStatRow | null }>(
       "statistics/banners/day.json",
       args.accessToken,
       {
@@ -593,11 +601,11 @@ export const diagnosLeads = action({
     dateTo: v.string(),
   },
   handler: async (_, args) => {
-    const result: Record<string, any> = {};
+    const result: Record<string, unknown> = {};
 
     // 1. Raw statistics with ALL available metrics
     try {
-      const statsRaw = await callMtApi<any>(
+      const statsRaw = await callMtApi<unknown>(
         "statistics/banners/day.json",
         args.accessToken,
         {
@@ -614,7 +622,7 @@ export const diagnosLeads = action({
 
     // 2. Campaign info with objective
     try {
-      const campaigns = await callMtApi<any>(
+      const campaigns = await callMtApi<unknown>(
         "campaigns.json",
         args.accessToken,
         {
@@ -628,7 +636,7 @@ export const diagnosLeads = action({
 
     // 3. Lead Ads subscriptions
     try {
-      const subs = await callMtApi<any>(
+      const subs = await callMtApi<unknown>(
         "lead_ads/vkontakte/subscriptions.json",
         args.accessToken,
         {}
@@ -640,7 +648,7 @@ export const diagnosLeads = action({
 
     // 4. Lead Ads leads (no form_id filter — get all)
     try {
-      const leads = await callMtApi<any>(
+      const leads = await callMtApi<unknown>(
         "lead_ads/vkontakte/leads.json",
         args.accessToken,
         {
@@ -664,7 +672,7 @@ export const probeVkCampaignEndpoints = action({
     accessToken: v.string(),
   },
   handler: async (_, args) => {
-    const results: Record<string, any> = {};
+    const results: Record<string, unknown> = {};
 
     const endpoints = [
       { name: "packages", url: "packages.json", params: { fields: "id,name,status,price_list_id,created,updated" } },
@@ -688,7 +696,7 @@ export const probeVkCampaignEndpoints = action({
         });
 
         const status = response.status;
-        let body: any;
+        let body: unknown;
         try {
           body = await response.json();
         } catch {

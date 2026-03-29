@@ -251,7 +251,6 @@ export const generateImage = action({
     if (!bflApiKey) throw new Error("BFL_API_KEY не настроен");
 
     try {
-      const bizCtx = args.businessContext ? `\nBrand context: ${args.businessContext}` : "";
       // Use Claude to translate Russian ad text into English visual keywords
       const anthropicKey = process.env.ANTHROPIC_API_KEY;
       const anthropicBase = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";

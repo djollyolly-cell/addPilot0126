@@ -352,6 +352,9 @@ export const transcribeVideo = action({
   },
   handler: async (ctx, args) => {
     const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
+    if (!video) {
+      throw new Error("Видео не найдено");
+    }
 
     const openaiKey = process.env.OPENAI_API_KEY;
     const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com";
@@ -361,15 +364,15 @@ export const transcribeVideo = action({
     try {
       // Step 1: Audio transcription via Whisper
       let audioText = "";
-      const audioStorageId = args.audioStorageId || video?.storageId;
-      if (audioStorageId && openaiKey) {
-        const fileUrl = await ctx.storage.getUrl(audioStorageId);
+      const effectiveAudioId = args.audioStorageId || video.storageId;
+      if (effectiveAudioId && openaiKey) {
+        const fileUrl = await ctx.storage.getUrl(effectiveAudioId);
         if (fileUrl) {
           const fileResponse = await fetch(fileUrl);
           if (fileResponse.ok) {
             const fileBlob = await fileResponse.blob();
             const formData = new FormData();
-            formData.append("file", fileBlob, args.audioStorageId ? "audio.wav" : (video?.filename || "video.mp4"));
+            formData.append("file", fileBlob, args.audioStorageId ? "audio.wav" : (video.filename || "video.mp4"));
             formData.append("model", "whisper-1");
             formData.append("language", "ru");
 
@@ -387,6 +390,9 @@ export const transcribeVideo = action({
             if (whisperResponse.ok) {
               const data = await whisperResponse.json();
               audioText = data.text || "";
+            } else {
+              const errText = await whisperResponse.text().catch(() => "");
+              console.error(`[transcribeVideo] Whisper API error ${whisperResponse.status}: ${errText}`);
             }
           }
         }
@@ -397,23 +403,28 @@ export const transcribeVideo = action({
       if (args.frameStorageIds && args.frameStorageIds.length > 0 && anthropicKey) {
         const frameImages: Array<{ type: "image"; source: { type: "base64"; media_type: "image/jpeg"; data: string } }> = [];
         for (const storageId of args.frameStorageIds) {
-          const url = await ctx.storage.getUrl(storageId);
-          if (!url) continue;
-          const resp = await fetch(url);
-          if (!resp.ok) continue;
-          const buffer = await resp.arrayBuffer();
-          const base64 = btoa(
-            new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
-          );
-          frameImages.push({
-            type: "image",
-            source: { type: "base64", media_type: "image/jpeg", data: base64 },
-          });
+          try {
+            const url = await ctx.storage.getUrl(storageId);
+            if (!url) continue;
+            const resp = await fetch(url);
+            if (!resp.ok) continue;
+            const buffer = await resp.arrayBuffer();
+            const base64 = btoa(
+              new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+            );
+            frameImages.push({
+              type: "image",
+              source: { type: "base64", media_type: "image/jpeg", data: base64 },
+            });
+          } catch (frameErr) {
+            console.error(`[transcribeVideo] Failed to load frame ${storageId}:`, frameErr);
+          }
         }
 
         if (frameImages.length > 0) {
-          const userContent: Array<any> = [
-            { type: "text", text: `Это ключевые кадры рекламного видео "${video?.filename || "video"}" (${frameImages.length} кадров по порядку). Опиши подробно что происходит в каждом кадре.` },
+          type ContentBlock = { type: "text"; text: string } | { type: "image"; source: { type: "base64"; media_type: "image/jpeg"; data: string } };
+          const userContent: ContentBlock[] = [
+            { type: "text", text: `Это ключевые кадры рекламного видео "${video.filename || "video"}" (${frameImages.length} кадров по порядку). Опиши подробно что происходит в каждом кадре.` },
             ...frameImages,
           ];
 
@@ -459,6 +470,9 @@ export const transcribeVideo = action({
           if (visionResponse.ok) {
             const visionData = await visionResponse.json();
             videoDescription = (visionData.content?.[0]?.text || "").trim();
+          } else {
+            const errText = await visionResponse.text().catch(() => "");
+            console.error(`[transcribeVideo] Claude Vision API error ${visionResponse.status}: ${errText}`);
           }
         }
       }
@@ -481,14 +495,18 @@ export const transcribeVideo = action({
 
       // Clean up temporary audio file (frames are kept on the video record for re-use)
       if (args.audioStorageId) {
-        try { await ctx.storage.delete(args.audioStorageId); } catch { /* ignore */ }
+        try { await ctx.storage.delete(args.audioStorageId); } catch (err) {
+          console.warn(`[transcribeVideo] Failed to delete temp audio ${args.audioStorageId}:`, err);
+        }
       }
 
       return transcription;
     } catch (error) {
       // Clean up temporary audio on error (frames belong to video record)
       if (args.audioStorageId) {
-        try { await ctx.storage.delete(args.audioStorageId); } catch { /* ignore */ }
+        try { await ctx.storage.delete(args.audioStorageId); } catch (err) {
+          console.warn(`[transcribeVideo] Failed to delete temp audio on error:`, err);
+        }
       }
       throw new Error(
         `Ошибка транскрибации: ${error instanceof Error ? error.message : "Неизвестная ошибка"}`

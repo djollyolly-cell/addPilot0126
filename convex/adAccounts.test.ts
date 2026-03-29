@@ -474,7 +474,7 @@ describe("adAccounts", () => {
       // Upgrade to start to allow multiple accounts
       await t.mutation(api.users.updateTier, { userId, tier: "start" });
 
-      const acc1 = await t.mutation(api.adAccounts.connect, {
+      await t.mutation(api.adAccounts.connect, {
         userId,
         vkAccountId: "S21_001",
         name: "Кабинет OK",
