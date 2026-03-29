@@ -218,8 +218,6 @@ export const uploadToVk = action({
       }
     }
 
-    if (!mtAdvertiserId) throw new Error("Не указан ID рекламного кабинета (mtAdvertiserId). Укажите его в настройках аккаунта.");
-
     // Mark as uploading and save storageId for transcription
     await ctx.runMutation(internal.videos.updateUploadStatus, {
       id: args.videoId,
@@ -237,8 +235,11 @@ export const uploadToVk = action({
       const filename = video?.filename || "video.mp4";
       const fileSize = video?.fileSize || 0;
 
-      const endpoint = `${MT_API_BASE}/api/v3/content/video.json?account=${mtAdvertiserId}`;
-      console.log(`[video upload] Uploading ${filename} (${(fileSize / (1024*1024)).toFixed(1)} MB) to ${endpoint}`);
+      // Build endpoint: use ?account= only if mtAdvertiserId is known
+      const endpoint = mtAdvertiserId
+        ? `${MT_API_BASE}/api/v3/content/video.json?account=${mtAdvertiserId}`
+        : `${MT_API_BASE}/api/v3/content/video.json`;
+      console.log(`[video upload] Uploading ${filename} (${(fileSize / (1024*1024)).toFixed(1)} MB) to ${endpoint} (mtAdvertiserId=${mtAdvertiserId || "none"})`);
 
       // Step 1: Download file from Convex storage
       console.log(`[video upload] Step 1: downloading from storage...`);
@@ -255,14 +256,53 @@ export const uploadToVk = action({
       formData.append("file", fileBlob, filename);
       formData.append("data", JSON.stringify({ width: 0, height: 0 }));
 
-      const resp = await fetch(endpoint, {
+      let resp = await fetch(endpoint, {
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}` },
         body: formData,
       });
 
-      const respText = await resp.text();
+      let respText = await resp.text();
       console.log(`[video upload] Step 2 done in ${Date.now() - ulStart}ms: status=${resp.status} body=${respText.substring(0, 500)}`);
+
+      // If upload without ?account= failed (500), retry with myTarget user ID as account
+      if (!resp.ok && !mtAdvertiserId) {
+        console.log(`[video upload] Upload without ?account= failed, trying with myTarget user ID...`);
+        try {
+          const userResp = await fetch(`${MT_API_BASE}/api/v2/user.json`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (userResp.ok) {
+            const userData = await userResp.json();
+            if (userData.id) {
+              const mtUserId = String(userData.id);
+              console.log(`[video upload] Retrying with ?account=${mtUserId} (myTarget user ID)`);
+              const retryFormData = new FormData();
+              retryFormData.append("file", fileBlob, filename);
+              retryFormData.append("data", JSON.stringify({ width: 0, height: 0 }));
+              const retryEndpoint = `${MT_API_BASE}/api/v3/content/video.json?account=${mtUserId}`;
+              const retryResp = await fetch(retryEndpoint, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${accessToken}` },
+                body: retryFormData,
+              });
+              const retryText = await retryResp.text();
+              console.log(`[video upload] Retry result: status=${retryResp.status} body=${retryText.substring(0, 500)}`);
+              if (retryResp.ok) {
+                // Save this user ID as mtAdvertiserId for future uploads
+                await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+                  accountId: args.accountId,
+                  mtAdvertiserId: mtUserId,
+                });
+                resp = retryResp;
+                respText = retryText;
+              }
+            }
+          }
+        } catch (retryErr) {
+          console.log(`[video upload] Retry with user ID failed: ${retryErr}`);
+        }
+      }
 
       if (!resp.ok) {
         throw new Error(`VK Ads API: ${resp.status} ${respText}`);
