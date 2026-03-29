@@ -336,6 +336,7 @@ export default defineSchema({
     filename: v.string(),
     fileSize: v.optional(v.number()),
     duration: v.optional(v.number()),
+    storageId: v.optional(v.id("_storage")),  // Convex file storage
     vkMediaId: v.optional(v.string()),
     vkMediaUrl: v.optional(v.string()),
     vkAdId: v.optional(v.string()),         // Links video to VK ad (banner) for stats

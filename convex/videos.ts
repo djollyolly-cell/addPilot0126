@@ -126,6 +126,7 @@ export const updateUploadStatus = internalMutation({
       v.literal("failed")
     ),
     uploadProgress: v.optional(v.number()),
+    storageId: v.optional(v.id("_storage")),
     vkMediaId: v.optional(v.string()),
     vkMediaUrl: v.optional(v.string()),
     errorMessage: v.optional(v.string()),
@@ -159,11 +160,12 @@ export const uploadToVk = action({
     });
     if (!accessToken) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
 
-    // Mark as uploading
+    // Mark as uploading and save storageId for transcription
     await ctx.runMutation(internal.videos.updateUploadStatus, {
       id: args.videoId,
       uploadStatus: "uploading",
       uploadProgress: 0,
+      storageId: args.storageId,
     });
 
     try {
@@ -208,8 +210,7 @@ export const uploadToVk = action({
         vkMediaUrl: data.url || data.preview_url || "",
       });
 
-      // Clean up temp storage
-      await ctx.storage.delete(args.storageId);
+      // Keep file in storage for transcription — will be deleted when video is deleted
 
       // Mark as ready
       await ctx.runMutation(internal.videos.updateUploadStatus, {
@@ -223,8 +224,6 @@ export const uploadToVk = action({
         uploadStatus: "failed",
         errorMessage: error instanceof Error ? error.message : "Ошибка загрузки",
       });
-      // Clean up temp storage on error
-      try { await ctx.storage.delete(args.storageId); } catch { /* ignore cleanup errors */ }
       throw error;
     }
   },
@@ -327,15 +326,17 @@ export const transcribeVideo = action({
   },
   handler: async (ctx, args) => {
     const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
-    if (!video?.vkMediaUrl) throw new Error("Видео ещё не загружено в VK");
+    if (!video?.storageId) throw new Error("Файл видео не найден в хранилище");
 
     const apiKey = process.env.OPENAI_API_KEY;
     const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com";
     if (!apiKey) throw new Error("OPENAI_API_KEY не настроен");
 
     try {
-      // Download video from VK
-      const videoResponse = await fetch(video.vkMediaUrl);
+      // Download video from Convex storage
+      const fileUrl = await ctx.storage.getUrl(video.storageId);
+      if (!fileUrl) throw new Error("Файл не найден в хранилище");
+      const videoResponse = await fetch(fileUrl);
       if (!videoResponse.ok) throw new Error("Не удалось скачать видео для транскрибации");
 
       const videoBlob = await videoResponse.blob();
@@ -380,17 +381,23 @@ export const transcribeVideo = action({
   },
 });
 
-// Save transcription
+// Save transcription and clean up storage file
 export const saveTranscription = internalMutation({
   args: {
     id: v.id("videos"),
     transcription: v.string(),
   },
   handler: async (ctx, args) => {
+    const video = await ctx.db.get(args.id);
     await ctx.db.patch(args.id, {
       transcription: args.transcription,
       updatedAt: Date.now(),
     });
+    // Delete storage file after transcription is saved — text is enough
+    if (video?.storageId) {
+      await ctx.storage.delete(video.storageId);
+      await ctx.db.patch(args.id, { storageId: undefined });
+    }
   },
 });
 

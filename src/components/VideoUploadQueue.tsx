@@ -116,17 +116,24 @@ export function VideoUploadQueue({
       </div>
 
       {/* Progress */}
-      <div className="space-y-1">
-        <div className="text-xs text-muted-foreground">
-          Общий прогресс: {totalProgress}%
+      {queue.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-xs text-muted-foreground">
+            Загружено: {queue.filter(q => q.status === 'done').length} из {queue.length}
+            {queue.some(q => q.status === 'error') && (
+              <span className="text-destructive ml-1">
+                ({queue.filter(q => q.status === 'error').length} с ошибкой)
+              </span>
+            )}
+          </div>
+          <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${queue.length > 0 ? Math.round(queue.filter(q => q.status === 'done').length / queue.length * 100) : 0}%` }}
+            />
+          </div>
         </div>
-        <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
-          <div
-            className="h-full bg-primary transition-all duration-300"
-            style={{ width: `${totalProgress}%` }}
-          />
-        </div>
-      </div>
+      )}
 
       {/* Queue list */}
       {queue.length > 0 && (
