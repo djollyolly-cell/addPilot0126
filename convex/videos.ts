@@ -182,7 +182,42 @@ export const uploadToVk = action({
     });
     if (!accountInfo?.accessToken) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
 
-    const { accessToken, mtAdvertiserId } = accountInfo;
+    const { accessToken } = accountInfo;
+    let mtAdvertiserId = accountInfo.mtAdvertiserId;
+
+    // Auto-discover mtAdvertiserId if missing
+    if (!mtAdvertiserId) {
+      console.log(`[video upload] mtAdvertiserId missing, trying auto-discovery...`);
+      // Get video record to find userId
+      const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
+      if (video?.userId) {
+        try {
+          const vkTokens = await ctx.runQuery(internal.users.getVkTokens, {
+            userId: video.userId,
+          });
+          if (vkTokens?.accessToken) {
+            const adsResp = await fetch("https://api.vk.com/method/ads.getAccounts?v=5.131", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: `access_token=${vkTokens.accessToken}`,
+            });
+            const adsData = await adsResp.json();
+            if (adsData.response && Array.isArray(adsData.response) && adsData.response.length > 0) {
+              mtAdvertiserId = String(adsData.response[0].account_id);
+              // Save for future use
+              await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+                accountId: args.accountId,
+                mtAdvertiserId,
+              });
+              console.log(`[video upload] Auto-discovered mtAdvertiserId=${mtAdvertiserId}`);
+            }
+          }
+        } catch (e) {
+          console.log(`[video upload] Auto-discovery failed: ${e}`);
+        }
+      }
+    }
+
     if (!mtAdvertiserId) throw new Error("Не указан ID рекламного кабинета (mtAdvertiserId). Укажите его в настройках аккаунта.");
 
     // Mark as uploading and save storageId for transcription

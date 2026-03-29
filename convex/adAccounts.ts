@@ -221,6 +221,22 @@ export const connect = mutation({
   },
 });
 
+// Set mtAdvertiserId on an account (internal, used by fetchAndConnect auto-discovery)
+export const setMtAdvertiserId = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    mtAdvertiserId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (account && !account.mtAdvertiserId) {
+      await ctx.db.patch(args.accountId, {
+        mtAdvertiserId: args.mtAdvertiserId,
+      });
+    }
+  },
+});
+
 // Disconnect (delete) an ad account and its related data
 export const disconnect = mutation({
   args: {
@@ -519,8 +535,9 @@ export const fetchAndConnect = action({
 
     const displayName = `${accountName} (${campaigns.length} кампаний)`;
 
+    let accountId;
     try {
-      await ctx.runMutation(api.adAccounts.connect, {
+      accountId = await ctx.runMutation(api.adAccounts.connect, {
         userId: args.userId,
         vkAccountId,
         name: displayName,
@@ -531,6 +548,33 @@ export const fetchAndConnect = action({
     } catch (err) {
       if (err instanceof Error && err.message.includes("уже подключён")) {
         throw err;
+      }
+    }
+
+    // Auto-discover mtAdvertiserId via VK API ads.getAccounts
+    if (accountId) {
+      try {
+        const vkTokens = await ctx.runQuery(internal.users.getVkTokens, {
+          userId: args.userId,
+        });
+        if (vkTokens?.accessToken) {
+          const adsResp = await fetch("https://api.vk.com/method/ads.getAccounts?v=5.131", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: `access_token=${vkTokens.accessToken}`,
+          });
+          const adsData = await adsResp.json();
+          if (adsData.response && Array.isArray(adsData.response) && adsData.response.length > 0) {
+            const cabinetId = String(adsData.response[0].account_id);
+            await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+              accountId,
+              mtAdvertiserId: cabinetId,
+            });
+            console.log(`[fetchAndConnect] Auto-set mtAdvertiserId=${cabinetId} on account ${accountId}`);
+          }
+        }
+      } catch (e) {
+        console.log(`[fetchAndConnect] ads.getAccounts failed (non-critical): ${e}`);
       }
     }
 
