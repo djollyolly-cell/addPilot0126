@@ -27,6 +27,7 @@ export default defineConfig({
           'vendor-charts': ['recharts'],
           'vendor-convex': ['convex'],
           'vendor-utils': ['date-fns', 'zod', 'clsx', 'tailwind-merge'],
+          'vendor-ffmpeg': ['@ffmpeg/ffmpeg', '@ffmpeg/util'],
         },
         chunkFileNames: 'assets/[name]-[hash].js',
         entryFileNames: 'assets/[name]-[hash].js',
