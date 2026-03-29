@@ -484,6 +484,44 @@ export const connectAgencyAccount = action({
       accessToken: token,
     });
 
+    // Auto-discover advertiser ID for agency token
+    if (accountId) {
+      try {
+        // For agency tokens, agency/clients.json returns client accounts
+        const clientsResp = await fetch("https://target.my.com/api/v2/agency/clients.json", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (clientsResp.ok) {
+          const clients = await clientsResp.json();
+          if (Array.isArray(clients) && clients.length > 0) {
+            const clientId = String(clients[0].id);
+            await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+              accountId,
+              mtAdvertiserId: clientId,
+            });
+            console.log(`[connectAgency] Set mtAdvertiserId=${clientId} from agency/clients`);
+          }
+        } else {
+          // Not an agency token — try manager/clients
+          const mgrResp = await fetch("https://target.my.com/api/v2/manager/clients.json", {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (mgrResp.ok) {
+            const mgrClients = await mgrResp.json();
+            if (Array.isArray(mgrClients) && mgrClients.length > 0) {
+              await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+                accountId,
+                mtAdvertiserId: String(mgrClients[0].id),
+              });
+              console.log(`[connectAgency] Set mtAdvertiserId from manager/clients`);
+            }
+          }
+        }
+      } catch (e) {
+        console.log(`[connectAgency] Advertiser ID discovery failed (non-critical): ${e}`);
+      }
+    }
+
     return { accountId: accountId as string };
   },
 });

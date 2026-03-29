@@ -185,25 +185,66 @@ export const uploadToVk = action({
     const { accessToken } = accountInfo;
     let mtAdvertiserId = accountInfo.mtAdvertiserId;
 
-    // Auto-discover mtAdvertiserId if missing — check user's saved vkAdsCabinetId
+    // Auto-discover mtAdvertiserId if missing — try multiple sources
     if (!mtAdvertiserId) {
-      console.log(`[video upload] mtAdvertiserId missing, checking user record...`);
+      console.log(`[video upload] mtAdvertiserId missing, trying auto-discovery...`);
       const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
-      if (video?.userId) {
+
+      // Source 1: user's vkAdsCabinetId (discovered at VK ID login via ads.getAccounts)
+      if (!mtAdvertiserId && video?.userId) {
         try {
           const userRecord = await ctx.runQuery(internal.users.getById, { userId: video.userId });
           if (userRecord?.vkAdsCabinetId) {
             mtAdvertiserId = userRecord.vkAdsCabinetId;
-            // Save on account for future uploads
-            await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
-              accountId: args.accountId,
-              mtAdvertiserId,
-            });
-            console.log(`[video upload] Got mtAdvertiserId=${mtAdvertiserId} from user record`);
+            console.log(`[video upload] Source 1 (user record): ${mtAdvertiserId}`);
           }
         } catch (e) {
-          console.log(`[video upload] User record check failed: ${e}`);
+          console.log(`[video upload] Source 1 failed: ${e}`);
         }
+      }
+
+      // Source 2: agency/clients.json — for agency tokens (Vitamin.tools, eLama etc.)
+      if (!mtAdvertiserId) {
+        try {
+          const clientsResp = await fetch(`${MT_API_BASE}/api/v2/agency/clients.json`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (clientsResp.ok) {
+            const clients = await clientsResp.json();
+            if (Array.isArray(clients) && clients.length > 0) {
+              mtAdvertiserId = String(clients[0].id);
+              console.log(`[video upload] Source 2 (agency/clients): ${mtAdvertiserId}`);
+            }
+          }
+        } catch (e) {
+          console.log(`[video upload] Source 2 failed: ${e}`);
+        }
+      }
+
+      // Source 3: manager/clients.json — for manager-access accounts
+      if (!mtAdvertiserId) {
+        try {
+          const mgrResp = await fetch(`${MT_API_BASE}/api/v2/manager/clients.json`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (mgrResp.ok) {
+            const mgrClients = await mgrResp.json();
+            if (Array.isArray(mgrClients) && mgrClients.length > 0) {
+              mtAdvertiserId = String(mgrClients[0].id);
+              console.log(`[video upload] Source 3 (manager/clients): ${mtAdvertiserId}`);
+            }
+          }
+        } catch (e) {
+          console.log(`[video upload] Source 3 failed: ${e}`);
+        }
+      }
+
+      // Save discovered ID for future uploads
+      if (mtAdvertiserId) {
+        await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+          accountId: args.accountId,
+          mtAdvertiserId,
+        });
       }
     }
 
