@@ -165,43 +165,38 @@ const VK_ADS_API_BASE = "https://ads.vk.com";
 
 /**
  * Get a fresh access token from VK Ads API (ads.vk.com).
- * Falls back to the stored token if credentials are unavailable.
  */
 async function getVkAdsToken(
-  credentials: { clientId: string | null; clientSecret: string | null; accessToken: string }
-): Promise<{ token: string; source: "vk_ads" | "stored" }> {
-  const { clientId, clientSecret, accessToken } = credentials;
+  credentials: { clientId: string | null; clientSecret: string | null }
+): Promise<string> {
+  const { clientId, clientSecret } = credentials;
 
-  if (clientId && clientSecret) {
-    try {
-      const resp = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          grant_type: "client_credentials",
-          client_id: clientId,
-          client_secret: clientSecret,
-        }).toString(),
-      });
-
-      if (resp.ok) {
-        const data = await resp.json();
-        if (data.access_token) {
-          console.log("[video upload] Got fresh token from ads.vk.com");
-          return { token: data.access_token, source: "vk_ads" };
-        }
-      } else {
-        const errText = await resp.text();
-        console.warn(`[video upload] ads.vk.com token failed (${resp.status}): ${errText}`);
-      }
-    } catch (err) {
-      console.warn("[video upload] ads.vk.com token error:", err);
-    }
+  if (!clientId || !clientSecret) {
+    throw new Error("Нет Client ID / Client Secret для аккаунта. Переподключите аккаунт.");
   }
 
-  // Fallback: use stored token (from target.my.com)
-  console.log("[video upload] Using stored token (fallback)");
-  return { token: accessToken, source: "stored" };
+  const resp = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      client_id: clientId,
+      client_secret: clientSecret,
+    }).toString(),
+  });
+
+  if (!resp.ok) {
+    const errText = await resp.text();
+    throw new Error(`Ошибка авторизации VK Ads: ${resp.status} ${errText}`);
+  }
+
+  const data = await resp.json();
+  if (!data.access_token) {
+    throw new Error(`VK Ads не вернул токен: ${JSON.stringify(data)}`);
+  }
+
+  console.log("[video upload] Got fresh token from ads.vk.com");
+  return data.access_token;
 }
 
 // Upload video to VK Ads media library
@@ -237,43 +232,30 @@ export const uploadToVk = action({
       const fileBlob = await fileResponse.blob();
       const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
 
-      // Get token — prefer ads.vk.com, fallback to stored (target.my.com) token
-      const { token, source } = await getVkAdsToken(creds);
+      // Get fresh token from VK Ads API (ads.vk.com)
+      const token = await getVkAdsToken(creds);
 
-      // Try VK Ads API (ads.vk.com) first, then myTarget (target.my.com) as fallback
-      const endpoints = source === "vk_ads"
-        ? [`${VK_ADS_API_BASE}/api/v2/content/video.json`, "https://target.my.com/api/v2/content/video.json"]
-        : ["https://target.my.com/api/v2/content/video.json"];
+      // Upload to VK Ads media library
+      const formData = new FormData();
+      formData.append("file", fileBlob, video?.filename || "video.mp4");
+      formData.append("data", JSON.stringify({ width: 1280, height: 720 }));
 
-      let lastError = "";
-      let uploadData: { id?: string; url?: string; preview_url?: string } | null = null;
+      const endpoint = `${VK_ADS_API_BASE}/api/v2/content/video.json`;
+      console.log(`[video upload] Uploading to ${endpoint}...`);
 
-      for (const endpoint of endpoints) {
-        const formData = new FormData();
-        formData.append("file", fileBlob, video?.filename || "video.mp4");
-        formData.append("data", JSON.stringify({ width: 1280, height: 720 }));
+      const resp = await fetch(endpoint, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+        body: formData,
+      });
 
-        console.log(`[video upload] Uploading to ${endpoint}...`);
-
-        const resp = await fetch(endpoint, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-          body: formData,
-        });
-
-        if (resp.ok) {
-          uploadData = await resp.json();
-          console.log(`[video upload] Success at ${endpoint}, id=${uploadData?.id}`);
-          break;
-        }
-
-        lastError = await resp.text();
-        console.warn(`[video upload] Failed at ${endpoint}: ${resp.status} ${lastError}`);
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        throw new Error(`VK Ads API error: ${resp.status} ${errorText}`);
       }
 
-      if (!uploadData) {
-        throw new Error(`VK API error: ${lastError}`);
-      }
+      const uploadData = await resp.json();
+      console.log(`[video upload] Success, id=${uploadData?.id}`);
 
       // Update video record with VK media ID
       await ctx.runMutation(internal.videos.updateUploadStatus, {
