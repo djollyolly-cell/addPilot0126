@@ -103,9 +103,23 @@ export function VideosPage() {
     setUploading(true);
     setError(null);
 
+    const MAX_VK_SIZE = 90 * 1024 * 1024; // 90 MB — лимит VK Ads
+
     for (let i = 0; i < queue.length; i++) {
       const item = queue[i];
       if (item.status !== 'queued') continue;
+
+      // Skip files exceeding VK Ads limit
+      if (item.file.size > MAX_VK_SIZE) {
+        setQueue((prev) =>
+          prev.map((q, idx) =>
+            idx === i
+              ? { ...q, status: 'error' as const, error: `Файл ${(item.file.size / (1024 * 1024)).toFixed(1)} МБ — превышен лимит VK Ads (90 МБ)` }
+              : q
+          )
+        );
+        continue;
+      }
 
       // Update queue status
       setQueue((prev) =>
@@ -315,9 +329,6 @@ export function VideosPage() {
     }
   };
 
-  const totalProgress = queue.length === 0
-    ? 0
-    : Math.round(queue.reduce((sum, q) => sum + q.progress, 0) / queue.length);
 
   if (!accountId) {
     return (
@@ -427,7 +438,6 @@ export function VideosPage() {
               onStartUpload={handleStartUpload}
               onClearQueue={handleClearQueue}
               uploading={uploading}
-              totalProgress={totalProgress}
               directions={directions as any}
             />
           </CardContent>

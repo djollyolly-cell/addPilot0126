@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { Upload, Play, Trash2, Loader2 } from 'lucide-react';
+import { Upload, Play, Trash2, Loader2, AlertCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
@@ -26,7 +26,6 @@ interface VideoUploadQueueProps {
   onStartUpload: () => void;
   onClearQueue: () => void;
   uploading: boolean;
-  totalProgress: number;
   directions?: BusinessDirection[];
 }
 
@@ -38,7 +37,6 @@ export function VideoUploadQueue({
   onStartUpload,
   onClearQueue,
   uploading,
-  totalProgress,
   directions,
 }: VideoUploadQueueProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -138,20 +136,36 @@ export function VideoUploadQueue({
       {/* Queue list */}
       {queue.length > 0 && (
         <div className="space-y-2">
-          {queue.map((item, idx) => (
-            <div
-              key={idx}
-              className="space-y-1 p-2 rounded-md bg-muted/50"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-sm truncate flex-1">{item.file.name}</span>
-                <QueueStatusBadge status={item.status} />
+          {queue.map((item, idx) => {
+            const sizeMb = item.file.size / (1024 * 1024);
+            const tooLarge = sizeMb > 90;
+            return (
+              <div
+                key={idx}
+                className={cn(
+                  "space-y-1 p-2 rounded-md",
+                  tooLarge ? "bg-destructive/10 border border-destructive/20" : "bg-muted/50"
+                )}
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-sm truncate flex-1">{item.file.name}</span>
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    {sizeMb < 1 ? `${(sizeMb * 1024).toFixed(0)} KB` : `${sizeMb.toFixed(1)} MB`}
+                  </span>
+                  <QueueStatusBadge status={tooLarge ? 'oversize' : item.status} />
+                </div>
+                {tooLarge && (
+                  <div className="flex items-center gap-1.5 text-xs text-destructive">
+                    <AlertCircle className="h-3 w-3 shrink-0" />
+                    <span>Превышен лимит VK Ads — максимум 90 МБ</span>
+                  </div>
+                )}
+                {item.error && (
+                  <p className="text-xs text-destructive">{item.error}</p>
+                )}
               </div>
-              {item.error && (
-                <p className="text-xs text-destructive">{item.error}</p>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -171,6 +185,8 @@ function QueueStatusBadge({ status }: { status: string }) {
       return <Badge variant="success">Готово</Badge>;
     case 'error':
       return <Badge variant="destructive">Ошибка</Badge>;
+    case 'oversize':
+      return <Badge variant="destructive">Слишком большой</Badge>;
     default:
       return <Badge variant="outline">В очереди</Badge>;
   }
