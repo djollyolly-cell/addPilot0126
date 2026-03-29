@@ -185,36 +185,50 @@ export const uploadToVk = action({
     const { accessToken } = accountInfo;
     let mtAdvertiserId = accountInfo.mtAdvertiserId;
 
-    // Auto-discover mtAdvertiserId if missing
+    // Auto-discover mtAdvertiserId if missing — try myTarget API endpoints
     if (!mtAdvertiserId) {
-      console.log(`[video upload] mtAdvertiserId missing, trying auto-discovery...`);
-      // Get video record to find userId
-      const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
-      if (video?.userId) {
-        try {
-          const vkTokens = await ctx.runQuery(internal.users.getVkTokens, {
-            userId: video.userId,
+      console.log(`[video upload] mtAdvertiserId missing, trying auto-discovery via myTarget API...`);
+      try {
+        // Method 1: agency/clients.json — returns client accounts for agency tokens
+        const clientsResp = await fetch(`${MT_API_BASE}/api/v2/agency/clients.json`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        const clientsText = await clientsResp.text();
+        console.log(`[video upload] agency/clients.json: status=${clientsResp.status} body=${clientsText.substring(0, 300)}`);
+        if (clientsResp.ok) {
+          const clients = JSON.parse(clientsText);
+          if (Array.isArray(clients) && clients.length > 0) {
+            mtAdvertiserId = String(clients[0].id);
+            console.log(`[video upload] Found client account ID: ${mtAdvertiserId}`);
+          }
+        }
+
+        // Method 2: manager/clients.json — for manager-type accounts
+        if (!mtAdvertiserId) {
+          const mgrResp = await fetch(`${MT_API_BASE}/api/v2/manager/clients.json`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
           });
-          if (vkTokens?.accessToken) {
-            const adsResp = await fetch("https://api.vk.com/method/ads.getAccounts?v=5.131", {
-              method: "POST",
-              headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: `access_token=${vkTokens.accessToken}`,
-            });
-            const adsData = await adsResp.json();
-            if (adsData.response && Array.isArray(adsData.response) && adsData.response.length > 0) {
-              mtAdvertiserId = String(adsData.response[0].account_id);
-              // Save for future use
-              await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
-                accountId: args.accountId,
-                mtAdvertiserId,
-              });
-              console.log(`[video upload] Auto-discovered mtAdvertiserId=${mtAdvertiserId}`);
+          const mgrText = await mgrResp.text();
+          console.log(`[video upload] manager/clients.json: status=${mgrResp.status} body=${mgrText.substring(0, 300)}`);
+          if (mgrResp.ok) {
+            const mgrClients = JSON.parse(mgrText);
+            if (Array.isArray(mgrClients) && mgrClients.length > 0) {
+              mtAdvertiserId = String(mgrClients[0].id);
+              console.log(`[video upload] Found manager client ID: ${mtAdvertiserId}`);
             }
           }
-        } catch (e) {
-          console.log(`[video upload] Auto-discovery failed: ${e}`);
         }
+
+        // Save discovered ID for future uploads
+        if (mtAdvertiserId) {
+          await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+            accountId: args.accountId,
+            mtAdvertiserId,
+          });
+          console.log(`[video upload] Saved mtAdvertiserId=${mtAdvertiserId}`);
+        }
+      } catch (e) {
+        console.log(`[video upload] Auto-discovery failed: ${e}`);
       }
     }
 
@@ -235,7 +249,7 @@ export const uploadToVk = action({
       const filename = video?.filename || "video.mp4";
       const fileSize = video?.fileSize || 0;
 
-      // Build endpoint: use ?account= only if mtAdvertiserId is known
+      // Build endpoint — always use ?account= to ensure video lands in correct cabinet
       const endpoint = mtAdvertiserId
         ? `${MT_API_BASE}/api/v3/content/video.json?account=${mtAdvertiserId}`
         : `${MT_API_BASE}/api/v3/content/video.json`;
@@ -256,53 +270,14 @@ export const uploadToVk = action({
       formData.append("file", fileBlob, filename);
       formData.append("data", JSON.stringify({ width: 0, height: 0 }));
 
-      let resp = await fetch(endpoint, {
+      const resp = await fetch(endpoint, {
         method: "POST",
         headers: { Authorization: `Bearer ${accessToken}` },
         body: formData,
       });
 
-      let respText = await resp.text();
+      const respText = await resp.text();
       console.log(`[video upload] Step 2 done in ${Date.now() - ulStart}ms: status=${resp.status} body=${respText.substring(0, 500)}`);
-
-      // If upload without ?account= failed (500), retry with myTarget user ID as account
-      if (!resp.ok && !mtAdvertiserId) {
-        console.log(`[video upload] Upload without ?account= failed, trying with myTarget user ID...`);
-        try {
-          const userResp = await fetch(`${MT_API_BASE}/api/v2/user.json`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          if (userResp.ok) {
-            const userData = await userResp.json();
-            if (userData.id) {
-              const mtUserId = String(userData.id);
-              console.log(`[video upload] Retrying with ?account=${mtUserId} (myTarget user ID)`);
-              const retryFormData = new FormData();
-              retryFormData.append("file", fileBlob, filename);
-              retryFormData.append("data", JSON.stringify({ width: 0, height: 0 }));
-              const retryEndpoint = `${MT_API_BASE}/api/v3/content/video.json?account=${mtUserId}`;
-              const retryResp = await fetch(retryEndpoint, {
-                method: "POST",
-                headers: { Authorization: `Bearer ${accessToken}` },
-                body: retryFormData,
-              });
-              const retryText = await retryResp.text();
-              console.log(`[video upload] Retry result: status=${retryResp.status} body=${retryText.substring(0, 500)}`);
-              if (retryResp.ok) {
-                // Save this user ID as mtAdvertiserId for future uploads
-                await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
-                  accountId: args.accountId,
-                  mtAdvertiserId: mtUserId,
-                });
-                resp = retryResp;
-                respText = retryText;
-              }
-            }
-          }
-        } catch (retryErr) {
-          console.log(`[video upload] Retry with user ID failed: ${retryErr}`);
-        }
-      }
 
       if (!resp.ok) {
         throw new Error(`VK Ads API: ${resp.status} ${respText}`);
