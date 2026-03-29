@@ -48,7 +48,7 @@ export const getVkAuthUrl = action({
       response_type: "code",
       client_id: clientId,
       redirect_uri: args.redirectUri,
-      scope: "email",
+      scope: "email ads",
       state: args.state,
       code_challenge: args.codeChallenge,
       code_challenge_method: "S256",
@@ -171,6 +171,31 @@ export const exchangeCodeForToken = action({
       refreshToken: data.refresh_token,
       expiresIn: data.expires_in || 0,
     });
+
+    // Auto-discover VK Ads cabinet ID (advertiser ID) via ads.getAccounts
+    try {
+      const adsResp = await fetch(`${VK_API_URL}/ads.getAccounts?v=${VK_API_VERSION}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `access_token=${accessToken}`,
+      });
+      const adsData = await adsResp.json();
+      if (adsData.response && Array.isArray(adsData.response)) {
+        for (const cabinet of adsData.response) {
+          const cabinetId = String(cabinet.account_id);
+          // Save advertiser ID to any connected ad accounts for this user
+          await ctx.runMutation(internal.auth.setAdvertiserIdForUser, {
+            userId: dbUserId,
+            mtAdvertiserId: cabinetId,
+          });
+          console.log(`[auth] Auto-discovered advertiser ID: ${cabinetId}`);
+          break; // Use first cabinet
+        }
+      }
+    } catch (e) {
+      // Non-critical — ads scope may not be granted
+      console.log(`[auth] ads.getAccounts failed (non-critical): ${e}`);
+    }
 
     // Create session
     const sessionToken: string = await ctx.runMutation(internal.authInternal.createSession, {
@@ -779,5 +804,27 @@ export const deleteAllUserSessions = mutation({
     }
 
     return { deleted: sessions.length };
+  },
+});
+
+// Set mtAdvertiserId on all ad accounts for a user (called after VK login)
+export const setAdvertiserIdForUser = internalMutation({
+  args: {
+    userId: v.id("users"),
+    mtAdvertiserId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const accounts = await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    for (const account of accounts) {
+      if (!account.mtAdvertiserId) {
+        await ctx.db.patch(account._id, {
+          mtAdvertiserId: args.mtAdvertiserId,
+        });
+      }
+    }
   },
 });
