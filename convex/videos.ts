@@ -425,11 +425,12 @@ export const saveTranscription = internalMutation({
   },
 });
 
-// AI analyze video using Claude
+// AI analyze video using Claude Vision (frames + transcription)
 export const analyzeVideo = action({
   args: {
     videoId: v.id("videos"),
     userId: v.id("users"),
+    frameStorageIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
     // Check limits
@@ -445,13 +446,51 @@ export const analyzeVideo = action({
     }
 
     const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
-    if (!video?.transcription) throw new Error("Сначала выполните транскрибацию видео");
 
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY не настроен");
 
-    const systemPrompt = `Ты — эксперт по рекламным видео для VK Ads. Проанализируй транскрипцию рекламного видео и выдай JSON с оценкой.
+    // Load frames as base64 for Claude Vision
+    const frameImages: Array<{ type: "image"; source: { type: "base64"; media_type: "image/jpeg"; data: string } }> = [];
+    if (args.frameStorageIds && args.frameStorageIds.length > 0) {
+      for (const storageId of args.frameStorageIds) {
+        const url = await ctx.storage.getUrl(storageId);
+        if (!url) continue;
+        const resp = await fetch(url);
+        if (!resp.ok) continue;
+        const buffer = await resp.arrayBuffer();
+        const base64 = btoa(
+          new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+        );
+        frameImages.push({
+          type: "image",
+          source: { type: "base64", media_type: "image/jpeg", data: base64 },
+        });
+      }
+    }
+
+    const hasFrames = frameImages.length > 0;
+    const hasTranscription = !!video?.transcription;
+
+    if (!hasFrames && !hasTranscription) {
+      throw new Error("Нет данных для анализа. Загрузите видео и выполните транскрибацию или извлеките кадры.");
+    }
+
+    const systemPrompt = `Ты — эксперт по рекламным видео для VK Ads. Проанализируй рекламное видео и выдай JSON с оценкой.
+
+${hasFrames ? "Тебе предоставлены ключевые кадры видео (скриншоты через каждые несколько секунд)." : ""}
+${hasTranscription ? "Также предоставлена транскрипция аудио-дорожки." : "Аудио-дорожки нет или она пустая — анализируй только визуальный ряд."}
+
+ЧТО АНАЛИЗИРОВАТЬ:
+${hasFrames ? `- Визуальный ряд: композиция кадров, текст на экране, CTA-элементы, брендинг
+- Первый кадр: захватывает ли внимание? Есть ли визуальный крючок?
+- Текст на экране: читаемый ли? Достаточно ли крупный? Контраст с фоном?
+- Общая динамика: меняются ли кадры или статичная картинка?
+- CTA: есть ли визуальный призыв к действию (кнопка, стрелка, текст)?` : ""}
+${hasTranscription ? `- Голос/текст: структура повествования (боль → решение → выгода → CTA)
+- Оффер: чёткий ли? Есть ли конкретика (цифры, сроки, результаты)?
+- Темп: не слишком быстро/медленно?` : ""}
 
 Формат ответа (только JSON, без пояснений):
 {
@@ -460,20 +499,30 @@ export const analyzeVideo = action({
   "transcriptMatch": "low" | "medium" | "high",
   "recommendations": [
     {
-      "field": "Видео" | "Текст" | "CTA" | "Структура",
-      "original": "цитата из транскрипции",
-      "suggested": "предложенная замена",
-      "reason": "почему нужно изменить"
+      "field": "Видеоряд" | "Текст на экране" | "Голос/текст" | "CTA" | "Структура" | "Первый кадр",
+      "original": "что сейчас (описание или цитата)",
+      "suggested": "что нужно изменить",
+      "reason": "почему это важно для конверсии/досмотра"
     }
   ]
-}
+}`;
 
-Критерии оценки:
-- Захватывает ли внимание в первые 3 секунды
-- Есть ли чёткий оффер
-- Есть ли призыв к действию
-- Структура: боль → решение → выгода → CTA
-- Длина и плотность контента`;
+    // Build message content with frames + transcription
+    const userContent: Array<any> = [];
+
+    if (hasFrames) {
+      userContent.push({ type: "text", text: `Ключевые кадры видео "${video?.filename || "video"}" (${frameImages.length} кадров по порядку):` });
+      for (const frame of frameImages) {
+        userContent.push(frame);
+      }
+    }
+
+    if (hasTranscription) {
+      userContent.push({
+        type: "text",
+        text: `${hasFrames ? "\n" : ""}Транскрипция аудио:\n\n${video!.transcription}`,
+      });
+    }
 
     const response = await fetch(`${baseUrl}/v1/messages`, {
       method: "POST",
@@ -484,11 +533,11 @@ export const analyzeVideo = action({
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
+        max_tokens: 1500,
         system: systemPrompt,
         messages: [{
           role: "user",
-          content: `Транскрипция видео "${video.filename}":\n\n${video.transcription}`,
+          content: userContent,
         }],
       }),
     });
@@ -500,8 +549,14 @@ export const analyzeVideo = action({
 
     const data = await response.json();
     let responseText = (data.content?.[0]?.text || "").trim();
-    // Strip markdown code fences if present
     responseText = responseText.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
+
+    // Clean up frame storage
+    if (args.frameStorageIds) {
+      for (const storageId of args.frameStorageIds) {
+        try { await ctx.storage.delete(storageId); } catch { /* ignore */ }
+      }
+    }
 
     try {
       const analysis = JSON.parse(responseText);

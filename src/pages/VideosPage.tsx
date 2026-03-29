@@ -13,6 +13,7 @@ import {
   Info,
 } from 'lucide-react';
 import { extractAudioFromVideo } from '@/lib/extractAudio';
+import { extractFramesFromVideo } from '@/lib/extractFrames';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { VideoItem } from '@/components/VideoItem';
@@ -249,11 +250,52 @@ export function VideosPage() {
   const handleAnalyze = async (id: string) => {
     if (!user?.userId) return;
     setAnalyzingId(id);
+    setError(null);
     try {
+      const video = videos?.find((v: any) => v._id === id);
+
+      // Extract frames from video for Vision analysis
+      let frameStorageIds: Id<"_storage">[] = [];
+
+      // Try to get video URL for frame extraction
+      const storageUrl = video?.storageId
+        ? await convex.query(api.videos.getStorageUrl, { videoId: id as Id<"videos"> })
+        : null;
+
+      if (storageUrl) {
+        setSuccess('Извлекаем кадры из видео...');
+        try {
+          const frames = await extractFramesFromVideo(storageUrl, {
+            intervalSec: 3,
+            maxFrames: 8,
+            quality: 0.7,
+          });
+
+          // Upload frames to Convex storage
+          for (const frameBlob of frames) {
+            const uploadUrl = await generateUploadUrl({});
+            const uploadResponse = await fetch(uploadUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'image/jpeg' },
+              body: frameBlob,
+            });
+            if (uploadResponse.ok) {
+              const { storageId } = await uploadResponse.json();
+              frameStorageIds.push(storageId as Id<"_storage">);
+            }
+          }
+        } catch (frameErr) {
+          console.warn('Не удалось извлечь кадры, анализ только по транскрипции:', frameErr);
+        }
+      }
+
+      setSuccess('Анализируем видео...');
       await analyzeVideo({
         videoId: id as Id<"videos">,
         userId: user.userId as Id<"users">,
+        frameStorageIds: frameStorageIds.length > 0 ? frameStorageIds : undefined,
       });
+
       setSuccess('Анализ завершён');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
