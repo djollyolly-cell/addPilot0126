@@ -494,23 +494,17 @@ export const transcribeVideo = action({
   },
 });
 
-// Save transcription and clean up storage file
+// Save transcription (keep storage file for re-transcription and frame extraction)
 export const saveTranscription = internalMutation({
   args: {
     id: v.id("videos"),
     transcription: v.string(),
   },
   handler: async (ctx, args) => {
-    const video = await ctx.db.get(args.id);
     await ctx.db.patch(args.id, {
       transcription: args.transcription,
       updatedAt: Date.now(),
     });
-    // Delete storage file after transcription is saved — text is enough
-    if (video?.storageId) {
-      await ctx.storage.delete(video.storageId);
-      await ctx.db.patch(args.id, { storageId: undefined });
-    }
   },
 });
 

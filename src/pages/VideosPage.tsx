@@ -12,8 +12,8 @@ import {
   Building2,
   Info,
 } from 'lucide-react';
-import { extractAudioFromVideo } from '@/lib/extractAudio';
-import { extractFramesFromVideo } from '@/lib/extractFrames';
+import { extractAudioFromBlob } from '@/lib/extractAudio';
+import { extractFramesFromBlob, getVideoMimeType } from '@/lib/extractFrames';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { VideoItem } from '@/components/VideoItem';
@@ -216,47 +216,64 @@ export function VideosPage() {
     setError(null);
     try {
       const storageUrl = await convex.query(api.videos.getStorageUrl, { videoId: id as Id<"videos"> });
-      if (!storageUrl) throw new Error('Файл видео не найден в хранилище');
+      if (!storageUrl) throw new Error('Файл видео не найден в хранилище. Перезагрузите видео.');
 
-      // Step 1: Extract audio
+      const video = videos?.find((v: any) => v._id === id);
+      const filename = video?.filename || 'video.mp4';
+
+      // Download video once, set correct MIME type
+      setSuccess('Скачиваем видео...');
+      const response = await fetch(storageUrl);
+      if (!response.ok) throw new Error('Не удалось скачать видео');
+      const rawBlob = await response.blob();
+      const mimeType = getVideoMimeType(filename);
+      const videoBlob = new Blob([rawBlob], { type: mimeType });
+
+      // Step 1: Extract audio from blob
       setSuccess('Извлекаем аудио...');
-      const audioBlob = await extractAudioFromVideo(storageUrl);
+      const audioBlob = await extractAudioFromBlob(videoBlob);
       const audioUploadUrl = await generateUploadUrl({});
-      const audioResponse = await fetch(audioUploadUrl, {
+      const audioUploadResp = await fetch(audioUploadUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'audio/wav' },
         body: audioBlob,
       });
-      if (!audioResponse.ok) throw new Error('Ошибка загрузки аудио');
-      const { storageId: audioStorageId } = await audioResponse.json();
+      if (!audioUploadResp.ok) throw new Error('Ошибка загрузки аудио');
+      const { storageId: audioStorageId } = await audioUploadResp.json();
 
-      // Step 2: Extract frames
-      setSuccess('Извлекаем кадры...');
+      // Step 2: Extract frames from the same blob
+      setSuccess('Извлекаем кадры из видео...');
       let frameStorageIds: Id<"_storage">[] = [];
       try {
-        const frames = await extractFramesFromVideo(storageUrl, {
+        const frames = await extractFramesFromBlob(videoBlob, {
           intervalSec: 3,
           maxFrames: 8,
           quality: 0.7,
         });
+
+        if (frames.length === 0) {
+          console.warn('Не удалось извлечь ни одного кадра');
+        }
+
         for (const frameBlob of frames) {
           const frameUploadUrl = await generateUploadUrl({});
-          const frameResponse = await fetch(frameUploadUrl, {
+          const frameUploadResp = await fetch(frameUploadUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'image/jpeg' },
             body: frameBlob,
           });
-          if (frameResponse.ok) {
-            const { storageId } = await frameResponse.json();
+          if (frameUploadResp.ok) {
+            const { storageId } = await frameUploadResp.json();
             frameStorageIds.push(storageId as Id<"_storage">);
           }
         }
       } catch (frameErr) {
-        console.warn('Не удалось извлечь кадры:', frameErr);
+        console.error('Ошибка извлечения кадров:', frameErr);
+        // Continue with audio-only transcription
       }
 
-      // Step 3: Send to server for Whisper + Claude Vision
-      setSuccess('Транскрибируем аудио и видеоряд...');
+      // Step 3: Send to server
+      setSuccess(`Транскрибируем (аудио + ${frameStorageIds.length} кадров)...`);
       await transcribeVideo({
         videoId: id as Id<"videos">,
         userId: user.userId as Id<"users">,
@@ -283,7 +300,6 @@ export function VideosPage() {
       // Extract frames from video for Vision analysis
       let frameStorageIds: Id<"_storage">[] = [];
 
-      // Try to get video URL for frame extraction
       const storageUrl = video?.storageId
         ? await convex.query(api.videos.getStorageUrl, { videoId: id as Id<"videos"> })
         : null;
@@ -291,27 +307,33 @@ export function VideosPage() {
       if (storageUrl) {
         setSuccess('Извлекаем кадры из видео...');
         try {
-          const frames = await extractFramesFromVideo(storageUrl, {
-            intervalSec: 3,
-            maxFrames: 8,
-            quality: 0.7,
-          });
+          const resp = await fetch(storageUrl);
+          if (resp.ok) {
+            const rawBlob = await resp.blob();
+            const mimeType = getVideoMimeType(video?.filename || 'video.mp4');
+            const videoBlob = new Blob([rawBlob], { type: mimeType });
 
-          // Upload frames to Convex storage
-          for (const frameBlob of frames) {
-            const uploadUrl = await generateUploadUrl({});
-            const uploadResponse = await fetch(uploadUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'image/jpeg' },
-              body: frameBlob,
+            const frames = await extractFramesFromBlob(videoBlob, {
+              intervalSec: 3,
+              maxFrames: 8,
+              quality: 0.7,
             });
-            if (uploadResponse.ok) {
-              const { storageId } = await uploadResponse.json();
-              frameStorageIds.push(storageId as Id<"_storage">);
+
+            for (const frameBlob of frames) {
+              const uploadUrl = await generateUploadUrl({});
+              const uploadResponse = await fetch(uploadUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'image/jpeg' },
+                body: frameBlob,
+              });
+              if (uploadResponse.ok) {
+                const { storageId } = await uploadResponse.json();
+                frameStorageIds.push(storageId as Id<"_storage">);
+              }
             }
           }
         } catch (frameErr) {
-          console.warn('Не удалось извлечь кадры, анализ только по транскрипции:', frameErr);
+          console.error('Ошибка извлечения кадров для анализа:', frameErr);
         }
       }
 

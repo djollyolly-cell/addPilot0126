@@ -3,10 +3,17 @@
  * Returns a compressed audio Blob (webm/opus) suitable for Whisper API (<25MB).
  */
 export async function extractAudioFromVideo(videoUrl: string): Promise<Blob> {
-  // Fetch video as ArrayBuffer
   const response = await fetch(videoUrl);
   if (!response.ok) throw new Error("Не удалось скачать видео");
-  const arrayBuffer = await response.arrayBuffer();
+  const blob = await response.blob();
+  return extractAudioFromBlob(blob);
+}
+
+/**
+ * Extract audio from a video Blob (no network request needed).
+ */
+export async function extractAudioFromBlob(videoBlob: Blob): Promise<Blob> {
+  const arrayBuffer = await videoBlob.arrayBuffer();
 
   // Decode audio from video
   const audioContext = new AudioContext();
