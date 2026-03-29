@@ -318,7 +318,20 @@ export const listAdsByAccount = query({
   },
 });
 
-// Transcribe video using Whisper API
+// Save pre-extracted frame storageIds on a video record
+export const saveFrameStorageIds = mutation({
+  args: {
+    videoId: v.id("videos"),
+    frameStorageIds: v.array(v.id("_storage")),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.videoId, {
+      frameStorageIds: args.frameStorageIds,
+      updatedAt: Date.now(),
+    });
+  },
+});
+
 // Get storage URL for a video (for client-side audio extraction)
 export const getStorageUrl = query({
   args: { videoId: v.id("videos") },
@@ -466,26 +479,16 @@ export const transcribeVideo = action({
         transcription,
       });
 
-      // Clean up temporary files
+      // Clean up temporary audio file (frames are kept on the video record for re-use)
       if (args.audioStorageId) {
         try { await ctx.storage.delete(args.audioStorageId); } catch { /* ignore */ }
-      }
-      if (args.frameStorageIds) {
-        for (const storageId of args.frameStorageIds) {
-          try { await ctx.storage.delete(storageId); } catch { /* ignore */ }
-        }
       }
 
       return transcription;
     } catch (error) {
-      // Clean up on error
+      // Clean up temporary audio on error (frames belong to video record)
       if (args.audioStorageId) {
         try { await ctx.storage.delete(args.audioStorageId); } catch { /* ignore */ }
-      }
-      if (args.frameStorageIds) {
-        for (const storageId of args.frameStorageIds) {
-          try { await ctx.storage.delete(storageId); } catch { /* ignore */ }
-        }
       }
       throw new Error(
         `Ошибка транскрибации: ${error instanceof Error ? error.message : "Неизвестная ошибка"}`

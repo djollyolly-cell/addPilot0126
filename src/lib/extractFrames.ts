@@ -16,6 +16,7 @@ export async function extractFramesFromBlob(
       video.muted = true;
       video.preload = 'auto';
       video.playsInline = true;
+      video.crossOrigin = 'anonymous';
 
       const timeout = setTimeout(() => {
         reject(new Error('Таймаут загрузки видео (30 сек)'));

@@ -81,6 +81,7 @@ export function VideosPage() {
   const transcribeVideo = useAction(api.videos.transcribeVideo);
   const analyzeVideo = useAction(api.videos.analyzeVideo);
   const linkToAd = useMutation(api.videos.linkToAd);
+  const saveFrameStorageIds = useMutation(api.videos.saveFrameStorageIds);
   const ads = useQuery(
     api.videos.listAdsByAccount,
     accountId ? { accountId: accountId as Id<"adAccounts"> } : 'skip'
@@ -155,6 +156,36 @@ export function VideosPage() {
           accountId: accountId as Id<"adAccounts">,
         });
 
+        // Extract frames from original File (reliable — browser can always play user-selected files)
+        try {
+          const frames = await extractFramesFromBlob(item.file, {
+            intervalSec: 3,
+            maxFrames: 8,
+            quality: 0.7,
+          });
+          if (frames.length > 0) {
+            const frameIds: Id<"_storage">[] = [];
+            for (const frameBlob of frames) {
+              const frameUploadUrl = await generateUploadUrl({});
+              const frameResp = await fetch(frameUploadUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'image/jpeg' },
+                body: frameBlob,
+              });
+              if (frameResp.ok) {
+                const { storageId: fId } = await frameResp.json();
+                frameIds.push(fId as Id<"_storage">);
+              }
+            }
+            if (frameIds.length > 0) {
+              await saveFrameStorageIds({ videoId, frameStorageIds: frameIds });
+            }
+          }
+        } catch (frameErr) {
+          console.warn('Кадры не извлечены при загрузке:', frameErr);
+          // Non-critical — frames can be extracted later during transcription
+        }
+
         setQueue((prev) =>
           prev.map((q, idx) => (idx === i ? { ...q, status: 'done' as const, progress: 100 } : q))
         );
@@ -219,17 +250,14 @@ export function VideosPage() {
       if (!storageUrl) throw new Error('Файл видео не найден в хранилище. Перезагрузите видео.');
 
       const video = videos?.find((v: any) => v._id === id);
-      const filename = video?.filename || 'video.mp4';
 
-      // Download video once, set correct MIME type
-      setSuccess('Скачиваем видео...');
+      // Step 1: Extract audio from stored video
+      setSuccess('Скачиваем видео для извлечения аудио...');
       const response = await fetch(storageUrl);
       if (!response.ok) throw new Error('Не удалось скачать видео');
       const rawBlob = await response.blob();
-      const mimeType = getVideoMimeType(filename);
-      const videoBlob = new Blob([rawBlob], { type: mimeType });
+      const videoBlob = new Blob([rawBlob], { type: getVideoMimeType(video?.filename || 'video.mp4') });
 
-      // Step 1: Extract audio from blob
       setSuccess('Извлекаем аудио...');
       const audioBlob = await extractAudioFromBlob(videoBlob);
       const audioUploadUrl = await generateUploadUrl({});
@@ -241,35 +269,37 @@ export function VideosPage() {
       if (!audioUploadResp.ok) throw new Error('Ошибка загрузки аудио');
       const { storageId: audioStorageId } = await audioUploadResp.json();
 
-      // Step 2: Extract frames from the same blob
-      setSuccess('Извлекаем кадры из видео...');
-      let frameStorageIds: Id<"_storage">[] = [];
-      try {
-        const frames = await extractFramesFromBlob(videoBlob, {
-          intervalSec: 3,
-          maxFrames: 8,
-          quality: 0.7,
-        });
+      // Step 2: Use pre-extracted frames stored during upload
+      // If no frames were stored, try extracting now as fallback
+      let frameStorageIds: Id<"_storage">[] = video?.frameStorageIds || [];
 
-        if (frames.length === 0) {
-          console.warn('Не удалось извлечь ни одного кадра');
-        }
-
-        for (const frameBlob of frames) {
-          const frameUploadUrl = await generateUploadUrl({});
-          const frameUploadResp = await fetch(frameUploadUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'image/jpeg' },
-            body: frameBlob,
+      if (frameStorageIds.length === 0) {
+        setSuccess('Извлекаем кадры из видео...');
+        try {
+          const frames = await extractFramesFromBlob(videoBlob, {
+            intervalSec: 3,
+            maxFrames: 8,
+            quality: 0.7,
           });
-          if (frameUploadResp.ok) {
-            const { storageId } = await frameUploadResp.json();
-            frameStorageIds.push(storageId as Id<"_storage">);
+          for (const frameBlob of frames) {
+            const frameUploadUrl = await generateUploadUrl({});
+            const frameUploadResp = await fetch(frameUploadUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'image/jpeg' },
+              body: frameBlob,
+            });
+            if (frameUploadResp.ok) {
+              const { storageId } = await frameUploadResp.json();
+              frameStorageIds.push(storageId as Id<"_storage">);
+            }
           }
+          // Save for future re-transcription
+          if (frameStorageIds.length > 0) {
+            await saveFrameStorageIds({ videoId: id as Id<"videos">, frameStorageIds });
+          }
+        } catch (frameErr) {
+          console.error('Ошибка извлечения кадров:', frameErr);
         }
-      } catch (frameErr) {
-        console.error('Ошибка извлечения кадров:', frameErr);
-        // Continue with audio-only transcription
       }
 
       // Step 3: Send to server
