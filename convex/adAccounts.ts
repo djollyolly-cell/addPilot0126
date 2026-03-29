@@ -551,30 +551,46 @@ export const fetchAndConnect = action({
       }
     }
 
-    // Auto-discover mtAdvertiserId via VK API ads.getAccounts
+    // Auto-set mtAdvertiserId from user's saved vkAdsCabinetId (discovered at login)
     if (accountId) {
       try {
-        const vkTokens = await ctx.runQuery(internal.users.getVkTokens, {
-          userId: args.userId,
-        });
-        if (vkTokens?.accessToken) {
-          const adsResp = await fetch("https://api.vk.com/method/ads.getAccounts?v=5.131", {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: `access_token=${vkTokens.accessToken}`,
+        const userRecord = await ctx.runQuery(internal.users.getById, { userId: args.userId });
+        if (userRecord?.vkAdsCabinetId) {
+          await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+            accountId,
+            mtAdvertiserId: userRecord.vkAdsCabinetId,
           });
-          const adsData = await adsResp.json();
-          if (adsData.response && Array.isArray(adsData.response) && adsData.response.length > 0) {
-            const cabinetId = String(adsData.response[0].account_id);
-            await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
-              accountId,
-              mtAdvertiserId: cabinetId,
+          console.log(`[fetchAndConnect] Set mtAdvertiserId=${userRecord.vkAdsCabinetId} from user record`);
+        } else {
+          // Fallback: try ads.getAccounts with VK token (may work if token is fresh)
+          const vkTokens = await ctx.runQuery(internal.users.getVkTokens, {
+            userId: args.userId,
+          });
+          if (vkTokens?.accessToken) {
+            const adsResp = await fetch("https://api.vk.com/method/ads.getAccounts?v=5.131", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: `access_token=${vkTokens.accessToken}`,
             });
-            console.log(`[fetchAndConnect] Auto-set mtAdvertiserId=${cabinetId} on account ${accountId}`);
+            const adsData = await adsResp.json();
+            console.log(`[fetchAndConnect] ads.getAccounts: ${JSON.stringify(adsData).substring(0, 200)}`);
+            if (adsData.response && Array.isArray(adsData.response) && adsData.response.length > 0) {
+              const cabinetId = String(adsData.response[0].account_id);
+              await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+                accountId,
+                mtAdvertiserId: cabinetId,
+              });
+              // Also save on user for future accounts
+              await ctx.runMutation(internal.auth.saveVkAdsCabinetId, {
+                userId: args.userId,
+                vkAdsCabinetId: cabinetId,
+              });
+              console.log(`[fetchAndConnect] Auto-discovered mtAdvertiserId=${cabinetId}`);
+            }
           }
         }
       } catch (e) {
-        console.log(`[fetchAndConnect] ads.getAccounts failed (non-critical): ${e}`);
+        console.log(`[fetchAndConnect] mtAdvertiserId discovery failed (non-critical): ${e}`);
       }
     }
 

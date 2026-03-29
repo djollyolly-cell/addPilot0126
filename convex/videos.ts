@@ -185,50 +185,25 @@ export const uploadToVk = action({
     const { accessToken } = accountInfo;
     let mtAdvertiserId = accountInfo.mtAdvertiserId;
 
-    // Auto-discover mtAdvertiserId if missing — try myTarget API endpoints
+    // Auto-discover mtAdvertiserId if missing — check user's saved vkAdsCabinetId
     if (!mtAdvertiserId) {
-      console.log(`[video upload] mtAdvertiserId missing, trying auto-discovery via myTarget API...`);
-      try {
-        // Method 1: agency/clients.json — returns client accounts for agency tokens
-        const clientsResp = await fetch(`${MT_API_BASE}/api/v2/agency/clients.json`, {
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
-        const clientsText = await clientsResp.text();
-        console.log(`[video upload] agency/clients.json: status=${clientsResp.status} body=${clientsText.substring(0, 300)}`);
-        if (clientsResp.ok) {
-          const clients = JSON.parse(clientsText);
-          if (Array.isArray(clients) && clients.length > 0) {
-            mtAdvertiserId = String(clients[0].id);
-            console.log(`[video upload] Found client account ID: ${mtAdvertiserId}`);
+      console.log(`[video upload] mtAdvertiserId missing, checking user record...`);
+      const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
+      if (video?.userId) {
+        try {
+          const userRecord = await ctx.runQuery(internal.users.getById, { userId: video.userId });
+          if (userRecord?.vkAdsCabinetId) {
+            mtAdvertiserId = userRecord.vkAdsCabinetId;
+            // Save on account for future uploads
+            await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+              accountId: args.accountId,
+              mtAdvertiserId,
+            });
+            console.log(`[video upload] Got mtAdvertiserId=${mtAdvertiserId} from user record`);
           }
+        } catch (e) {
+          console.log(`[video upload] User record check failed: ${e}`);
         }
-
-        // Method 2: manager/clients.json — for manager-type accounts
-        if (!mtAdvertiserId) {
-          const mgrResp = await fetch(`${MT_API_BASE}/api/v2/manager/clients.json`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          const mgrText = await mgrResp.text();
-          console.log(`[video upload] manager/clients.json: status=${mgrResp.status} body=${mgrText.substring(0, 300)}`);
-          if (mgrResp.ok) {
-            const mgrClients = JSON.parse(mgrText);
-            if (Array.isArray(mgrClients) && mgrClients.length > 0) {
-              mtAdvertiserId = String(mgrClients[0].id);
-              console.log(`[video upload] Found manager client ID: ${mtAdvertiserId}`);
-            }
-          }
-        }
-
-        // Save discovered ID for future uploads
-        if (mtAdvertiserId) {
-          await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
-            accountId: args.accountId,
-            mtAdvertiserId,
-          });
-          console.log(`[video upload] Saved mtAdvertiserId=${mtAdvertiserId}`);
-        }
-      } catch (e) {
-        console.log(`[video upload] Auto-discovery failed: ${e}`);
       }
     }
 

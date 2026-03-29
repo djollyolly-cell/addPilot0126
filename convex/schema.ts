@@ -26,6 +26,8 @@ export default defineSchema({
     // Per-user VK Ads API credentials (client_id / client_secret)
     vkAdsClientId: v.optional(v.string()),
     vkAdsClientSecret: v.optional(v.string()),
+    // VK Ads cabinet ID discovered via ads.getAccounts at login
+    vkAdsCabinetId: v.optional(v.string()),
     updatedAt: v.optional(v.number()),
   })
     .index("by_vkId", ["vkId"])

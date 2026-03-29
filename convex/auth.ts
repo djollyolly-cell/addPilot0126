@@ -180,20 +180,22 @@ export const exchangeCodeForToken = action({
         body: `access_token=${accessToken}`,
       });
       const adsData = await adsResp.json();
-      if (adsData.response && Array.isArray(adsData.response)) {
-        for (const cabinet of adsData.response) {
-          const cabinetId = String(cabinet.account_id);
-          // Save advertiser ID to any connected ad accounts for this user
-          await ctx.runMutation(internal.auth.setAdvertiserIdForUser, {
-            userId: dbUserId,
-            mtAdvertiserId: cabinetId,
-          });
-          console.log(`[auth] Auto-discovered advertiser ID: ${cabinetId}`);
-          break; // Use first cabinet
-        }
+      console.log(`[auth] ads.getAccounts response: ${JSON.stringify(adsData).substring(0, 300)}`);
+      if (adsData.response && Array.isArray(adsData.response) && adsData.response.length > 0) {
+        const cabinetId = String(adsData.response[0].account_id);
+        // Save cabinet ID on user record (accounts may not exist yet)
+        await ctx.runMutation(internal.auth.saveVkAdsCabinetId, {
+          userId: dbUserId,
+          vkAdsCabinetId: cabinetId,
+        });
+        // Also try to set on existing ad accounts
+        await ctx.runMutation(internal.auth.setAdvertiserIdForUser, {
+          userId: dbUserId,
+          mtAdvertiserId: cabinetId,
+        });
+        console.log(`[auth] Auto-discovered cabinet ID: ${cabinetId}`);
       }
     } catch (e) {
-      // Non-critical — ads scope may not be granted
       console.log(`[auth] ads.getAccounts failed (non-critical): ${e}`);
     }
 
@@ -808,6 +810,19 @@ export const deleteAllUserSessions = mutation({
 });
 
 // Set mtAdvertiserId on all ad accounts for a user (called after VK login)
+// Save VK Ads cabinet ID on user record (discovered at login)
+export const saveVkAdsCabinetId = internalMutation({
+  args: {
+    userId: v.id("users"),
+    vkAdsCabinetId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.userId, {
+      vkAdsCabinetId: args.vkAdsCabinetId,
+    });
+  },
+});
+
 export const setAdvertiserIdForUser = internalMutation({
   args: {
     userId: v.id("users"),
