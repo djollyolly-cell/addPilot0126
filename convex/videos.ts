@@ -137,12 +137,16 @@ export const updateUploadStatus = internalMutation({
   },
 });
 
-// Get account access token (internal)
+// Get account access token and VK account ID (internal)
 export const getAccountToken = internalQuery({
   args: { accountId: v.id("adAccounts") },
   handler: async (ctx, args) => {
     const account = await ctx.db.get(args.accountId);
-    return account?.accessToken || null;
+    if (!account) return null;
+    return {
+      accessToken: account.accessToken || null,
+      vkAccountId: account.vkAccountId || null,
+    };
   },
 });
 
@@ -160,10 +164,10 @@ export const getAccountCredentials = internalQuery({
   },
 });
 
-// VK Ads API base (ads.vk.com) — the user's actual ad platform
-const VK_ADS_API_BASE = "https://ads.vk.com";
+// myTarget API base — the actual API backend for VK Ads
+const MT_API_BASE = "https://target.my.com";
 
-// Upload video to VK Ads media library
+// Upload video to VK Ads media library via myTarget API v3
 export const uploadToVk = action({
   args: {
     videoId: v.id("videos"),
@@ -171,11 +175,16 @@ export const uploadToVk = action({
     accountId: v.id("adAccounts"),
   },
   handler: async (ctx, args) => {
-    // Get stored access token (shared OAuth between target.my.com and ads.vk.com)
-    const accessToken = await ctx.runQuery(internal.videos.getAccountToken, {
+    // Get stored access token and VK account ID
+    const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, {
       accountId: args.accountId,
     });
-    if (!accessToken) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
+    if (!accountInfo?.accessToken) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
+
+    const { accessToken, vkAccountId } = accountInfo;
+
+    // Extract numeric account ID (strip mt_ or agency_ prefix)
+    const numericAccountId = vkAccountId?.replace(/^(mt_|agency_)/, "") || "";
 
     // Mark as uploading and save storageId for transcription
     await ctx.runMutation(internal.videos.updateUploadStatus, {
@@ -196,12 +205,14 @@ export const uploadToVk = action({
       const fileBlob = await fileResponse.blob();
       const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
 
-      // Upload to VK Ads media library
+      // Upload to VK Ads media library via myTarget API v3
+      // VK Ads frontend uses /proxy/mt/v3/content/video.json with account param
       const formData = new FormData();
       formData.append("file", fileBlob, video?.filename || "video.mp4");
-      formData.append("data", JSON.stringify({ width: 1280, height: 720 }));
+      formData.append("data", JSON.stringify({ width: 0, height: 0 }));
 
-      const endpoint = `${VK_ADS_API_BASE}/api/v2/content/video.json`;
+      const accountParam = numericAccountId ? `?account=${numericAccountId}` : "";
+      const endpoint = `${MT_API_BASE}/api/v3/content/video.json${accountParam}`;
       console.log(`[video upload] Uploading to ${endpoint}...`);
 
       const resp = await fetch(endpoint, {
