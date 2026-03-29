@@ -319,31 +319,46 @@ export const listAdsByAccount = query({
 });
 
 // Transcribe video using Whisper API
+// Get storage URL for a video (for client-side audio extraction)
+export const getStorageUrl = query({
+  args: { videoId: v.id("videos") },
+  handler: async (ctx, args) => {
+    const video = await ctx.db.get(args.videoId);
+    if (!video?.storageId) return null;
+    return await ctx.storage.getUrl(video.storageId);
+  },
+});
+
 export const transcribeVideo = action({
   args: {
     videoId: v.id("videos"),
     userId: v.id("users"),
+    audioStorageId: v.optional(v.id("_storage")),
   },
   handler: async (ctx, args) => {
     const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
-    if (!video?.storageId) throw new Error("Файл видео не найден в хранилище");
+
+    // Use client-extracted audio if provided, otherwise use original video file
+    const storageId = args.audioStorageId || video?.storageId;
+    if (!storageId) throw new Error("Файл видео не найден в хранилище");
 
     const apiKey = process.env.OPENAI_API_KEY;
     const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com";
     if (!apiKey) throw new Error("OPENAI_API_KEY не настроен");
 
     try {
-      // Download video from Convex storage
-      const fileUrl = await ctx.storage.getUrl(video.storageId);
+      // Download file from Convex storage
+      const fileUrl = await ctx.storage.getUrl(storageId);
       if (!fileUrl) throw new Error("Файл не найден в хранилище");
-      const videoResponse = await fetch(fileUrl);
-      if (!videoResponse.ok) throw new Error("Не удалось скачать видео для транскрибации");
+      const fileResponse = await fetch(fileUrl);
+      if (!fileResponse.ok) throw new Error("Не удалось скачать файл для транскрибации");
 
-      const videoBlob = await videoResponse.blob();
+      const fileBlob = await fileResponse.blob();
 
       // Send to Whisper
       const formData = new FormData();
-      formData.append("file", videoBlob, video.filename);
+      const filename = args.audioStorageId ? "audio.wav" : (video?.filename || "video.mp4");
+      formData.append("file", fileBlob, filename);
       formData.append("model", "whisper-1");
       formData.append("language", "ru");
 
@@ -372,8 +387,17 @@ export const transcribeVideo = action({
         transcription,
       });
 
+      // Clean up temporary audio file if it was uploaded separately
+      if (args.audioStorageId) {
+        await ctx.storage.delete(args.audioStorageId);
+      }
+
       return transcription;
     } catch (error) {
+      // Clean up temporary audio file on error too
+      if (args.audioStorageId) {
+        try { await ctx.storage.delete(args.audioStorageId); } catch { /* ignore */ }
+      }
       throw new Error(
         `Ошибка транскрибации: ${error instanceof Error ? error.message : "Неизвестная ошибка"}`
       );

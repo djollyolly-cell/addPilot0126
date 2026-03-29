@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { useQuery, useMutation, useAction } from 'convex/react';
+import { useQuery, useMutation, useAction, useConvex } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '@/lib/useAuth';
 import { Id } from '../../convex/_generated/dataModel';
@@ -12,6 +12,7 @@ import {
   Building2,
   Info,
 } from 'lucide-react';
+import { extractAudioFromVideo } from '@/lib/extractAudio';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { VideoItem } from '@/components/VideoItem';
@@ -74,6 +75,7 @@ export function VideosPage() {
   const deleteVideo = useMutation(api.videos.deleteVideo);
   const deleteAllVideos = useMutation(api.videos.deleteAll);
   const generateUploadUrl = useMutation(api.videos.generateUploadUrl);
+  const convex = useConvex();
   const uploadToVk = useAction(api.videos.uploadToVk);
   const transcribeVideo = useAction(api.videos.transcribeVideo);
   const analyzeVideo = useAction(api.videos.analyzeVideo);
@@ -196,11 +198,45 @@ export function VideosPage() {
   const handleTranscribe = async (id: string) => {
     if (!user?.userId) return;
     setTranscribingId(id);
+    setError(null);
     try {
-      await transcribeVideo({
-        videoId: id as Id<"videos">,
-        userId: user.userId as Id<"users">,
-      });
+      const video = videos?.find((v: any) => v._id === id);
+      const MAX_WHISPER_SIZE = 24 * 1024 * 1024;
+
+      // Large files need client-side audio extraction
+      if (video?.fileSize && video.fileSize > MAX_WHISPER_SIZE && video.storageId) {
+        setSuccess('Извлекаем аудио из видео...');
+
+        // Get storage URL for the video file
+        const storageUrl = await convex.query(api.videos.getStorageUrl, { videoId: id as Id<"videos"> });
+        if (!storageUrl) throw new Error('Файл видео не найден');
+
+        // Extract audio on client (video ~25MB → audio ~1-3MB)
+        const audioBlob = await extractAudioFromVideo(storageUrl);
+
+        // Upload extracted audio to Convex storage
+        const uploadUrl = await generateUploadUrl({});
+        const uploadResponse = await fetch(uploadUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'audio/wav' },
+          body: audioBlob,
+        });
+        if (!uploadResponse.ok) throw new Error('Ошибка загрузки аудио');
+        const { storageId: audioStorageId } = await uploadResponse.json();
+
+        setSuccess('Транскрибируем...');
+        await transcribeVideo({
+          videoId: id as Id<"videos">,
+          userId: user.userId as Id<"users">,
+          audioStorageId: audioStorageId as Id<"_storage">,
+        });
+      } else {
+        await transcribeVideo({
+          videoId: id as Id<"videos">,
+          userId: user.userId as Id<"users">,
+        });
+      }
+
       setSuccess('Транскрибация завершена');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
