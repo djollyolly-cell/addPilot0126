@@ -8,63 +8,72 @@ export async function extractFramesFromVideo(
 ): Promise<Blob[]> {
   const { intervalSec = 3, maxFrames = 10, quality = 0.7 } = options;
 
-  return new Promise((resolve, reject) => {
-    const video = document.createElement('video');
-    video.crossOrigin = 'anonymous';
-    video.muted = true;
-    video.preload = 'auto';
+  // Download video as blob and create local URL to avoid CORS issues
+  const response = await fetch(videoUrl);
+  if (!response.ok) throw new Error('Не удалось скачать видео');
+  const videoBlob = await response.blob();
+  const blobUrl = URL.createObjectURL(videoBlob);
 
-    video.onloadedmetadata = async () => {
-      const duration = video.duration;
-      if (!duration || duration === Infinity) {
-        reject(new Error('Не удалось определить длительность видео'));
-        return;
-      }
+  try {
+    return await new Promise((resolve, reject) => {
+      const video = document.createElement('video');
+      video.muted = true;
+      video.preload = 'auto';
 
-      // Calculate frame timestamps
-      const step = Math.max(intervalSec, duration / maxFrames);
-      const timestamps: number[] = [];
-      for (let t = 0.5; t < duration && timestamps.length < maxFrames; t += step) {
-        timestamps.push(t);
-      }
-      // Always include a frame near the end
-      if (timestamps.length > 0 && timestamps[timestamps.length - 1] < duration - 1) {
-        timestamps.push(Math.max(duration - 0.5, 0));
-      }
-
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      if (!ctx) {
-        reject(new Error('Canvas не поддерживается'));
-        return;
-      }
-
-      // Scale down to max 720p width for efficiency
-      const scale = Math.min(1, 720 / video.videoWidth);
-      canvas.width = Math.round(video.videoWidth * scale);
-      canvas.height = Math.round(video.videoHeight * scale);
-
-      const frames: Blob[] = [];
-
-      for (const timestamp of timestamps) {
-        try {
-          const blob = await captureFrame(video, canvas, ctx, timestamp, quality);
-          if (blob) frames.push(blob);
-        } catch {
-          // Skip frames that fail to capture
+      video.onloadedmetadata = async () => {
+        const duration = video.duration;
+        if (!duration || duration === Infinity) {
+          reject(new Error('Не удалось определить длительность видео'));
+          return;
         }
-      }
 
-      // Cleanup
-      video.src = '';
-      video.load();
+        // Calculate frame timestamps
+        const step = Math.max(intervalSec, duration / maxFrames);
+        const timestamps: number[] = [];
+        for (let t = 0.5; t < duration && timestamps.length < maxFrames; t += step) {
+          timestamps.push(t);
+        }
+        // Always include a frame near the end
+        if (timestamps.length > 0 && timestamps[timestamps.length - 1] < duration - 1) {
+          timestamps.push(Math.max(duration - 0.5, 0));
+        }
 
-      resolve(frames);
-    };
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas не поддерживается'));
+          return;
+        }
 
-    video.onerror = () => reject(new Error('Ошибка загрузки видео для извлечения кадров'));
-    video.src = videoUrl;
-  });
+        // Scale down to max 720p width for efficiency
+        const scale = Math.min(1, 720 / video.videoWidth);
+        canvas.width = Math.round(video.videoWidth * scale);
+        canvas.height = Math.round(video.videoHeight * scale);
+
+        const frames: Blob[] = [];
+
+        for (const timestamp of timestamps) {
+          try {
+            const blob = await captureFrame(video, canvas, ctx, timestamp, quality);
+            if (blob) frames.push(blob);
+          } catch {
+            // Skip frames that fail to capture
+          }
+        }
+
+        // Cleanup
+        video.src = '';
+        video.load();
+
+        resolve(frames);
+      };
+
+      video.onerror = () => reject(new Error('Ошибка загрузки видео для извлечения кадров'));
+      video.src = blobUrl;
+    });
+  } finally {
+    URL.revokeObjectURL(blobUrl);
+  }
 }
 
 function captureFrame(
