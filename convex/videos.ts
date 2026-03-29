@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 // List videos for an account
 export const list = query({
@@ -721,76 +721,66 @@ ${hasTranscription ? `- Голос/текст: структура повеств
   },
 });
 
-// DIAGNOSTIC: discover advertiser ID from myTarget API
+// DIAGNOSTIC: discover advertiser ID via VK API ads.getAccounts
 export const discoverAdvertiserId = action({
-  args: { accountId: v.id("adAccounts") },
+  args: { userId: v.id("users") },
   handler: async (ctx, args) => {
-    const creds = await ctx.runQuery(internal.videos.getAccountCredentials, {
-      accountId: args.accountId,
-    });
-    if (!creds?.accessToken) throw new Error("Нет токена");
-
-    const token = creds.accessToken;
-    const base = "https://target.my.com";
     const results: Record<string, any> = {};
 
-    // 1. user.json — full response
-    try {
-      const r = await fetch(`${base}/api/v2/user.json`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results["user.json"] = { status: r.status, body: await r.json() };
-    } catch (e) { results["user.json"] = { error: String(e) }; }
+    // Get user's VK access token (from VK ID login)
+    const vkTokens = await ctx.runQuery(internal.users.getVkTokens, {
+      userId: args.userId,
+    });
 
-    // 2. user/clients.json
-    try {
-      const r = await fetch(`${base}/api/v2/user/clients.json`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results["user/clients.json"] = { status: r.status, body: await r.text() };
-    } catch (e) { results["user/clients.json"] = { error: String(e) }; }
-
-    // 3. agency/clients.json
-    try {
-      const r = await fetch(`${base}/api/v2/agency/clients.json`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results["agency/clients.json"] = { status: r.status, body: await r.text() };
-    } catch (e) { results["agency/clients.json"] = { error: String(e) }; }
-
-    // 4. manager/clients.json
-    try {
-      const r = await fetch(`${base}/api/v2/manager/clients.json`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results["manager/clients.json"] = { status: r.status, body: await r.text() };
-    } catch (e) { results["manager/clients.json"] = { error: String(e) }; }
-
-    // 5. v3 content/videos.json (list existing videos — response may contain account info)
-    try {
-      const r = await fetch(`${base}/api/v3/content/video.json?limit=1`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results["content/video.json?limit=1"] = { status: r.status, body: await r.text() };
-    } catch (e) { results["content/video.json"] = { error: String(e) }; }
-
-    // 6. v2 campaigns.json (first campaign may have advertiser_id)
-    try {
-      const r = await fetch(`${base}/api/v2/campaigns.json?limit=1`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results["campaigns.json?limit=1"] = { status: r.status, body: await r.text() };
-    } catch (e) { results["campaigns.json"] = { error: String(e) }; }
-
-    // 7. Try content/video.json with user ID as account (to compare with 292358)
-    const userId = results["user.json"]?.body?.id;
-    if (userId) {
+    if (vkTokens?.accessToken) {
+      // Try VK API ads.getAccounts — returns list of ad cabinets
       try {
-        const r = await fetch(`${base}/api/v3/content/video.json?account=${userId}&limit=1`, {
-          headers: { Authorization: `Bearer ${token}` },
+        const r = await fetch("https://api.vk.com/method/ads.getAccounts?v=5.131", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `access_token=${vkTokens.accessToken}`,
         });
-        results[`content/video.json?account=${userId}`] = { status: r.status, body: await r.text() };
-      } catch (e) { results[`content/video.json?account=${userId}`] = { error: String(e) }; }
+        results["ads.getAccounts"] = await r.json();
+      } catch (e) { results["ads.getAccounts"] = { error: String(e) }; }
+
+      // Try VK API ads.getClients
+      try {
+        const r = await fetch("https://api.vk.com/method/ads.getClients?v=5.131&account_id=0", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `access_token=${vkTokens.accessToken}`,
+        });
+        results["ads.getClients"] = await r.json();
+      } catch (e) { results["ads.getClients"] = { error: String(e) }; }
+    } else {
+      results["vkToken"] = "no VK access token found";
+    }
+
+    // Also try myTarget user.json for reference
+    const accounts = await ctx.runQuery(api.adAccounts.list, {
+      userId: args.userId,
+    });
+
+    if (accounts.length > 0 && accounts[0].accessToken) {
+      const mtToken = accounts[0].accessToken;
+      try {
+        const r = await fetch("https://target.my.com/api/v2/user.json", {
+          headers: { Authorization: `Bearer ${mtToken}` },
+        });
+        results["mt_user.json"] = await r.json();
+      } catch (e) { results["mt_user.json"] = { error: String(e) }; }
+
+      // Try POST to content/video.json WITHOUT ?account= (maybe it works for non-agency)
+      try {
+        const formData = new FormData();
+        formData.append("data", JSON.stringify({ url: "https://example.com/test.mp4" }));
+        const r = await fetch("https://target.my.com/api/v3/content/video.json", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${mtToken}`, "Content-Type": "application/json" },
+          body: JSON.stringify({ url: "https://example.com/test.mp4", name: "test.mp4" }),
+        });
+        results["content_upload_no_account"] = { status: r.status, body: await r.text() };
+      } catch (e) { results["content_upload_no_account"] = { error: String(e) }; }
     }
 
     console.log("[discoverAdvertiserId] RESULTS:", JSON.stringify(results, null, 2));
