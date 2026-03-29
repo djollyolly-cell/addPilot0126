@@ -137,7 +137,7 @@ export const updateUploadStatus = internalMutation({
   },
 });
 
-// Get account access token and VK account ID (internal)
+// Get account access token and advertiser ID (internal)
 export const getAccountToken = internalQuery({
   args: { accountId: v.id("adAccounts") },
   handler: async (ctx, args) => {
@@ -146,6 +146,7 @@ export const getAccountToken = internalQuery({
     return {
       accessToken: account.accessToken || null,
       vkAccountId: account.vkAccountId || null,
+      mtAdvertiserId: account.mtAdvertiserId || null,
     };
   },
 });
@@ -181,7 +182,8 @@ export const uploadToVk = action({
     });
     if (!accountInfo?.accessToken) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
 
-    const { accessToken } = accountInfo;
+    const { accessToken, mtAdvertiserId } = accountInfo;
+    if (!mtAdvertiserId) throw new Error("Не указан ID рекламного кабинета (mtAdvertiserId). Укажите его в настройках аккаунта.");
 
     // Mark as uploading and save storageId for transcription
     await ctx.runMutation(internal.videos.updateUploadStatus, {
@@ -203,12 +205,12 @@ export const uploadToVk = action({
       const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
 
       // Upload to VK Ads media library via myTarget API v3
-      // Don't pass ?account= — Bearer token already scopes to the correct advertiser
+      // ?account= is REQUIRED — uses mtAdvertiserId (VK Ads advertiser ID, NOT myTarget user ID)
       const formData = new FormData();
       formData.append("file", fileBlob, video?.filename || "video.mp4");
       formData.append("data", JSON.stringify({ width: 0, height: 0 }));
 
-      const endpoint = `${MT_API_BASE}/api/v3/content/video.json`;
+      const endpoint = `${MT_API_BASE}/api/v3/content/video.json?account=${mtAdvertiserId}`;
       console.log(`[video upload] Uploading to ${endpoint}...`);
 
       const resp = await fetch(endpoint, {
@@ -710,52 +712,16 @@ ${hasTranscription ? `- Голос/текст: структура повеств
   },
 });
 
-// TEMP: Discover myTarget advertiser ID for the account
-// user.json returns the user ID (e.g. 15267855) but VK Ads uses the advertiser ID (e.g. 292358)
-export const discoverAdvertiserId = action({
-  args: { accountId: v.id("adAccounts") },
+// Set myTarget advertiser ID for an account
+export const setAdvertiserId = mutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    mtAdvertiserId: v.string(),
+  },
   handler: async (ctx, args) => {
-    const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, {
-      accountId: args.accountId,
+    await ctx.db.patch(args.accountId, {
+      mtAdvertiserId: args.mtAdvertiserId,
     });
-    if (!accountInfo?.accessToken) throw new Error("Нет токена");
-    const { accessToken } = accountInfo;
-
-    const results: Record<string, unknown> = {};
-
-    // 1) user.json — get ALL fields (not just our MtUser interface)
-    try {
-      const resp = await fetch("https://target.my.com/api/v2/user.json", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      results.userJson = await resp.json();
-    } catch (e) { results.userJsonError = String(e); }
-
-    // 2) Try to list user's own advertiser accounts
-    try {
-      const resp = await fetch("https://target.my.com/api/v2/manager/clients.json?limit=100", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      results.managerClients = resp.ok ? await resp.json() : `${resp.status}`;
-    } catch (e) { results.managerClientsError = String(e); }
-
-    // 3) Try agency clients
-    try {
-      const resp = await fetch("https://target.my.com/api/v2/agency/clients.json?limit=100", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      results.agencyClients = resp.ok ? await resp.json() : `${resp.status}`;
-    } catch (e) { results.agencyClientsError = String(e); }
-
-    // 4) Try /api/v2/campaigns.json to see if it returns account info
-    try {
-      const resp = await fetch("https://target.my.com/api/v2/campaigns.json?limit=1&fields=id,name", {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      results.campaigns = resp.ok ? await resp.json() : `${resp.status}`;
-    } catch (e) { results.campaignsError = String(e); }
-
-    return results;
   },
 });
 

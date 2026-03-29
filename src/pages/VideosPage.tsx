@@ -438,17 +438,51 @@ export function VideosPage() {
     );
   }
 
+  const currentAccount = accounts?.find((a) => a._id === accountId);
+
   return (
     <div className="space-y-6" data-testid="videos-page">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold flex items-center gap-2">
-          <Film className="h-6 w-6 text-primary" />
-          Видео
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          Загружайте и управляйте вашими видео креативами
-        </p>
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-bold flex items-center gap-2">
+            <Film className="h-6 w-6 text-primary" />
+            Видео
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Загружайте и управляйте вашими видео креативами
+          </p>
+        </div>
+        {accounts && accounts.length > 1 && (
+          <div className="flex items-center gap-2">
+            <Building2 className="h-4 w-4 text-muted-foreground" />
+            <select
+              className="rounded-md border border-border bg-background px-3 py-2 text-sm"
+              value={accountId || ''}
+              onChange={async (e) => {
+                if (e.target.value && user?.userId) {
+                  await setActiveAccount({
+                    userId: user.userId as Id<"users">,
+                    accountId: e.target.value as Id<"adAccounts">,
+                  });
+                }
+              }}
+              data-testid="video-account-selector"
+            >
+              {accounts.map((acc) => (
+                <option key={acc._id} value={acc._id}>
+                  {acc.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {accounts && accounts.length === 1 && currentAccount && (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Building2 className="h-4 w-4" />
+            <span>{currentAccount.name}</span>
+          </div>
+        )}
       </div>
 
       {/* Messages */}

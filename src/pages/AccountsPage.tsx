@@ -273,13 +273,14 @@ export function AccountsPage() {
             </div>
           ) : (
             <AccountList
-              accounts={accounts.map((a: { _id: string; vkAccountId: string; name: string; status: 'active' | 'paused' | 'error'; lastSyncAt?: number; lastError?: string }) => ({
+              accounts={accounts.map((a: any) => ({
                 _id: a._id as string,
                 vkAccountId: a.vkAccountId,
                 name: a.name,
                 status: a.status,
                 lastSyncAt: a.lastSyncAt,
                 lastError: a.lastError,
+                mtAdvertiserId: a.mtAdvertiserId,
               }))}
               userId={user.userId}
               onSync={handleSync}

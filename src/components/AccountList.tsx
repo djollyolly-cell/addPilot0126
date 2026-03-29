@@ -8,6 +8,7 @@ interface Account {
   status: 'active' | 'paused' | 'error';
   lastSyncAt?: number;
   lastError?: string;
+  mtAdvertiserId?: string;
 }
 
 interface AccountListProps {

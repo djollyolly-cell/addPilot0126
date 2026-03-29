@@ -1,5 +1,8 @@
 import { useState, memo } from 'react';
 import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { useMutation } from 'convex/react';
+import { api } from '../../convex/_generated/api';
+import { Id } from '../../convex/_generated/dataModel';
 import { Card, CardContent } from './ui/card';
 import { SyncButton } from './SyncButton';
 import { CampaignList } from './CampaignList';
@@ -14,6 +17,7 @@ interface AccountCardProps {
     status: 'active' | 'paused' | 'error';
     lastSyncAt?: number;
     lastError?: string;
+    mtAdvertiserId?: string;
   };
   userId: string;
   onSync: (accountId: string) => Promise<void>;
@@ -44,6 +48,9 @@ const statusConfig = {
 export const AccountCard = memo(function AccountCard({ account, userId, onSync, onDisconnect }: AccountCardProps) {
   const [showCampaigns, setShowCampaigns] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [advId, setAdvId] = useState(account.mtAdvertiserId || '');
+  const [advSaving, setAdvSaving] = useState(false);
+  const setAdvertiserId = useMutation(api.videos.setAdvertiserId);
   const status = statusConfig[account.status];
   const StatusIcon = status.icon;
 
@@ -63,6 +70,42 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
               <p className="text-xs text-muted-foreground">
                 ID: {account.vkAccountId}
               </p>
+              <div className="flex items-center gap-1.5 mt-1">
+                <span className="text-xs text-muted-foreground whitespace-nowrap">Advertiser ID:</span>
+                <input
+                  type="text"
+                  placeholder="из VK Ads"
+                  className="h-6 w-24 px-1.5 text-xs rounded border border-border bg-background"
+                  value={advId}
+                  onChange={(e) => setAdvId(e.target.value)}
+                  onClick={(e) => e.stopPropagation()}
+                  data-testid="mt-advertiser-id"
+                />
+                {advId && advId !== (account.mtAdvertiserId || '') && (
+                  <button
+                    type="button"
+                    className="text-xs text-primary hover:underline disabled:opacity-50"
+                    disabled={advSaving}
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      setAdvSaving(true);
+                      try {
+                        await setAdvertiserId({
+                          accountId: account._id as Id<"adAccounts">,
+                          mtAdvertiserId: advId.trim(),
+                        });
+                      } finally {
+                        setAdvSaving(false);
+                      }
+                    }}
+                  >
+                    {advSaving ? '...' : 'Сохранить'}
+                  </button>
+                )}
+                {account.mtAdvertiserId && (
+                  <CheckCircle2 className="w-3 h-3 text-green-600" />
+                )}
+              </div>
               <div className={cn('inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs', status.bg, status.color)}>
                 <StatusIcon className="w-3 h-3" />
                 {status.label}
