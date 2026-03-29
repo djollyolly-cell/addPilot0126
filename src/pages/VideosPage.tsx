@@ -215,30 +215,53 @@ export function VideosPage() {
     setTranscribingId(id);
     setError(null);
     try {
-      // Always extract audio on client — ensures correct format (WAV)
-      // and handles any video size (MOV, MP4, etc.)
-      setSuccess('Извлекаем аудио из видео...');
-
       const storageUrl = await convex.query(api.videos.getStorageUrl, { videoId: id as Id<"videos"> });
       if (!storageUrl) throw new Error('Файл видео не найден в хранилище');
 
+      // Step 1: Extract audio
+      setSuccess('Извлекаем аудио...');
       const audioBlob = await extractAudioFromVideo(storageUrl);
-
-      // Upload extracted audio to Convex storage
-      const uploadUrl = await generateUploadUrl({});
-      const uploadResponse = await fetch(uploadUrl, {
+      const audioUploadUrl = await generateUploadUrl({});
+      const audioResponse = await fetch(audioUploadUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'audio/wav' },
         body: audioBlob,
       });
-      if (!uploadResponse.ok) throw new Error('Ошибка загрузки аудио');
-      const { storageId: audioStorageId } = await uploadResponse.json();
+      if (!audioResponse.ok) throw new Error('Ошибка загрузки аудио');
+      const { storageId: audioStorageId } = await audioResponse.json();
 
-      setSuccess('Транскрибируем...');
+      // Step 2: Extract frames
+      setSuccess('Извлекаем кадры...');
+      let frameStorageIds: Id<"_storage">[] = [];
+      try {
+        const frames = await extractFramesFromVideo(storageUrl, {
+          intervalSec: 3,
+          maxFrames: 8,
+          quality: 0.7,
+        });
+        for (const frameBlob of frames) {
+          const frameUploadUrl = await generateUploadUrl({});
+          const frameResponse = await fetch(frameUploadUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'image/jpeg' },
+            body: frameBlob,
+          });
+          if (frameResponse.ok) {
+            const { storageId } = await frameResponse.json();
+            frameStorageIds.push(storageId as Id<"_storage">);
+          }
+        }
+      } catch (frameErr) {
+        console.warn('Не удалось извлечь кадры:', frameErr);
+      }
+
+      // Step 3: Send to server for Whisper + Claude Vision
+      setSuccess('Транскрибируем аудио и видеоряд...');
       await transcribeVideo({
         videoId: id as Id<"videos">,
         userId: user.userId as Id<"users">,
         audioStorageId: audioStorageId as Id<"_storage">,
+        frameStorageIds: frameStorageIds.length > 0 ? frameStorageIds : undefined,
       });
 
       setSuccess('Транскрибация завершена');

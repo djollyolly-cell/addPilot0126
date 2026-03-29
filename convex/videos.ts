@@ -329,57 +329,136 @@ export const getStorageUrl = query({
   },
 });
 
+// Full transcription: audio (Whisper) + video frames (Claude Vision)
 export const transcribeVideo = action({
   args: {
     videoId: v.id("videos"),
     userId: v.id("users"),
     audioStorageId: v.optional(v.id("_storage")),
+    frameStorageIds: v.optional(v.array(v.id("_storage"))),
   },
   handler: async (ctx, args) => {
     const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
 
-    // Use client-extracted audio if provided, otherwise use original video file
-    const storageId = args.audioStorageId || video?.storageId;
-    if (!storageId) throw new Error("Файл видео не найден в хранилище");
-
-    const apiKey = process.env.OPENAI_API_KEY;
+    const openaiKey = process.env.OPENAI_API_KEY;
     const openaiBaseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com";
-    if (!apiKey) throw new Error("OPENAI_API_KEY не настроен");
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    const anthropicBaseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
 
     try {
-      // Download file from Convex storage
-      const fileUrl = await ctx.storage.getUrl(storageId);
-      if (!fileUrl) throw new Error("Файл не найден в хранилище");
-      const fileResponse = await fetch(fileUrl);
-      if (!fileResponse.ok) throw new Error("Не удалось скачать файл для транскрибации");
+      // Step 1: Audio transcription via Whisper
+      let audioText = "";
+      const audioStorageId = args.audioStorageId || video?.storageId;
+      if (audioStorageId && openaiKey) {
+        const fileUrl = await ctx.storage.getUrl(audioStorageId);
+        if (fileUrl) {
+          const fileResponse = await fetch(fileUrl);
+          if (fileResponse.ok) {
+            const fileBlob = await fileResponse.blob();
+            const formData = new FormData();
+            formData.append("file", fileBlob, args.audioStorageId ? "audio.wav" : (video?.filename || "video.mp4"));
+            formData.append("model", "whisper-1");
+            formData.append("language", "ru");
 
-      const fileBlob = await fileResponse.blob();
+            const whisperHeaders: Record<string, string> = {
+              Authorization: `Bearer ${openaiKey}`,
+            };
+            if (process.env.OPENAI_BASE_URL) whisperHeaders["x-target-api"] = "openai";
 
-      // Send to Whisper
-      const formData = new FormData();
-      const filename = args.audioStorageId ? "audio.wav" : (video?.filename || "video.mp4");
-      formData.append("file", fileBlob, filename);
-      formData.append("model", "whisper-1");
-      formData.append("language", "ru");
+            const whisperResponse = await fetch(`${openaiBaseUrl}/v1/audio/transcriptions`, {
+              method: "POST",
+              headers: whisperHeaders,
+              body: formData,
+            });
 
-      const whisperHeaders: Record<string, string> = {
-        Authorization: `Bearer ${apiKey}`,
-      };
-      if (process.env.OPENAI_BASE_URL) whisperHeaders["x-target-api"] = "openai";
-
-      const whisperResponse = await fetch(`${openaiBaseUrl}/v1/audio/transcriptions`, {
-        method: "POST",
-        headers: whisperHeaders,
-        body: formData,
-      });
-
-      if (!whisperResponse.ok) {
-        const errorText = await whisperResponse.text();
-        throw new Error(`Whisper API error: ${whisperResponse.status} ${errorText}`);
+            if (whisperResponse.ok) {
+              const data = await whisperResponse.json();
+              audioText = data.text || "";
+            }
+          }
+        }
       }
 
-      const data = await whisperResponse.json();
-      const transcription = data.text || "";
+      // Step 2: Video frames analysis via Claude Vision
+      let videoDescription = "";
+      if (args.frameStorageIds && args.frameStorageIds.length > 0 && anthropicKey) {
+        const frameImages: Array<{ type: "image"; source: { type: "base64"; media_type: "image/jpeg"; data: string } }> = [];
+        for (const storageId of args.frameStorageIds) {
+          const url = await ctx.storage.getUrl(storageId);
+          if (!url) continue;
+          const resp = await fetch(url);
+          if (!resp.ok) continue;
+          const buffer = await resp.arrayBuffer();
+          const base64 = btoa(
+            new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), "")
+          );
+          frameImages.push({
+            type: "image",
+            source: { type: "base64", media_type: "image/jpeg", data: base64 },
+          });
+        }
+
+        if (frameImages.length > 0) {
+          const userContent: Array<any> = [
+            { type: "text", text: `Это ключевые кадры рекламного видео "${video?.filename || "video"}" (${frameImages.length} кадров по порядку). Опиши подробно что происходит в каждом кадре.` },
+            ...frameImages,
+          ];
+
+          if (audioText) {
+            userContent.push({
+              type: "text",
+              text: `\nАудиодорожка видео (распознанная речь):\n${audioText}`,
+            });
+          }
+
+          const visionResponse = await fetch(`${anthropicBaseUrl}/v1/messages`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": anthropicKey,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model: "claude-sonnet-4-20250514",
+              max_tokens: 2000,
+              system: `Ты транскрибируешь рекламное видео. Тебе даны ключевые кадры и аудио-дорожка.
+Создай полную транскрибацию в формате:
+
+**Видеоряд:**
+Кадр 1 (0 сек): [описание: что на экране, текст, люди, графика]
+Кадр 2 (3 сек): [описание]
+...
+
+**Аудио:**
+[Полный текст того, что говорится в видео. Если голоса нет — напиши "Голос отсутствует"]
+
+**Текст на экране:**
+[Весь текст, который виден на кадрах: заголовки, субтитры, CTA, надписи]
+
+**Резюме:**
+[2-3 предложения: о чём это видео, что рекламирует, какой посыл]
+
+Пиши на русском. Будь конкретным — описывай то, что видишь, без домыслов.`,
+              messages: [{ role: "user", content: userContent }],
+            }),
+          });
+
+          if (visionResponse.ok) {
+            const visionData = await visionResponse.json();
+            videoDescription = (visionData.content?.[0]?.text || "").trim();
+          }
+        }
+      }
+
+      // Step 3: Combine results
+      let transcription = "";
+      if (videoDescription) {
+        transcription = videoDescription;
+      } else if (audioText) {
+        transcription = `**Аудио:**\n${audioText}\n\n**Видеоряд:**\nКадры не были извлечены`;
+      } else {
+        throw new Error("Не удалось получить ни аудио, ни видеоряд");
+      }
 
       // Save transcription
       await ctx.runMutation(internal.videos.saveTranscription, {
@@ -387,16 +466,26 @@ export const transcribeVideo = action({
         transcription,
       });
 
-      // Clean up temporary audio file if it was uploaded separately
+      // Clean up temporary files
       if (args.audioStorageId) {
-        await ctx.storage.delete(args.audioStorageId);
+        try { await ctx.storage.delete(args.audioStorageId); } catch { /* ignore */ }
+      }
+      if (args.frameStorageIds) {
+        for (const storageId of args.frameStorageIds) {
+          try { await ctx.storage.delete(storageId); } catch { /* ignore */ }
+        }
       }
 
       return transcription;
     } catch (error) {
-      // Clean up temporary audio file on error too
+      // Clean up on error
       if (args.audioStorageId) {
         try { await ctx.storage.delete(args.audioStorageId); } catch { /* ignore */ }
+      }
+      if (args.frameStorageIds) {
+        for (const storageId of args.frameStorageIds) {
+          try { await ctx.storage.delete(storageId); } catch { /* ignore */ }
+        }
       }
       throw new Error(
         `Ошибка транскрибации: ${error instanceof Error ? error.message : "Неизвестная ошибка"}`
