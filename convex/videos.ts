@@ -721,6 +721,83 @@ ${hasTranscription ? `- Голос/текст: структура повеств
   },
 });
 
+// DIAGNOSTIC: discover advertiser ID from myTarget API
+export const discoverAdvertiserId = action({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const creds = await ctx.runQuery(internal.videos.getAccountCredentials, {
+      accountId: args.accountId,
+    });
+    if (!creds?.accessToken) throw new Error("Нет токена");
+
+    const token = creds.accessToken;
+    const base = "https://target.my.com";
+    const results: Record<string, any> = {};
+
+    // 1. user.json — full response
+    try {
+      const r = await fetch(`${base}/api/v2/user.json`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results["user.json"] = { status: r.status, body: await r.json() };
+    } catch (e) { results["user.json"] = { error: String(e) }; }
+
+    // 2. user/clients.json
+    try {
+      const r = await fetch(`${base}/api/v2/user/clients.json`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results["user/clients.json"] = { status: r.status, body: await r.text() };
+    } catch (e) { results["user/clients.json"] = { error: String(e) }; }
+
+    // 3. agency/clients.json
+    try {
+      const r = await fetch(`${base}/api/v2/agency/clients.json`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results["agency/clients.json"] = { status: r.status, body: await r.text() };
+    } catch (e) { results["agency/clients.json"] = { error: String(e) }; }
+
+    // 4. manager/clients.json
+    try {
+      const r = await fetch(`${base}/api/v2/manager/clients.json`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results["manager/clients.json"] = { status: r.status, body: await r.text() };
+    } catch (e) { results["manager/clients.json"] = { error: String(e) }; }
+
+    // 5. v3 content/videos.json (list existing videos — response may contain account info)
+    try {
+      const r = await fetch(`${base}/api/v3/content/video.json?limit=1`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results["content/video.json?limit=1"] = { status: r.status, body: await r.text() };
+    } catch (e) { results["content/video.json"] = { error: String(e) }; }
+
+    // 6. v2 campaigns.json (first campaign may have advertiser_id)
+    try {
+      const r = await fetch(`${base}/api/v2/campaigns.json?limit=1`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results["campaigns.json?limit=1"] = { status: r.status, body: await r.text() };
+    } catch (e) { results["campaigns.json"] = { error: String(e) }; }
+
+    // 7. Try content/video.json with user ID as account (to compare with 292358)
+    const userId = results["user.json"]?.body?.id;
+    if (userId) {
+      try {
+        const r = await fetch(`${base}/api/v3/content/video.json?account=${userId}&limit=1`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        results[`content/video.json?account=${userId}`] = { status: r.status, body: await r.text() };
+      } catch (e) { results[`content/video.json?account=${userId}`] = { error: String(e) }; }
+    }
+
+    console.log("[discoverAdvertiserId] RESULTS:", JSON.stringify(results, null, 2));
+    return results;
+  },
+});
+
 // Set myTarget advertiser ID for an account
 export const setAdvertiserId = mutation({
   args: {
