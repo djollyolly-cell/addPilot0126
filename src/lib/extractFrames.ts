@@ -4,16 +4,17 @@ import { toBlobURL } from '@ffmpeg/util';
 let ffmpegInstance: FFmpeg | null = null;
 let ffmpegLoading: Promise<FFmpeg> | null = null;
 
-// Multiple CDN sources for reliability
-const FFMPEG_CDNS = [
+// Self-hosted first (public/ffmpeg/), then CDN fallbacks
+const FFMPEG_SOURCES = [
+  `${window.location.origin}/ffmpeg`,
   'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm',
   'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm',
 ];
 
 /**
- * Try loading ffmpeg from a specific CDN base URL.
+ * Try loading ffmpeg from a specific base URL.
  */
-async function tryLoadFromCDN(baseURL: string): Promise<FFmpeg> {
+async function tryLoadFromSource(baseURL: string): Promise<FFmpeg> {
   const ffmpeg = new FFmpeg();
   const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
   const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
@@ -32,16 +33,16 @@ async function getFFmpeg(): Promise<FFmpeg> {
 
   ffmpegLoading = (async () => {
     let lastError: Error | null = null;
-    for (const cdn of FFMPEG_CDNS) {
+    for (const source of FFMPEG_SOURCES) {
       try {
-        console.log(`[ffmpeg] Loading from ${cdn}...`);
-        const ffmpeg = await tryLoadFromCDN(cdn);
-        console.log(`[ffmpeg] Loaded successfully from ${cdn}`);
+        console.log(`[ffmpeg] Loading from ${source}...`);
+        const ffmpeg = await tryLoadFromSource(source);
+        console.log(`[ffmpeg] Loaded successfully from ${source}`);
         ffmpegInstance = ffmpeg;
         return ffmpeg;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
-        console.warn(`[ffmpeg] Failed to load from ${cdn}:`, lastError.message);
+        console.warn(`[ffmpeg] Failed to load from ${source}:`, lastError.message);
       }
     }
     // Reset so next call retries
