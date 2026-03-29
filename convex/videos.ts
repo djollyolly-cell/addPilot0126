@@ -146,7 +146,65 @@ export const getAccountToken = internalQuery({
   },
 });
 
-// Upload video to VK via myTarget API
+// Get account credentials (clientId, clientSecret) for VK Ads API auth
+export const getAccountCredentials = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return null;
+    return {
+      clientId: account.clientId || null,
+      clientSecret: account.clientSecret || null,
+      accessToken: account.accessToken,
+    };
+  },
+});
+
+// VK Ads API base (ads.vk.com) — the user's actual ad platform
+const VK_ADS_API_BASE = "https://ads.vk.com";
+
+/**
+ * Get a fresh access token from VK Ads API (ads.vk.com).
+ * Falls back to the stored token if credentials are unavailable.
+ */
+async function getVkAdsToken(
+  credentials: { clientId: string | null; clientSecret: string | null; accessToken: string }
+): Promise<{ token: string; source: "vk_ads" | "stored" }> {
+  const { clientId, clientSecret, accessToken } = credentials;
+
+  if (clientId && clientSecret) {
+    try {
+      const resp = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: clientId,
+          client_secret: clientSecret,
+        }).toString(),
+      });
+
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.access_token) {
+          console.log("[video upload] Got fresh token from ads.vk.com");
+          return { token: data.access_token, source: "vk_ads" };
+        }
+      } else {
+        const errText = await resp.text();
+        console.warn(`[video upload] ads.vk.com token failed (${resp.status}): ${errText}`);
+      }
+    } catch (err) {
+      console.warn("[video upload] ads.vk.com token error:", err);
+    }
+  }
+
+  // Fallback: use stored token (from target.my.com)
+  console.log("[video upload] Using stored token (fallback)");
+  return { token: accessToken, source: "stored" };
+}
+
+// Upload video to VK Ads media library
 export const uploadToVk = action({
   args: {
     videoId: v.id("videos"),
@@ -154,11 +212,11 @@ export const uploadToVk = action({
     accountId: v.id("adAccounts"),
   },
   handler: async (ctx, args) => {
-    // Get access token from account
-    const accessToken = await ctx.runQuery(internal.videos.getAccountToken, {
+    // Get account credentials and token
+    const creds = await ctx.runQuery(internal.videos.getAccountCredentials, {
       accountId: args.accountId,
     });
-    if (!accessToken) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
+    if (!creds) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
 
     // Mark as uploading and save storageId for transcription
     await ctx.runMutation(internal.videos.updateUploadStatus, {
@@ -177,47 +235,54 @@ export const uploadToVk = action({
       if (!fileResponse.ok) throw new Error("Не удалось скачать файл из хранилища");
 
       const fileBlob = await fileResponse.blob();
-
-      // Upload to myTarget API (unified for VK Ads and myTarget)
-      const formData = new FormData();
       const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
-      formData.append("file", fileBlob, video?.filename || "video.mp4");
 
-      // width and height are required by the API — use reasonable defaults
-      // (VK will re-encode the video regardless of these values)
-      formData.append("data", JSON.stringify({
-        width: 1280,
-        height: 720,
-      }));
+      // Get token — prefer ads.vk.com, fallback to stored (target.my.com) token
+      const { token, source } = await getVkAdsToken(creds);
 
-      const mtResponse = await fetch(
-        "https://target.my.com/api/v2/content/video.json",
-        {
+      // Try VK Ads API (ads.vk.com) first, then myTarget (target.my.com) as fallback
+      const endpoints = source === "vk_ads"
+        ? [`${VK_ADS_API_BASE}/api/v2/content/video.json`, "https://target.my.com/api/v2/content/video.json"]
+        : ["https://target.my.com/api/v2/content/video.json"];
+
+      let lastError = "";
+      let uploadData: { id?: string; url?: string; preview_url?: string } | null = null;
+
+      for (const endpoint of endpoints) {
+        const formData = new FormData();
+        formData.append("file", fileBlob, video?.filename || "video.mp4");
+        formData.append("data", JSON.stringify({ width: 1280, height: 720 }));
+
+        console.log(`[video upload] Uploading to ${endpoint}...`);
+
+        const resp = await fetch(endpoint, {
           method: "POST",
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
+          headers: { Authorization: `Bearer ${token}` },
           body: formData,
-        }
-      );
+        });
 
-      if (!mtResponse.ok) {
-        const errorText = await mtResponse.text();
-        throw new Error(`VK API error: ${mtResponse.status} ${errorText}`);
+        if (resp.ok) {
+          uploadData = await resp.json();
+          console.log(`[video upload] Success at ${endpoint}, id=${uploadData?.id}`);
+          break;
+        }
+
+        lastError = await resp.text();
+        console.warn(`[video upload] Failed at ${endpoint}: ${resp.status} ${lastError}`);
       }
 
-      const data = await mtResponse.json();
+      if (!uploadData) {
+        throw new Error(`VK API error: ${lastError}`);
+      }
 
       // Update video record with VK media ID
       await ctx.runMutation(internal.videos.updateUploadStatus, {
         id: args.videoId,
         uploadStatus: "processing",
         uploadProgress: 100,
-        vkMediaId: String(data.id || ""),
-        vkMediaUrl: data.url || data.preview_url || "",
+        vkMediaId: String(uploadData.id || ""),
+        vkMediaUrl: uploadData.url || uploadData.preview_url || "",
       });
-
-      // Keep file in storage for transcription — will be deleted when video is deleted
 
       // Mark as ready
       await ctx.runMutation(internal.videos.updateUploadStatus, {
