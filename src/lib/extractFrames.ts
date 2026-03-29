@@ -4,20 +4,30 @@ import { toBlobURL } from '@ffmpeg/util';
 let ffmpegInstance: FFmpeg | null = null;
 let ffmpegLoading: Promise<FFmpeg> | null = null;
 
-// Self-hosted first (public/ffmpeg/), then CDN fallbacks
-const FFMPEG_SOURCES = [
-  `${window.location.origin}/ffmpeg`,
-  'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm',
-  'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm',
-];
+/**
+ * Try loading ffmpeg from self-hosted files (public/ffmpeg/).
+ * Uses direct URLs — avoids blob URL issues with Worker import().
+ */
+async function tryLoadSelfHosted(): Promise<FFmpeg> {
+  const baseURL = `${window.location.origin}/ffmpeg`;
+  const ffmpeg = new FFmpeg();
+  console.log('[ffmpeg] Trying self-hosted with direct URLs...');
+  await ffmpeg.load({
+    coreURL: `${baseURL}/ffmpeg-core.js`,
+    wasmURL: `${baseURL}/ffmpeg-core.wasm`,
+  });
+  return ffmpeg;
+}
 
 /**
- * Try loading ffmpeg from a specific base URL.
+ * Try loading ffmpeg from a CDN using blob URLs.
  */
-async function tryLoadFromSource(baseURL: string): Promise<FFmpeg> {
+async function tryLoadFromCDN(baseURL: string): Promise<FFmpeg> {
   const ffmpeg = new FFmpeg();
+  console.log('[ffmpeg] Converting CDN to blob URLs...');
   const coreURL = await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript');
   const wasmURL = await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm');
+  console.log('[ffmpeg] Blob URLs created, calling ffmpeg.load()...');
   await ffmpeg.load({ coreURL, wasmURL });
   return ffmpeg;
 }
@@ -25,7 +35,7 @@ async function tryLoadFromSource(baseURL: string): Promise<FFmpeg> {
 /**
  * Get or create a singleton FFmpeg instance.
  * Uses single-threaded core (no SharedArrayBuffer / COOP/COEP needed).
- * Tries multiple CDNs for reliability.
+ * Self-hosted first (direct URLs), then CDN fallbacks (blob URLs).
  */
 async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpegInstance?.loaded) return ffmpegInstance;
@@ -33,18 +43,37 @@ async function getFFmpeg(): Promise<FFmpeg> {
 
   ffmpegLoading = (async () => {
     let lastError: Error | null = null;
-    for (const source of FFMPEG_SOURCES) {
+
+    // 1) Self-hosted with direct URLs (avoids blob URL Worker issues)
+    try {
+      console.log('[ffmpeg] Loading from self-hosted...');
+      const ffmpeg = await tryLoadSelfHosted();
+      console.log('[ffmpeg] Loaded successfully from self-hosted');
+      ffmpegInstance = ffmpeg;
+      return ffmpeg;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.warn('[ffmpeg] Self-hosted failed:', lastError.message);
+    }
+
+    // 2) CDN fallbacks with blob URLs
+    const cdns = [
+      'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm',
+      'https://unpkg.com/@ffmpeg/core@0.12.6/dist/esm',
+    ];
+    for (const cdn of cdns) {
       try {
-        console.log(`[ffmpeg] Loading from ${source}...`);
-        const ffmpeg = await tryLoadFromSource(source);
-        console.log(`[ffmpeg] Loaded successfully from ${source}`);
+        console.log(`[ffmpeg] Loading from ${cdn}...`);
+        const ffmpeg = await tryLoadFromCDN(cdn);
+        console.log(`[ffmpeg] Loaded successfully from ${cdn}`);
         ffmpegInstance = ffmpeg;
         return ffmpeg;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
-        console.warn(`[ffmpeg] Failed to load from ${source}:`, lastError.message);
+        console.warn(`[ffmpeg] Failed to load from ${cdn}:`, lastError.message);
       }
     }
+
     // Reset so next call retries
     ffmpegLoading = null;
     throw new Error(`Не удалось загрузить ffmpeg.wasm ни с одного CDN: ${lastError?.message}`);
