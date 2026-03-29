@@ -215,42 +215,31 @@ export function VideosPage() {
     setTranscribingId(id);
     setError(null);
     try {
-      const video = videos?.find((v: any) => v._id === id);
-      const MAX_WHISPER_SIZE = 24 * 1024 * 1024;
+      // Always extract audio on client — ensures correct format (WAV)
+      // and handles any video size (MOV, MP4, etc.)
+      setSuccess('Извлекаем аудио из видео...');
 
-      // Large files need client-side audio extraction
-      if (video?.fileSize && video.fileSize > MAX_WHISPER_SIZE && video.storageId) {
-        setSuccess('Извлекаем аудио из видео...');
+      const storageUrl = await convex.query(api.videos.getStorageUrl, { videoId: id as Id<"videos"> });
+      if (!storageUrl) throw new Error('Файл видео не найден в хранилище');
 
-        // Get storage URL for the video file
-        const storageUrl = await convex.query(api.videos.getStorageUrl, { videoId: id as Id<"videos"> });
-        if (!storageUrl) throw new Error('Файл видео не найден');
+      const audioBlob = await extractAudioFromVideo(storageUrl);
 
-        // Extract audio on client (video ~25MB → audio ~1-3MB)
-        const audioBlob = await extractAudioFromVideo(storageUrl);
+      // Upload extracted audio to Convex storage
+      const uploadUrl = await generateUploadUrl({});
+      const uploadResponse = await fetch(uploadUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'audio/wav' },
+        body: audioBlob,
+      });
+      if (!uploadResponse.ok) throw new Error('Ошибка загрузки аудио');
+      const { storageId: audioStorageId } = await uploadResponse.json();
 
-        // Upload extracted audio to Convex storage
-        const uploadUrl = await generateUploadUrl({});
-        const uploadResponse = await fetch(uploadUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'audio/wav' },
-          body: audioBlob,
-        });
-        if (!uploadResponse.ok) throw new Error('Ошибка загрузки аудио');
-        const { storageId: audioStorageId } = await uploadResponse.json();
-
-        setSuccess('Транскрибируем...');
-        await transcribeVideo({
-          videoId: id as Id<"videos">,
-          userId: user.userId as Id<"users">,
-          audioStorageId: audioStorageId as Id<"_storage">,
-        });
-      } else {
-        await transcribeVideo({
-          videoId: id as Id<"videos">,
-          userId: user.userId as Id<"users">,
-        });
-      }
+      setSuccess('Транскрибируем...');
+      await transcribeVideo({
+        videoId: id as Id<"videos">,
+        userId: user.userId as Id<"users">,
+        audioStorageId: audioStorageId as Id<"_storage">,
+      });
 
       setSuccess('Транскрибация завершена');
       setTimeout(() => setSuccess(null), 3000);
