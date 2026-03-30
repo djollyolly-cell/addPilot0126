@@ -184,54 +184,26 @@ export const uploadToVk = action({
 
     const { accessToken } = accountInfo;
 
-    // Determine correct ?account= parameter by querying myTarget API directly.
-    // IMPORTANT: Don't use stored mtAdvertiserId — it may contain a VK Ads cabinet ID
-    // (from ads.getAccounts) which is a DIFFERENT ID space than myTarget user IDs.
-    // myTarget API ?account= expects a myTarget client ID (from agency/clients.json).
-    let accountParam: string | null = null;
+    // Determine ?account= parameter.
+    // VK Ads ALWAYS sends ?account=<advertiser_id> to the proxy, even for direct advertisers.
+    // Use stored mtAdvertiserId first, fall back to myTarget user ID from API.
+    let accountParam: string | null = accountInfo.mtAdvertiserId || null;
 
-    try {
-      // Check myTarget user info
-      const userResp = await fetch(`${MT_API_BASE}/api/v2/user.json`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      });
-      if (userResp.ok) {
-        const userData = await userResp.json();
-        console.log(`[video upload] myTarget user: id=${userData.id}, username=${userData.username}`);
-
-        // Check for agency access — agency tokens need ?account=<client_id>
-        const agencyResp = await fetch(`${MT_API_BASE}/api/v2/agency/clients.json`, {
+    if (!accountParam) {
+      try {
+        const userResp = await fetch(`${MT_API_BASE}/api/v2/user.json`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        if (agencyResp.ok) {
-          const clients = await agencyResp.json();
-          if (Array.isArray(clients) && clients.length > 0) {
-            accountParam = String(clients[0].id);
-            console.log(`[video upload] Agency token, using client account=${accountParam}`);
-          }
+        if (userResp.ok) {
+          const userData = await userResp.json();
+          accountParam = String(userData.id);
+          console.log(`[video upload] Got account from user.json: ${accountParam}`);
         }
-
-        // Check for manager access if not agency
-        if (!accountParam) {
-          const mgrResp = await fetch(`${MT_API_BASE}/api/v2/manager/clients.json`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          if (mgrResp.ok) {
-            const mgrClients = await mgrResp.json();
-            if (Array.isArray(mgrClients) && mgrClients.length > 0) {
-              accountParam = String(mgrClients[0].id);
-              console.log(`[video upload] Manager token, using client account=${accountParam}`);
-            }
-          }
-        }
-
-        if (!accountParam) {
-          console.log(`[video upload] Direct advertiser token, uploading without ?account=`);
-        }
+      } catch (e) {
+        console.log(`[video upload] Failed to get user id: ${e}`);
       }
-    } catch (e) {
-      console.log(`[video upload] Account type detection failed: ${e}`);
     }
+    console.log(`[video upload] Using ?account=${accountParam}`);
 
     // Mark as uploading and save storageId for transcription
     await ctx.runMutation(internal.videos.updateUploadStatus, {
@@ -250,10 +222,10 @@ export const uploadToVk = action({
       const filename = video?.filename || "video.mp4";
       const fileSize = video?.fileSize || 0;
 
-      // Build endpoint: v2 per official docs, ?account= only for agency/manager tokens
+      // Build endpoint: v3 (as used by VK Ads frontend), always include ?account=
       const endpoint = accountParam
-        ? `${MT_API_BASE}/api/v2/content/video.json?account=${accountParam}`
-        : `${MT_API_BASE}/api/v2/content/video.json`;
+        ? `${MT_API_BASE}/api/v3/content/video.json?account=${accountParam}`
+        : `${MT_API_BASE}/api/v3/content/video.json`;
       console.log(`[video upload] Uploading ${filename} (${(fileSize / (1024*1024)).toFixed(1)} MB) to ${endpoint}`);
 
       // Step 1: Download file from Convex storage
@@ -264,8 +236,8 @@ export const uploadToVk = action({
       const fileBlob = await fileResponse.blob();
       console.log(`[video upload] Step 1 done: ${(fileBlob.size / (1024*1024)).toFixed(1)} MB downloaded in ${Date.now() - dlStart}ms`);
 
-      // Step 2: Upload to myTarget API (v2 — per official docs)
-      console.log(`[video upload] Step 2: uploading to myTarget v2...`);
+      // Step 2: Upload to myTarget API v3 (as used by VK Ads frontend)
+      console.log(`[video upload] Step 2: uploading to myTarget v3...`);
       const ulStart = Date.now();
       const formData = new FormData();
       formData.append("file", fileBlob, filename);
@@ -303,8 +275,8 @@ export const uploadToVk = action({
       if (mediaId) {
         try {
           const verifyUrl = accountParam
-            ? `${MT_API_BASE}/api/v2/content/videos.json?_id=${mediaId}&account=${accountParam}`
-            : `${MT_API_BASE}/api/v2/content/videos.json?_id=${mediaId}`;
+            ? `${MT_API_BASE}/api/v3/content/videos.json?_id=${mediaId}&account=${accountParam}`
+            : `${MT_API_BASE}/api/v3/content/videos.json?_id=${mediaId}`;
           const verifyResp = await fetch(verifyUrl, {
             headers: { Authorization: `Bearer ${accessToken}` },
           });
