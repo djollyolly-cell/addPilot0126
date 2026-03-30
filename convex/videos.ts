@@ -863,25 +863,33 @@ export const discoverAdvertiserId = action({
         } catch (e) { results[`v3_videos_account_mtAdv_${mtAdvertiserId}`] = { error: String(e) }; }
       }
 
-      // 8. Try singular form and different path variations
-      const pathTests = [
-        "api/v2/content/video.json",
-        "api/v3/content/video.json",
-        "api/v2/content/videos.json",
-        "api/v3/content/videos.json",
-        "api/v2/content/pad/videos.json",
-        "api/v2/media.json",
-        "api/v3/media.json",
-      ];
-      for (const p of pathTests) {
-        try {
-          const r = await fetch(`https://target.my.com/${p}?limit=3`, {
-            headers: { Authorization: `Bearer ${mtToken}` },
-          });
-          const txt = await r.text();
-          results[`GET_${p}`] = { status: r.status, body: txt.substring(0, 300) };
-        } catch (e) { results[`GET_${p}`] = { error: String(e) }; }
-      }
+      // 8. Try VK API ads.getVideoUploadUrl using myTarget token
+      try {
+        const r = await fetch("https://api.vk.com/method/ads.getVideoUploadUrl?v=5.131", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `access_token=${mtToken}`,
+        });
+        results["vk_getVideoUploadUrl_mtToken"] = await r.json();
+      } catch (e) { results["vk_getVideoUploadUrl_mtToken"] = { error: String(e) }; }
+
+      // 9. Try VK API ads.getAccounts using myTarget token
+      try {
+        const r = await fetch("https://api.vk.com/method/ads.getAccounts?v=5.131", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `access_token=${mtToken}`,
+        });
+        results["vk_getAccounts_mtToken"] = await r.json();
+      } catch (e) { results["vk_getAccounts_mtToken"] = { error: String(e) }; }
+
+      // 10. Try target.vk.ru instead of target.my.com for content upload
+      try {
+        const r = await fetch("https://target.vk.ru/api/v3/content/videos.json?limit=3", {
+          headers: { Authorization: `Bearer ${mtToken}` },
+        });
+        results["target_vk_ru_videos"] = { status: r.status, body: (await r.text()).substring(0, 300) };
+      } catch (e) { results["target_vk_ru_videos"] = { error: String(e) }; }
     }
 
     // VK API ads.getAccounts
