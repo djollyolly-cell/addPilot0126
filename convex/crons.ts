@@ -73,4 +73,11 @@ crons.interval(
   internal.creativeAnalytics.checkNewCreatives
 );
 
+// AI Cabinet: analyze campaigns and generate recommendations every 6 hours
+crons.interval(
+  "ai-recommendations",
+  { hours: 6 },
+  internal.aiRecommendations.checkAllCampaigns
+);
+
 export default crons;

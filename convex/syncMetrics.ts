@@ -270,17 +270,149 @@ export const syncAll = internalAction({
         error instanceof Error ? error.message : error
       );
     }
+
+    // Poll moderation status for AI Cabinet banners
+    try {
+      await ctx.runAction(internal.syncMetrics.pollAiBannerModeration, {});
+    } catch (error) {
+      console.error(
+        "[syncMetrics] Error polling AI banner moderation:",
+        error instanceof Error ? error.message : error
+      );
+    }
   },
 });
 
 // Internal query — list all active ad accounts (for cron)
-import { internalQuery, query } from "./_generated/server";
+import { internalQuery, internalMutation, query } from "./_generated/server";
 
 export const listActiveAccounts = internalQuery({
   args: {},
   handler: async (ctx) => {
     const accounts = await ctx.db.query("adAccounts").collect();
     return accounts.filter((a) => a.status === "active" || a.status === "error");
+  },
+});
+
+// ─── AI Banner Moderation Polling ────────────────────────────────
+
+/**
+ * Poll moderation status for all active AI campaigns' banners.
+ * Updates aiBanners moderation fields and notifies via Telegram on changes.
+ */
+export const pollAiBannerModeration = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Get all active AI campaigns with vkCampaignId
+    const campaigns = await ctx.runQuery(internal.syncMetrics.listActiveAiCampaigns);
+    if (campaigns.length === 0) return;
+
+    for (const campaign of campaigns) {
+      try {
+        // Get token for the account
+        const accessToken = await ctx.runAction(
+          internal.auth.getValidTokenForAccount,
+          { accountId: campaign.accountId }
+        );
+
+        // Fetch banners from myTarget for this campaign
+        const mtBanners = await ctx.runAction(api.vkApi.getMtBanners, {
+          accessToken,
+          campaignId: campaign.vkCampaignId!,
+        });
+
+        // Get our stored banners for this campaign
+        const ourBanners = await ctx.runQuery(internal.syncMetrics.listAiBannersForCampaign, {
+          campaignId: campaign._id,
+        });
+
+        // Match and update moderation status
+        for (const ourBanner of ourBanners) {
+          if (!ourBanner.vkBannerId) continue;
+          const mtBanner = mtBanners.find(
+            (b: { id: number }) => String(b.id) === ourBanner.vkBannerId
+          );
+          if (!mtBanner) continue;
+
+          const oldStatus = ourBanner.moderationStatus;
+          const newStatus = mtBanner.moderation_status;
+
+          if (oldStatus !== newStatus) {
+            // Update in DB
+            await ctx.runMutation(internal.syncMetrics.updateAiBannerModeration, {
+              bannerId: ourBanner._id,
+              moderationStatus: newStatus,
+              moderationReason: newStatus === "banned" ? (mtBanner as any).moderation_reason || "" : undefined,
+            });
+
+            // Notify on status changes
+            if (newStatus === "banned" || newStatus === "allowed") {
+              const user = await ctx.runQuery(internal.users.getById, { userId: campaign.userId });
+              if (user?.telegramChatId) {
+                const emoji = newStatus === "banned" ? "🚫" : "✅";
+                const statusText = newStatus === "banned" ? "отклонён" : "одобрен";
+                const message = `${emoji} <b>AI Кабинет</b>\n\nБаннер "${ourBanner.title}" — ${statusText}\nКампания: ${campaign.name}${
+                  newStatus === "banned" && (mtBanner as any).moderation_reason
+                    ? `\nПричина: ${(mtBanner as any).moderation_reason}`
+                    : ""
+                }`;
+                await ctx.runAction(internal.telegram.sendMessage, {
+                  chatId: user.telegramChatId,
+                  text: message,
+                });
+              }
+            }
+          }
+        }
+      } catch (error) {
+        console.error(
+          `[pollModeration] Error for campaign ${campaign._id}:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+  },
+});
+
+/** List active AI campaigns that have been launched to myTarget */
+export const listActiveAiCampaigns = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const [active, creating] = await Promise.all([
+      ctx.db.query("aiCampaigns").withIndex("by_status", (q) => q.eq("status", "active")).collect(),
+      ctx.db.query("aiCampaigns").withIndex("by_status", (q) => q.eq("status", "creating")).collect(),
+    ]);
+    return [...active, ...creating].filter((c) => c.vkCampaignId);
+  },
+});
+
+/** List AI banners for a campaign */
+export const listAiBannersForCampaign = internalQuery({
+  args: { campaignId: v.id("aiCampaigns") },
+  handler: async (ctx, args) => {
+    return ctx.db
+      .query("aiBanners")
+      .withIndex("by_campaignId", (q) => q.eq("campaignId", args.campaignId))
+      .collect();
+  },
+});
+
+/** Update AI banner moderation status */
+export const updateAiBannerModeration = internalMutation({
+  args: {
+    bannerId: v.id("aiBanners"),
+    moderationStatus: v.string(),
+    moderationReason: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const updates: Record<string, unknown> = {
+      moderationStatus: args.moderationStatus,
+      updatedAt: Date.now(),
+    };
+    if (args.moderationReason !== undefined) {
+      updates.moderationReason = args.moderationReason;
+    }
+    await ctx.db.patch(args.bannerId, updates);
   },
 });
 

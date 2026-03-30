@@ -14,12 +14,14 @@ import {
   Shield,
   Sparkles,
   Film,
+  Wand2,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 const navigation = [
   { name: 'Дашборд', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Кабинеты', href: '/accounts', icon: Building2 },
+  { name: 'AI Кабинет', href: '/ai-cabinet', icon: Wand2 },
   { name: 'Правила', href: '/rules', icon: ListChecks },
   { name: 'Отчёты', href: '/reports', icon: FileBarChart },
   { name: 'Креативы', href: '/creatives', icon: Sparkles },

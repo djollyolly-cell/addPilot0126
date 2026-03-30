@@ -438,6 +438,80 @@ export default defineSchema({
     .index("by_videoId", ["videoId"])
     .index("by_accountId_date", ["accountId", "date"]),
 
+  // AI Cabinet: campaigns created via AI
+  aiCampaigns: defineTable({
+    userId: v.id("users"),
+    accountId: v.id("adAccounts"),
+    name: v.string(),
+    businessDirection: v.string(),
+    objective: v.string(), // traffic | social | messages | video_views | engagement
+    targetUrl: v.string(),
+    packageId: v.optional(v.number()),
+    regions: v.array(v.number()),
+    ageFrom: v.number(),
+    ageTo: v.number(),
+    sex: v.string(), // "MF" | "M" | "F"
+    dailyBudget: v.number(),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("creating"),
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("error")
+    ),
+    vkCampaignId: v.optional(v.string()),
+    lastSyncAt: v.optional(v.number()),
+    errorMessage: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_accountId", ["accountId"])
+    .index("by_status", ["status"]),
+
+  // AI Cabinet: banners (ads) within AI campaigns
+  aiBanners: defineTable({
+    campaignId: v.id("aiCampaigns"),
+    title: v.string(),       // ≤25 chars
+    text: v.string(),        // ≤90 chars
+    imageStorageId: v.optional(v.id("_storage")),     // 600×600
+    wideImageStorageId: v.optional(v.id("_storage")), // 1080×607
+    iconStorageId: v.optional(v.id("_storage")),      // 256×256
+    vkContentIds: v.optional(v.object({
+      image600: v.optional(v.number()),
+      image1080: v.optional(v.number()),
+      icon: v.optional(v.number()),
+    })),
+    isSelected: v.boolean(),
+    vkBannerId: v.optional(v.string()),
+    moderationStatus: v.optional(v.string()), // new | changed | delayed | allowed | banned
+    moderationReason: v.optional(v.string()),
+    status: v.union(
+      v.literal("draft"),
+      v.literal("active"),
+      v.literal("paused")
+    ),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_campaignId", ["campaignId"]),
+
+  // AI Cabinet: recommendations
+  aiRecommendations: defineTable({
+    campaignId: v.id("aiCampaigns"),
+    type: v.string(), // increase_budget | decrease_budget | pause_banner | expand_geo | regenerate
+    message: v.string(),
+    actionData: v.optional(v.any()),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("applied"),
+      v.literal("rejected")
+    ),
+    createdAt: v.number(),
+  })
+    .index("by_campaignId", ["campaignId"])
+    .index("by_status", ["status"]),
+
   // Audit log for credential changes (clientId, clientSecret, tokens)
   credentialHistory: defineTable({
     accountId: v.id("adAccounts"),

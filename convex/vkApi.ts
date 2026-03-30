@@ -203,6 +203,78 @@ async function callMtApi<T>(
   throw lastError || new Error("VK Ads API request failed after retries");
 }
 
+// POST helper for myTarget API v2 (create/update resources)
+async function postMtApi<T>(
+  endpoint: string,
+  accessToken: string,
+  body: unknown,
+  method: "POST" | "DELETE" = "POST"
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < MT_MAX_RETRIES; attempt++) {
+    const url = `${MT_API_BASE}/api/v2/${endpoint}`;
+
+    const response = await fetch(url, {
+      method,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (response.status === 429 && attempt < MT_MAX_RETRIES - 1) {
+      await sleep(RETRY_DELAY_MS * (attempt + 1));
+      continue;
+    }
+
+    if (response.status === 401) {
+      throw new Error("TOKEN_EXPIRED");
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      lastError = new Error(`VK Ads API Error ${response.status}: ${text}`);
+      throw lastError;
+    }
+
+    return response.json();
+  }
+
+  throw lastError || new Error("VK Ads API POST request failed after retries");
+}
+
+// Upload file to myTarget content storage (images, videos)
+async function uploadMtContent(
+  endpoint: string,
+  accessToken: string,
+  fileData: ArrayBuffer,
+  filename: string,
+  width?: number,
+  height?: number,
+): Promise<{ id: number; variants?: Record<string, unknown> }> {
+  const formData = new FormData();
+  formData.append("file", new Blob([fileData]), filename);
+  if (width) formData.append("width", String(width));
+  if (height) formData.append("height", String(height));
+
+  const url = `${MT_API_BASE}/api/v2/${endpoint}`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    body: formData,
+  });
+
+  if (response.status === 401) throw new Error("TOKEN_EXPIRED");
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`VK Ads upload error ${response.status}: ${text}`);
+  }
+
+  return response.json();
+}
+
 // Get campaigns via myTarget API v2
 export const getMtCampaigns = action({
   args: {
@@ -710,5 +782,152 @@ export const probeVkCampaignEndpoints = action({
     }
 
     return results;
+  },
+});
+
+// ─── AI CABINET: Campaign & Banner CRUD ──────────────────────────
+
+export interface MtPackage {
+  id: number;
+  name: string;
+  description?: string;
+  status: string;
+  price_per_show?: string;
+  price_per_click?: string;
+  banner_format?: unknown;
+  targetings?: unknown;
+}
+
+export interface MtRegion {
+  id: number;
+  name: string;
+  level?: number;
+  type?: string;
+  children?: MtRegion[];
+}
+
+// Get available ad packages (formats/objectives)
+export const getMtPackages = action({
+  args: { accessToken: v.string() },
+  handler: async (_, args): Promise<MtPackage[]> => {
+    const data = await callMtApi<{ items: MtPackage[]; count: number }>(
+      "packages.json",
+      args.accessToken,
+      { limit: "100" }
+    );
+    return data.items || [];
+  },
+});
+
+// Get regions tree for geo targeting
+export const getMtRegions = action({
+  args: { accessToken: v.string() },
+  handler: async (_, args): Promise<MtRegion[]> => {
+    return callMtApi<MtRegion[]>("regions.json", args.accessToken);
+  },
+});
+
+// Create a campaign in myTarget
+export const createMtCampaign = action({
+  args: {
+    accessToken: v.string(),
+    name: v.string(),
+    packageId: v.number(),
+    targetings: v.any(),
+    dailyBudget: v.string(),
+    url: v.optional(v.string()),
+  },
+  handler: async (_, args) => {
+    const body: Record<string, unknown> = {
+      name: args.name,
+      package: { id: args.packageId },
+      targetings: args.targetings,
+      budget_limit_day: args.dailyBudget,
+      mixing: "recommended",
+      autobidding_mode: "second_price_mean",
+    };
+    if (args.url) body.url = args.url;
+
+    return postMtApi<MtCampaign>("campaigns.json", args.accessToken, body);
+  },
+});
+
+// Create a banner (ad) in a campaign
+export const createMtBanner = action({
+  args: {
+    accessToken: v.string(),
+    campaignId: v.number(),
+    textblocks: v.any(),
+    content: v.any(),
+    url: v.string(),
+  },
+  handler: async (_, args) => {
+    const body = {
+      campaign_id: args.campaignId,
+      textblocks: args.textblocks,
+      content: args.content,
+      url: args.url,
+    };
+    return postMtApi<MtBanner>("banners.json", args.accessToken, body);
+  },
+});
+
+// Update campaign (status, budget, targetings)
+export const updateMtCampaign = action({
+  args: {
+    accessToken: v.string(),
+    campaignId: v.number(),
+    data: v.any(),
+  },
+  handler: async (_, args) => {
+    return postMtApi<MtCampaign>(
+      `campaigns/${args.campaignId}.json`,
+      args.accessToken,
+      args.data
+    );
+  },
+});
+
+// Update banner (status, content, textblocks)
+export const updateMtBanner = action({
+  args: {
+    accessToken: v.string(),
+    bannerId: v.number(),
+    data: v.any(),
+  },
+  handler: async (_, args) => {
+    return postMtApi<MtBanner>(
+      `banners/${args.bannerId}.json`,
+      args.accessToken,
+      args.data
+    );
+  },
+});
+
+// Upload image to myTarget content storage
+export const uploadMtImage = action({
+  args: {
+    accessToken: v.string(),
+    imageData: v.string(), // base64 encoded
+    filename: v.string(),
+    width: v.number(),
+    height: v.number(),
+  },
+  handler: async (_, args) => {
+    // Decode base64 to ArrayBuffer
+    const binaryStr = atob(args.imageData);
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+
+    return uploadMtContent(
+      "content/static.json",
+      args.accessToken,
+      bytes.buffer,
+      args.filename,
+      args.width,
+      args.height
+    );
   },
 });

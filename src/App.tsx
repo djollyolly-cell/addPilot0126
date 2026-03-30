@@ -22,6 +22,9 @@ const TermsPage = lazy(() => import('./pages/TermsPage').then(m => ({ default: m
 const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
 const CreativesPage = lazy(() => import('./pages/CreativesPage').then(m => ({ default: m.CreativesPage })));
 const VideosPage = lazy(() => import('./pages/VideosPage').then(m => ({ default: m.VideosPage })));
+const AICabinetPage = lazy(() => import('./pages/AICabinetPage'));
+const AICabinetNewPage = lazy(() => import('./pages/AICabinetNewPage'));
+const AICabinetDetailPage = lazy(() => import('./pages/AICabinetDetailPage'));
 
 // Loading spinner component
 function PageLoader() {
@@ -109,6 +112,9 @@ function App() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/accounts" element={<AccountsPage />} />
+        <Route path="/ai-cabinet" element={<AICabinetPage />} />
+        <Route path="/ai-cabinet/new" element={<AICabinetNewPage />} />
+        <Route path="/ai-cabinet/:id" element={<AICabinetDetailPage />} />
         <Route path="/rules" element={<RulesPage />} />
         <Route path="/reports" element={<ReportsPage />} />
         <Route path="/creatives" element={<CreativesPage />} />
