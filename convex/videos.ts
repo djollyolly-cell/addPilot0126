@@ -1031,11 +1031,15 @@ export const diagVkAdsApi = action({
     });
     const mtToken = accountInfo?.accessToken || "";
 
-    // Get VK ID token from user
-    const user = await ctx.runQuery(internal.users.getById, { userId: args.userId });
-    const vkToken = user?.vkAccessToken || user?.vkAdsAccessToken || "";
-
     const results: Record<string, string> = {};
+
+    // Get FRESH VK ID token (auto-refresh if expired)
+    let vkToken = "";
+    try {
+      vkToken = await ctx.runAction(internal.auth.getValidVkToken, { userId: args.userId });
+    } catch (e) {
+      results["vk_token_refresh"] = `FAILED: ${e}`;
+    }
     results["tokens"] = `mt=${mtToken ? "YES(" + mtToken.substring(0, 8) + "...)" : "NO"}, vk=${vkToken ? "YES(" + vkToken.substring(0, 8) + "...)" : "NO"}`;
 
     // Test function
