@@ -305,6 +305,7 @@ export const upsertFromVk = internalMutation({
     accessToken: v.string(),
     refreshToken: v.optional(v.string()),
     expiresIn: v.number(),
+    deviceId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const now = Date.now();
@@ -330,6 +331,9 @@ export const upsertFromVk = internalMutation({
       if (args.refreshToken !== undefined) {
         await ctx.db.patch(existingUser._id, { vkRefreshToken: args.refreshToken });
       }
+      if (args.deviceId !== undefined) {
+        await ctx.db.patch(existingUser._id, { vkDeviceId: args.deviceId });
+      }
       if (tokenExpiresAt !== undefined) {
         await ctx.db.patch(existingUser._id, { vkTokenExpiresAt: tokenExpiresAt });
       }
@@ -344,6 +348,7 @@ export const upsertFromVk = internalMutation({
       avatarUrl: args.avatarUrl,
       vkAccessToken: args.accessToken,
       vkRefreshToken: args.refreshToken,
+      vkDeviceId: args.deviceId,
       vkTokenExpiresAt: tokenExpiresAt,
       subscriptionTier: "freemium",
       onboardingCompleted: false,
@@ -406,6 +411,7 @@ export const getVkTokens = internalQuery({
     return {
       accessToken: user.vkAccessToken,
       refreshToken: user.vkRefreshToken,
+      deviceId: user.vkDeviceId,
       expiresAt: user.vkTokenExpiresAt,
     };
   },

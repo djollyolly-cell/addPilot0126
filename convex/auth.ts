@@ -170,6 +170,7 @@ export const exchangeCodeForToken = action({
       accessToken: accessToken,
       refreshToken: data.refresh_token,
       expiresIn: data.expires_in || 0,
+      deviceId: args.deviceId,
     });
 
     // Auto-discover VK Ads cabinet ID (advertiser ID) via ads.getAccounts
@@ -422,6 +423,7 @@ export const refreshVkToken = internalAction({
   args: {
     userId: v.id("users"),
     refreshToken: v.string(),
+    deviceId: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ accessToken: string; refreshToken?: string; expiresIn: number }> => {
     const clientId = process.env.VK_CLIENT_ID;
@@ -435,6 +437,10 @@ export const refreshVkToken = internalAction({
       refresh_token: args.refreshToken,
       client_id: clientId,
     });
+    // VK ID OAuth 2.1 requires device_id for token refresh
+    if (args.deviceId) {
+      params.set("device_id", args.deviceId);
+    }
 
     const response = await fetch(VK_ID_TOKEN_URL, {
       method: "POST",
@@ -503,6 +509,7 @@ export const getValidVkToken = internalAction({
       const refreshed = await ctx.runAction(internal.auth.refreshVkToken, {
         userId: args.userId,
         refreshToken: tokens.refreshToken,
+        deviceId: tokens.deviceId,
       });
       return refreshed.accessToken;
     } catch (err) {

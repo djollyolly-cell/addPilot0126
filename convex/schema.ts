@@ -18,6 +18,7 @@ export default defineSchema({
     createdAt: v.number(),
     vkAccessToken: v.optional(v.string()),
     vkRefreshToken: v.optional(v.string()),
+    vkDeviceId: v.optional(v.string()),
     vkTokenExpiresAt: v.optional(v.number()),
     // VK Ads API (myTarget) tokens — separate from VK ID login tokens
     vkAdsAccessToken: v.optional(v.string()),
