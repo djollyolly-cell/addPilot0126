@@ -181,7 +181,7 @@ export const analyzeWatchRates = internalAction({
 
     // Aggregate stats across all dates
     const totals = stats.reduce(
-      (acc, s) => ({
+      (acc: any, s: any) => ({
         impressions: acc.impressions + s.impressions,
         clicks: acc.clicks + s.clicks,
         spent: acc.spent + s.spent,
@@ -320,7 +320,7 @@ ${video.transcription ? `Транскрипция (первые 500 символ
       const analysis = JSON.parse(text);
 
       // Save analysis to the latest creativeStats record
-      const latestStat = stats.sort((a, b) => b.createdAt - a.createdAt)[0];
+      const latestStat = stats.sort((a: any, b: any) => b.createdAt - a.createdAt)[0];
       await ctx.runMutation(internal.creativeAnalytics.saveWatchAnalysis, {
         creativeStatsId: latestStat._id,
         aiWatchScore: analysis.score,

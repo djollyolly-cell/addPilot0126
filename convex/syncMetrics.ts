@@ -72,7 +72,7 @@ export const syncAll = internalAction({
                 slot.type === "video" ||
                 (slot.variants &&
                   Object.values(slot.variants).some(
-                    (variant) => variant.media_type === "video"
+                    (variant: any) => variant.media_type === "video"
                   ));
               if (isVideo && slot.id) {
                 bannerVideoMap.push({
@@ -176,11 +176,11 @@ export const syncAll = internalAction({
         // Collect video stats for linked creatives
         try {
           const linkedVideos = await ctx.runQuery(internal.videos.listLinkedVideos, {});
-          const accountVideos = linkedVideos.filter((vid) => vid.accountId === account._id);
+          const accountVideos = linkedVideos.filter((vid: any) => vid.accountId === account._id);
 
           if (accountVideos.length > 0) {
             const videoAdIds = accountVideos
-              .map((vid) => vid.vkAdId)
+              .map((vid: any) => vid.vkAdId)
               .filter(Boolean)
               .join(",");
 
@@ -194,7 +194,7 @@ export const syncAll = internalAction({
 
               for (const item of videoStats) {
                 const adId = String(item.id);
-                const linkedVideo = accountVideos.find((vid) => vid.vkAdId === adId);
+                const linkedVideo = accountVideos.find((vid: any) => vid.vkAdId === adId);
 
                 for (const row of item.rows) {
                   const base = row.base;

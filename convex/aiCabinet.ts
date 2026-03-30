@@ -321,7 +321,7 @@ export const setBannerVkIds = internalMutation({
 // Fetch regions from myTarget API (token resolved server-side)
 export const fetchRegions = action({
   args: { accountId: v.id("adAccounts") },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<unknown> => {
     const accessToken = await ctx.runAction(
       internal.auth.getValidTokenForAccount,
       { accountId: args.accountId }
