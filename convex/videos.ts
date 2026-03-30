@@ -863,14 +863,25 @@ export const discoverAdvertiserId = action({
         } catch (e) { results[`v3_videos_account_mtAdv_${mtAdvertiserId}`] = { error: String(e) }; }
       }
 
-      // 8. VK Ads API — ads.getUploadURL for video (to understand what VK Ads expects)
-      // Try v2 content/pad/videos.json (some docs reference this)
-      try {
-        const r = await fetch("https://target.my.com/api/v2/content/pad/videos.json?limit=5", {
-          headers: { Authorization: `Bearer ${mtToken}` },
-        });
-        results["v2_pad_videos"] = { status: r.status, body: (await r.text()).substring(0, 500) };
-      } catch (e) { results["v2_pad_videos"] = { error: String(e) }; }
+      // 8. Try singular form and different path variations
+      const pathTests = [
+        "api/v2/content/video.json",
+        "api/v3/content/video.json",
+        "api/v2/content/videos.json",
+        "api/v3/content/videos.json",
+        "api/v2/content/pad/videos.json",
+        "api/v2/media.json",
+        "api/v3/media.json",
+      ];
+      for (const p of pathTests) {
+        try {
+          const r = await fetch(`https://target.my.com/${p}?limit=3`, {
+            headers: { Authorization: `Bearer ${mtToken}` },
+          });
+          const txt = await r.text();
+          results[`GET_${p}`] = { status: r.status, body: txt.substring(0, 300) };
+        } catch (e) { results[`GET_${p}`] = { error: String(e) }; }
+      }
     }
 
     // VK API ads.getAccounts
