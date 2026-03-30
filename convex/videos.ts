@@ -151,15 +151,6 @@ export const getAccountToken = internalQuery({
   },
 });
 
-// Get account with userId for cross-referencing
-export const getAccountForUser = internalQuery({
-  args: { accountId: v.id("adAccounts") },
-  handler: async (ctx, args) => {
-    const account = await ctx.db.get(args.accountId);
-    if (!account) return null;
-    return { userId: account.userId };
-  },
-});
 
 // Get account credentials (clientId, clientSecret) for VK Ads API auth
 export const getAccountCredentials = internalQuery({
@@ -281,28 +272,7 @@ export const uploadToVk = action({
         vkMediaUrl: uploadData.url || uploadData.preview_url || "",
       });
 
-      // Post-upload verification: check that the video appears in the content listing
-      if (mediaId) {
-        try {
-          const verifyUrl = accountParam
-            ? `${MT_API_BASE}/api/v3/content/videos.json?_id=${mediaId}&account=${accountParam}`
-            : `${MT_API_BASE}/api/v3/content/videos.json?_id=${mediaId}`;
-          const verifyResp = await fetch(verifyUrl, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          if (verifyResp.ok) {
-            const verifyData = await verifyResp.json();
-            const found = verifyData.items?.some((v: { id: number }) => String(v.id) === mediaId);
-            console.log(`[video upload] Verification: video ${mediaId} ${found ? "FOUND" : "NOT FOUND"} in content listing`);
-          } else {
-            console.log(`[video upload] Verification request failed: ${verifyResp.status}`);
-          }
-        } catch (e) {
-          console.log(`[video upload] Verification check failed: ${e}`);
-        }
-      }
-
-      // Mark as ready
+      // Mark as ready (mediaId from upload response is valid for use in ad creation via myTarget API)
       await ctx.runMutation(internal.videos.updateUploadStatus, {
         id: args.videoId,
         uploadStatus: "ready",
@@ -1031,162 +1001,5 @@ export const saveAnalysis = internalMutation({
   },
 });
 
-// TEMP: Diagnose VK token refresh + test video upload APIs
-export const diagVkAdsApi = action({
-  args: { accountId: v.id("adAccounts"), userId: v.id("users") },
-  handler: async (ctx, args) => {
-    const results: Record<string, any> = {};
 
-    // 1. Check what tokens are in DB
-    const vkTokens = await ctx.runQuery(internal.users.getVkTokens, { userId: args.userId });
-    results["db_tokens"] = {
-      hasAccessToken: !!vkTokens?.accessToken,
-      hasRefreshToken: !!vkTokens?.refreshToken,
-      expiresAt: vkTokens?.expiresAt ? new Date(vkTokens.expiresAt).toISOString() : "not set",
-      isExpired: vkTokens?.expiresAt ? vkTokens.expiresAt < Date.now() : "unknown",
-      now: new Date().toISOString(),
-    };
 
-    // 2. Try getValidVkToken (auto-refresh)
-    let vkToken = "";
-    try {
-      vkToken = await ctx.runAction(internal.auth.getValidVkToken, { userId: args.userId });
-      results["getValidVkToken"] = `OK, token=${vkToken.substring(0, 10)}...`;
-    } catch (e) {
-      results["getValidVkToken"] = `FAILED: ${e instanceof Error ? e.message : e}`;
-
-      // 3. If auto-refresh failed, try manual refresh to see exact VK error
-      if (vkTokens?.refreshToken) {
-        const clientId = process.env.VK_CLIENT_ID;
-        results["VK_CLIENT_ID"] = clientId ? `SET (${clientId})` : "NOT SET!";
-
-        try {
-          const params = new URLSearchParams({
-            grant_type: "refresh_token",
-            refresh_token: vkTokens.refreshToken,
-            client_id: clientId || "",
-          });
-          const resp = await fetch("https://id.vk.com/oauth2/auth", {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: params.toString(),
-          });
-          const body = await resp.text();
-          results["manual_refresh"] = {
-            status: resp.status,
-            body: body.substring(0, 500),
-          };
-          // If refresh succeeded, use the new token
-          try {
-            const data = JSON.parse(body);
-            if (data.access_token) {
-              vkToken = data.access_token;
-              results["manual_refresh_result"] = "GOT NEW TOKEN!";
-              // Save it
-              await ctx.runMutation(internal.users.updateVkTokens, {
-                userId: args.userId,
-                accessToken: data.access_token,
-                refreshToken: data.refresh_token,
-                expiresIn: data.expires_in || 0,
-              });
-            }
-          } catch { /* parse failed, already logged body */ }
-        } catch (e) {
-          results["manual_refresh"] = `fetch error: ${e}`;
-        }
-      } else {
-        results["manual_refresh"] = "SKIPPED: no refresh_token in DB";
-      }
-
-      // 4. Try using the expired access token directly anyway
-      if (vkTokens?.accessToken) {
-        vkToken = vkTokens.accessToken;
-        results["using_expired_token"] = true;
-      }
-    }
-
-    // Get myTarget token
-    const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, { accountId: args.accountId });
-    const mtToken = accountInfo?.accessToken || "";
-
-    // 5. Test VK API methods with whatever VK token we have
-    if (vkToken) {
-      // ads.getAccounts
-      try {
-        const r = await fetch(`https://api.vk.com/method/ads.getAccounts?v=5.131&access_token=${vkToken}`);
-        const t = await r.text();
-        results["vk_getAccounts"] = JSON.parse(t);
-      } catch (e) { results["vk_getAccounts"] = `err: ${e}`; }
-
-      // ads.getVideoUploadURL
-      try {
-        const r = await fetch(`https://api.vk.com/method/ads.getVideoUploadURL?v=5.131&access_token=${vkToken}`);
-        const t = await r.text();
-        results["vk_getVideoUploadURL"] = JSON.parse(t);
-      } catch (e) { results["vk_getVideoUploadURL"] = `err: ${e}`; }
-
-      // video.save
-      try {
-        const r = await fetch(`https://api.vk.com/method/video.save?v=5.131&access_token=${vkToken}&name=test_diag&is_private=1`);
-        const t = await r.text();
-        results["vk_videoSave"] = JSON.parse(t);
-      } catch (e) { results["vk_videoSave"] = `err: ${e}`; }
-    } else {
-      results["vk_api_tests"] = "SKIPPED: no VK token available";
-    }
-
-    // 6. Test myTarget content listing (should work with mtToken)
-    if (mtToken) {
-      try {
-        const r = await fetch("https://target.my.com/api/v2/content/videos.json?limit=3", {
-          headers: { Authorization: `Bearer ${mtToken}` },
-        });
-        const t = await r.text();
-        results["mt_videos_listing"] = { status: r.status, body: t.substring(0, 300) };
-      } catch (e) { results["mt_videos_listing"] = `err: ${e}`; }
-    }
-
-    console.log("[diagVkAdsApi] Results:", JSON.stringify(results, null, 2));
-    return results;
-  },
-});
-
-// TEMP: Test myTarget content listing to verify uploaded videos are accessible
-export const testRealUpload = action({
-  args: { accountId: v.id("adAccounts") },
-  handler: async (ctx, args) => {
-    const results: Record<string, unknown> = {};
-
-    const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, { accountId: args.accountId });
-    const mtToken = accountInfo?.accessToken || "";
-    if (!mtToken) { results["error"] = "no myTarget token"; return results; }
-
-    const accountParam = accountInfo?.mtAdvertiserId || "292358";
-
-    // myTarget API v2: GET /api/v2/content/video.json = list uploaded videos
-    // This is the standard REST pattern: same URL for GET(list) and POST(create)
-    const endpoints = [
-      { name: "GET_v2_video_singular", url: `https://target.my.com/api/v2/content/video.json` },
-      { name: "GET_v2_video_with_account", url: `https://target.my.com/api/v2/content/video.json?account=${accountParam}` },
-      { name: "GET_v2_videos_plural", url: `https://target.my.com/api/v2/content/videos.json` },
-      { name: "GET_v2_videos_with_account", url: `https://target.my.com/api/v2/content/videos.json?account=${accountParam}` },
-      { name: "GET_v3_video_singular", url: `https://target.my.com/api/v3/content/video.json` },
-      { name: "GET_v3_videos_plural", url: `https://target.my.com/api/v3/content/videos.json` },
-    ];
-
-    for (const ep of endpoints) {
-      try {
-        const resp = await fetch(ep.url, {
-          headers: { Authorization: `Bearer ${mtToken}` },
-        });
-        const body = await resp.text();
-        results[ep.name] = { status: resp.status, body: body.substring(0, 500) };
-      } catch (e) {
-        results[ep.name] = `err: ${e}`;
-      }
-    }
-
-    console.log("[testContentListing] Results:", JSON.stringify(results, null, 2));
-    return results;
-  },
-});
