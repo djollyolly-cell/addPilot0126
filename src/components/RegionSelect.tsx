@@ -22,6 +22,7 @@ interface RegionSelectProps {
 
 /** Flatten the regions tree into a searchable list */
 function flattenRegions(regions: Region[], depth = 0): { id: number; name: string; depth: number }[] {
+  if (!Array.isArray(regions)) return [];
   const result: { id: number; name: string; depth: number }[] = [];
   for (const r of regions) {
     result.push({ id: r.id, name: r.name, depth });
@@ -47,7 +48,9 @@ export function RegionSelect({ accountId, value, onChange }: RegionSelectProps) 
       setError(null);
       try {
         const data = await fetchRegions({ accountId: accountId as Id<"adAccounts"> });
-        if (!cancelled) setRegions(data);
+        // API may return array directly or { items: [...] } wrapper
+        const regionList = Array.isArray(data) ? data : (data as any)?.items || [];
+        if (!cancelled) setRegions(regionList);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Ошибка загрузки регионов');
       } finally {
