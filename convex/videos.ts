@@ -1075,11 +1075,36 @@ export const diagVkAdsApi = action({
       await test("rest_vk", "https://ads.vk.com/api/v2/content/videos.json?account=292358", vkToken);
     }
 
-    // Test VK ID exchange_token flow (get ads.vk.com auth)
+    // Test VK API ads.* methods (api.vk.com uses VK ID token with ads scope)
     if (vkToken) {
-      await test("vk_exchange", `https://ads.vk.com/api/v2/auth/exchange?access_token=${vkToken}`, vkToken);
-      await test("vk_oauth_exchange", `https://id.vk.com/oauth2/exchange_token`, vkToken, "POST",
-        JSON.stringify({ access_token: vkToken, client_id: "52093798" }));
+      // ads.getAccounts — should work (already used in auth flow)
+      try {
+        const r = await fetch(`https://api.vk.com/method/ads.getAccounts?v=5.131&access_token=${vkToken}`);
+        const t = await r.text();
+        // Remove token from output
+        results["vk_api_getAccounts"] = `${r.status}: ${t.substring(0, 200).replace(/access_token=[^&"]+/g, 'access_token=REDACTED')}`;
+      } catch (e) { results["vk_api_getAccounts"] = `err: ${e}`; }
+
+      // ads.getVideoUploadURL — get URL for uploading video to VK Ads
+      try {
+        const r = await fetch(`https://api.vk.com/method/ads.getVideoUploadURL?v=5.131&access_token=${vkToken}`);
+        const t = await r.text();
+        results["vk_api_getVideoUploadURL"] = `${r.status}: ${t.substring(0, 200).replace(/access_token=[^&"]+/g, 'access_token=REDACTED')}`;
+      } catch (e) { results["vk_api_getVideoUploadURL"] = `err: ${e}`; }
+
+      // video.save — VK video platform upload
+      try {
+        const r = await fetch(`https://api.vk.com/method/video.save?v=5.131&access_token=${vkToken}&name=test_upload&is_private=1`);
+        const t = await r.text();
+        results["vk_api_videoSave"] = `${r.status}: ${t.substring(0, 200).replace(/access_token=[^&"]+/g, 'access_token=REDACTED')}`;
+      } catch (e) { results["vk_api_videoSave"] = `err: ${e}`; }
+
+      // ads.getUploadURL — might exist for creatives
+      try {
+        const r = await fetch(`https://api.vk.com/method/ads.getUploadURL?v=5.131&ad_format=9&icon=1&access_token=${vkToken}`);
+        const t = await r.text();
+        results["vk_api_getUploadURL"] = `${r.status}: ${t.substring(0, 200).replace(/access_token=[^&"]+/g, 'access_token=REDACTED')}`;
+      } catch (e) { results["vk_api_getUploadURL"] = `err: ${e}`; }
     }
 
     console.log("[diagVkAdsApi] Results:", JSON.stringify(results, null, 2));
