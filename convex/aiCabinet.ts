@@ -379,7 +379,7 @@ export const launchCampaign = action({
   args: {
     campaignId: v.id("aiCampaigns"),
   },
-  handler: async (ctx, args): Promise<void> => {
+  handler: async (ctx, args): Promise<{ success: boolean; vkCampaignId: string }> => {
     // 1. Get campaign data
     const campaign = await ctx.runQuery(api.aiCabinet.getCampaign, { id: args.campaignId });
     if (!campaign) throw new Error("Кампания не найдена");
