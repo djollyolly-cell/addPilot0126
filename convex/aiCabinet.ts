@@ -379,7 +379,7 @@ export const launchCampaign = action({
   args: {
     campaignId: v.id("aiCampaigns"),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<void> => {
     // 1. Get campaign data
     const campaign = await ctx.runQuery(api.aiCabinet.getCampaign, { id: args.campaignId });
     if (!campaign) throw new Error("Кампания не найдена");
@@ -467,7 +467,7 @@ export const launchCampaign = action({
         age: ageArray,
       };
 
-      const vkCampaign = await ctx.runAction(api.vkApi.createMtCampaign, {
+      const vkCampaign: any = await ctx.runAction(api.vkApi.createMtCampaign, {
         accessToken,
         name: campaign.name,
         packageId: campaign.packageId || 960,
