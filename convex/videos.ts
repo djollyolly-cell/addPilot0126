@@ -1151,128 +1151,42 @@ export const diagVkAdsApi = action({
   },
 });
 
-// TEMP: Upload a small real MP4 to myTarget to test if video appears in Медиатека
+// TEMP: Test myTarget content listing to verify uploaded videos are accessible
 export const testRealUpload = action({
   args: { accountId: v.id("adAccounts") },
   handler: async (ctx, args) => {
-    const results: Record<string, any> = {};
+    const results: Record<string, unknown> = {};
 
-    // Get myTarget token from account
     const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, { accountId: args.accountId });
     const mtToken = accountInfo?.accessToken || "";
-    results["mtToken"] = mtToken ? "yes" : "no";
-
-    // Get account from DB to find userId
-    const account = await ctx.runQuery(internal.videos.getAccountForUser, { accountId: args.accountId });
-    if (!account) { results["error"] = "account not found"; return results; }
-
-    // Get VK ID token
-    let vkToken = "";
-    try {
-      vkToken = await ctx.runAction(internal.auth.getValidVkToken, { userId: account.userId });
-      results["vkToken"] = vkToken ? `yes (${vkToken.substring(0, 15)}...)` : "no";
-    } catch (e) {
-      results["vkToken_error"] = String(e);
-    }
+    if (!mtToken) { results["error"] = "no myTarget token"; return results; }
 
     const accountParam = accountInfo?.mtAdvertiserId || "292358";
-    results["accountParam"] = accountParam;
 
-    // Test 1: ads.vk.com GraphQL with VK ID token
-    if (vkToken) {
-      // Try querying media library via GraphQL
-      const graphqlEndpoints = [
-        "https://ads.vk.com/graphql",
-        "https://ads.vk.com/api/graphql",
-      ];
-      for (const gqlUrl of graphqlEndpoints) {
-        try {
-          const resp = await fetch(gqlUrl, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${vkToken}`,
-            },
-            body: JSON.stringify({
-              query: `query { mediaLibrary { items { id type } } }`,
-              variables: {},
-            }),
-          });
-          const body = await resp.text();
-          results[`graphql_bearer_${gqlUrl.split('/').pop()}`] = { status: resp.status, body: body.substring(0, 300) };
-        } catch (e) {
-          results[`graphql_bearer_err`] = String(e);
-        }
-      }
-    }
+    // myTarget API v2: GET /api/v2/content/video.json = list uploaded videos
+    // This is the standard REST pattern: same URL for GET(list) and POST(create)
+    const endpoints = [
+      { name: "GET_v2_video_singular", url: `https://target.my.com/api/v2/content/video.json` },
+      { name: "GET_v2_video_with_account", url: `https://target.my.com/api/v2/content/video.json?account=${accountParam}` },
+      { name: "GET_v2_videos_plural", url: `https://target.my.com/api/v2/content/videos.json` },
+      { name: "GET_v2_videos_with_account", url: `https://target.my.com/api/v2/content/videos.json?account=${accountParam}` },
+      { name: "GET_v3_video_singular", url: `https://target.my.com/api/v3/content/video.json` },
+      { name: "GET_v3_videos_plural", url: `https://target.my.com/api/v3/content/videos.json` },
+    ];
 
-    // Test 2: ads.vk.com REST API endpoints with VK token
-    if (vkToken) {
-      const restEndpoints = [
-        { name: "ads_vk_api_v2_media", url: `https://ads.vk.com/api/v2/media.json?account=${accountParam}` },
-        { name: "ads_vk_api_v2_content_videos", url: `https://ads.vk.com/api/v2/content/videos.json?account=${accountParam}` },
-        { name: "ads_vk_proxy_v2_content_videos", url: `https://ads.vk.com/proxy/mt/v2/content/videos.json?account=${accountParam}` },
-        { name: "ads_vk_proxy_v3_content_videos", url: `https://ads.vk.com/proxy/mt/v3/content/videos.json?account=${accountParam}` },
-      ];
-      for (const ep of restEndpoints) {
-        try {
-          const resp = await fetch(ep.url, {
-            headers: { "Authorization": `Bearer ${vkToken}` },
-          });
-          const body = await resp.text();
-          results[ep.name] = { status: resp.status, body: body.substring(0, 200) };
-        } catch (e) {
-          results[ep.name] = `err: ${e}`;
-        }
-      }
-    }
-
-    // Test 3: myTarget content listing - try many endpoint variations
-    if (mtToken) {
-      // Get myTarget user ID (=VK Ads cabinet ID)
-      let mtUserId = "";
+    for (const ep of endpoints) {
       try {
-        const uResp = await fetch("https://target.my.com/api/v2/user.json", {
+        const resp = await fetch(ep.url, {
           headers: { Authorization: `Bearer ${mtToken}` },
         });
-        if (uResp.ok) {
-          const ud = await uResp.json();
-          mtUserId = String(ud.id);
-          results["mt_userId"] = mtUserId;
-        }
-      } catch {}
-
-      const mtEndpoints = [
-        // Singular vs plural
-        { name: "mt_v2_video", url: `https://target.my.com/api/v2/content/video.json` },
-        { name: "mt_v2_videos", url: `https://target.my.com/api/v2/content/videos.json` },
-        // With different account params
-        { name: "mt_v2_videos_acct292358", url: `https://target.my.com/api/v2/content/videos.json?account=${accountParam}` },
-        { name: "mt_v2_videos_acctUser", url: `https://target.my.com/api/v2/content/videos.json?account=${mtUserId}` },
-        // v3
-        { name: "mt_v3_video", url: `https://target.my.com/api/v3/content/video.json` },
-        { name: "mt_v3_videos", url: `https://target.my.com/api/v3/content/videos.json` },
-        // Other possible endpoints
-        { name: "mt_v2_pad_content", url: `https://target.my.com/api/v2/pad_content/video.json` },
-        { name: "mt_v2_creative_video", url: `https://target.my.com/api/v2/creative/video.json` },
-        // target.vk.ru domain
-        { name: "vkru_v2_videos", url: `https://target.vk.ru/api/v2/content/videos.json` },
-        { name: "vkru_v2_video", url: `https://target.vk.ru/api/v2/content/video.json` },
-      ];
-      for (const ep of mtEndpoints) {
-        try {
-          const resp = await fetch(ep.url, {
-            headers: { Authorization: `Bearer ${mtToken}` },
-          });
-          const body = await resp.text();
-          results[ep.name] = { status: resp.status, body: body.substring(0, 200) };
-        } catch (e) {
-          results[ep.name] = `err: ${e}`;
-        }
+        const body = await resp.text();
+        results[ep.name] = { status: resp.status, body: body.substring(0, 500) };
+      } catch (e) {
+        results[ep.name] = `err: ${e}`;
       }
     }
 
-    console.log("[testRealUpload] Results:", JSON.stringify(results, null, 2));
+    console.log("[testContentListing] Results:", JSON.stringify(results, null, 2));
     return results;
   },
 });
