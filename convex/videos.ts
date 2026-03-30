@@ -151,6 +151,16 @@ export const getAccountToken = internalQuery({
   },
 });
 
+// Get account with userId for cross-referencing
+export const getAccountForUser = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return null;
+    return { userId: account.userId };
+  },
+});
+
 // Get account credentials (clientId, clientSecret) for VK Ads API auth
 export const getAccountCredentials = internalQuery({
   args: { accountId: v.id("adAccounts") },
@@ -1145,65 +1155,95 @@ export const diagVkAdsApi = action({
 export const testRealUpload = action({
   args: { accountId: v.id("adAccounts") },
   handler: async (ctx, args) => {
-    const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, { accountId: args.accountId });
-    if (!accountInfo?.accessToken) throw new Error("No token");
-    const token = accountInfo.accessToken;
     const results: Record<string, any> = {};
 
-    // Get account param
-    let accountParam = accountInfo.mtAdvertiserId || null;
-    if (!accountParam) {
-      const userResp = await fetch("https://target.my.com/api/v2/user.json", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (userResp.ok) {
-        const ud = await userResp.json();
-        accountParam = String(ud.id);
-      }
+    // Get myTarget token from account
+    const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, { accountId: args.accountId });
+    const mtToken = accountInfo?.accessToken || "";
+    results["mtToken"] = mtToken ? "yes" : "no";
+
+    // Get account from DB to find userId
+    const account = await ctx.runQuery(internal.videos.getAccountForUser, { accountId: args.accountId });
+    if (!account) { results["error"] = "account not found"; return results; }
+
+    // Get VK ID token
+    let vkToken = "";
+    try {
+      vkToken = await ctx.runAction(internal.auth.getValidVkToken, { userId: account.userId });
+      results["vkToken"] = vkToken ? `yes (${vkToken.substring(0, 15)}...)` : "no";
+    } catch (e) {
+      results["vkToken_error"] = String(e);
     }
+
+    const accountParam = accountInfo?.mtAdvertiserId || "292358";
     results["accountParam"] = accountParam;
 
-    // Try to find a real video file or generate minimal valid MP4
-
-    // Step 1: Try v2 upload (official myTarget docs)
-    const endpoints = [
-      { name: "v2_no_account", url: `https://target.my.com/api/v2/content/video.json` },
-      { name: "v2_with_account", url: `https://target.my.com/api/v2/content/video.json?account=${accountParam}` },
-      { name: "v3_with_account", url: `https://target.my.com/api/v3/content/video.json?account=${accountParam}` },
-    ];
-
-    // Download a real video file from the deployed app
-    let videoBlob: Blob;
-    try {
-      const videoUrl = "https://aipilot.by/coin_video.mp4";
-      const resp = await fetch(videoUrl);
-      if (!resp.ok) throw new Error(`Failed to fetch video: ${resp.status}`);
-      videoBlob = await resp.blob();
-      const firstBytes = new Uint8Array(await videoBlob.slice(0, 20).arrayBuffer());
-      const isHtml = firstBytes[0] === 0x3C; // '<'
-      if (isHtml) throw new Error("Got HTML instead of video");
-      results["source"] = `coin_video.mp4 (${(videoBlob.size/1024).toFixed(0)}KB)`;
-    } catch (e) {
-      results["source_error"] = String(e);
-      return results;
+    // Test 1: ads.vk.com GraphQL with VK ID token
+    if (vkToken) {
+      // Try querying media library via GraphQL
+      const graphqlEndpoints = [
+        "https://ads.vk.com/graphql",
+        "https://ads.vk.com/api/graphql",
+      ];
+      for (const gqlUrl of graphqlEndpoints) {
+        try {
+          const resp = await fetch(gqlUrl, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${vkToken}`,
+            },
+            body: JSON.stringify({
+              query: `query { mediaLibrary { items { id type } } }`,
+              variables: {},
+            }),
+          });
+          const body = await resp.text();
+          results[`graphql_bearer_${gqlUrl.split('/').pop()}`] = { status: resp.status, body: body.substring(0, 300) };
+        } catch (e) {
+          results[`graphql_bearer_err`] = String(e);
+        }
+      }
     }
 
-    // Try uploading to each endpoint
-    for (const ep of endpoints) {
-      try {
-        const formData = new FormData();
-        formData.append("file", videoBlob!, "test_video.mp4");
-        formData.append("data", JSON.stringify({ width: 0, height: 0 }));
+    // Test 2: ads.vk.com REST API endpoints with VK token
+    if (vkToken) {
+      const restEndpoints = [
+        { name: "ads_vk_api_v2_media", url: `https://ads.vk.com/api/v2/media.json?account=${accountParam}` },
+        { name: "ads_vk_api_v2_content_videos", url: `https://ads.vk.com/api/v2/content/videos.json?account=${accountParam}` },
+        { name: "ads_vk_proxy_v2_content_videos", url: `https://ads.vk.com/proxy/mt/v2/content/videos.json?account=${accountParam}` },
+        { name: "ads_vk_proxy_v3_content_videos", url: `https://ads.vk.com/proxy/mt/v3/content/videos.json?account=${accountParam}` },
+      ];
+      for (const ep of restEndpoints) {
+        try {
+          const resp = await fetch(ep.url, {
+            headers: { "Authorization": `Bearer ${vkToken}` },
+          });
+          const body = await resp.text();
+          results[ep.name] = { status: resp.status, body: body.substring(0, 200) };
+        } catch (e) {
+          results[ep.name] = `err: ${e}`;
+        }
+      }
+    }
 
-        const resp = await fetch(ep.url, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${token}` },
-          body: formData,
-        });
-        const body = await resp.text();
-        results[ep.name] = { status: resp.status, body: body.substring(0, 300) };
-      } catch (e) {
-        results[ep.name] = `err: ${e}`;
+    // Test 3: myTarget content listing (existing uploads)
+    if (mtToken) {
+      const mtEndpoints = [
+        { name: "mt_v2_videos", url: `https://target.my.com/api/v2/content/videos.json?account=${accountParam}` },
+        { name: "mt_v2_videos_no_acct", url: `https://target.my.com/api/v2/content/videos.json` },
+        { name: "mt_v3_videos", url: `https://target.my.com/api/v3/content/videos.json?account=${accountParam}` },
+      ];
+      for (const ep of mtEndpoints) {
+        try {
+          const resp = await fetch(ep.url, {
+            headers: { "Authorization": `Bearer ${mtToken}` },
+          });
+          const body = await resp.text();
+          results[ep.name] = { status: resp.status, body: body.substring(0, 200) };
+        } catch (e) {
+          results[ep.name] = `err: ${e}`;
+        }
       }
     }
 
