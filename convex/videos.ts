@@ -826,31 +826,51 @@ export const discoverAdvertiserId = action({
         results["manager_clients"] = { status: r.status, body: (await r.text()).substring(0, 500) };
       } catch (e) { results["manager_clients"] = { error: String(e) }; }
 
-      // 4. List uploaded videos (no ?account=)
+      // 4. List videos v2 (no ?account=)
       try {
         const r = await fetch("https://target.my.com/api/v2/content/videos.json?limit=5", {
           headers: { Authorization: `Bearer ${mtToken}` },
         });
-        results["videos_no_account"] = { status: r.status, body: (await r.text()).substring(0, 500) };
-      } catch (e) { results["videos_no_account"] = { error: String(e) }; }
+        results["v2_videos_no_account"] = { status: r.status, body: (await r.text()).substring(0, 500) };
+      } catch (e) { results["v2_videos_no_account"] = { error: String(e) }; }
 
-      // 5. List videos WITH ?account= (use current mtAdvertiserId)
-      if (mtAdvertiserId) {
-        try {
-          const r = await fetch(`https://target.my.com/api/v2/content/videos.json?limit=5&account=${mtAdvertiserId}`, {
-            headers: { Authorization: `Bearer ${mtToken}` },
-          });
-          results[`videos_account_${mtAdvertiserId}`] = { status: r.status, body: (await r.text()).substring(0, 500) };
-        } catch (e) { results[`videos_account_${mtAdvertiserId}`] = { error: String(e) }; }
-      }
-
-      // 6. user/clients.json (v2)
+      // 5. List videos v3 (no ?account=)
       try {
-        const r = await fetch("https://target.my.com/api/v2/user/clients.json", {
+        const r = await fetch("https://target.my.com/api/v3/content/videos.json?limit=5", {
           headers: { Authorization: `Bearer ${mtToken}` },
         });
-        results["user_clients"] = { status: r.status, body: (await r.text()).substring(0, 500) };
-      } catch (e) { results["user_clients"] = { error: String(e) }; }
+        results["v3_videos_no_account"] = { status: r.status, body: (await r.text()).substring(0, 500) };
+      } catch (e) { results["v3_videos_no_account"] = { error: String(e) }; }
+
+      // 6. List videos v3 WITH ?account=myTargetUserId
+      const userIdFromJson = results["user.json"]?.id;
+      if (userIdFromJson) {
+        try {
+          const r = await fetch(`https://target.my.com/api/v3/content/videos.json?limit=5&account=${userIdFromJson}`, {
+            headers: { Authorization: `Bearer ${mtToken}` },
+          });
+          results[`v3_videos_account_userId_${userIdFromJson}`] = { status: r.status, body: (await r.text()).substring(0, 500) };
+        } catch (e) { results[`v3_videos_account_userId_${userIdFromJson}`] = { error: String(e) }; }
+      }
+
+      // 7. List videos v3 WITH ?account=mtAdvertiserId (292358)
+      if (mtAdvertiserId) {
+        try {
+          const r = await fetch(`https://target.my.com/api/v3/content/videos.json?limit=5&account=${mtAdvertiserId}`, {
+            headers: { Authorization: `Bearer ${mtToken}` },
+          });
+          results[`v3_videos_account_mtAdv_${mtAdvertiserId}`] = { status: r.status, body: (await r.text()).substring(0, 500) };
+        } catch (e) { results[`v3_videos_account_mtAdv_${mtAdvertiserId}`] = { error: String(e) }; }
+      }
+
+      // 8. VK Ads API — ads.getUploadURL for video (to understand what VK Ads expects)
+      // Try v2 content/pad/videos.json (some docs reference this)
+      try {
+        const r = await fetch("https://target.my.com/api/v2/content/pad/videos.json?limit=5", {
+          headers: { Authorization: `Bearer ${mtToken}` },
+        });
+        results["v2_pad_videos"] = { status: r.status, body: (await r.text()).substring(0, 500) };
+      } catch (e) { results["v2_pad_videos"] = { error: String(e) }; }
     }
 
     // VK API ads.getAccounts
