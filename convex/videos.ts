@@ -1227,17 +1227,42 @@ export const testRealUpload = action({
       }
     }
 
-    // Test 3: myTarget content listing (existing uploads)
+    // Test 3: myTarget content listing - try many endpoint variations
     if (mtToken) {
+      // Get myTarget user ID (=VK Ads cabinet ID)
+      let mtUserId = "";
+      try {
+        const uResp = await fetch("https://target.my.com/api/v2/user.json", {
+          headers: { Authorization: `Bearer ${mtToken}` },
+        });
+        if (uResp.ok) {
+          const ud = await uResp.json();
+          mtUserId = String(ud.id);
+          results["mt_userId"] = mtUserId;
+        }
+      } catch {}
+
       const mtEndpoints = [
-        { name: "mt_v2_videos", url: `https://target.my.com/api/v2/content/videos.json?account=${accountParam}` },
-        { name: "mt_v2_videos_no_acct", url: `https://target.my.com/api/v2/content/videos.json` },
-        { name: "mt_v3_videos", url: `https://target.my.com/api/v3/content/videos.json?account=${accountParam}` },
+        // Singular vs plural
+        { name: "mt_v2_video", url: `https://target.my.com/api/v2/content/video.json` },
+        { name: "mt_v2_videos", url: `https://target.my.com/api/v2/content/videos.json` },
+        // With different account params
+        { name: "mt_v2_videos_acct292358", url: `https://target.my.com/api/v2/content/videos.json?account=${accountParam}` },
+        { name: "mt_v2_videos_acctUser", url: `https://target.my.com/api/v2/content/videos.json?account=${mtUserId}` },
+        // v3
+        { name: "mt_v3_video", url: `https://target.my.com/api/v3/content/video.json` },
+        { name: "mt_v3_videos", url: `https://target.my.com/api/v3/content/videos.json` },
+        // Other possible endpoints
+        { name: "mt_v2_pad_content", url: `https://target.my.com/api/v2/pad_content/video.json` },
+        { name: "mt_v2_creative_video", url: `https://target.my.com/api/v2/creative/video.json` },
+        // target.vk.ru domain
+        { name: "vkru_v2_videos", url: `https://target.vk.ru/api/v2/content/videos.json` },
+        { name: "vkru_v2_video", url: `https://target.vk.ru/api/v2/content/video.json` },
       ];
       for (const ep of mtEndpoints) {
         try {
           const resp = await fetch(ep.url, {
-            headers: { "Authorization": `Bearer ${mtToken}` },
+            headers: { Authorization: `Bearer ${mtToken}` },
           });
           const body = await resp.text();
           results[ep.name] = { status: resp.status, body: body.substring(0, 200) };
