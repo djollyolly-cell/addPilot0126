@@ -958,6 +958,35 @@ export const verifyVideoInVk = action({
       results.user = { status: r.status, body: (await r.text()).substring(0, 300) };
     } catch (e) { results.user = { error: String(e) }; }
 
+    // 4. Try content/statics to see if content API works at all
+    try {
+      const r = await fetch(`${MT_API_BASE}/api/v2/content/statics.json?limit=3`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results.statics = { status: r.status, body: (await r.text()).substring(0, 300) };
+    } catch (e) { results.statics = { error: String(e) }; }
+
+    // 5. Try VK API (api.vk.com) media endpoints — VK Ads might use different API
+    const userRecord = await ctx.runQuery(internal.users.getById, { userId: accountInfo.userId });
+    const vkToken = userRecord?.vkAccessToken;
+    if (vkToken) {
+      // Try VK API ads.getAds or video.get
+      try {
+        const r = await fetch(`https://api.vk.com/method/video.get?owner_id=${userRecord.vkId}&count=5&access_token=${vkToken}&v=5.131`);
+        results.vkVideoGet = { status: r.status, body: (await r.text()).substring(0, 500) };
+      } catch (e) { results.vkVideoGet = { error: String(e) }; }
+    } else {
+      results.vkVideoGet = { note: "no VK token available" };
+    }
+
+    // 6. Check token scopes
+    try {
+      const r = await fetch(`${MT_API_BASE}/api/v2/oauth2/token/info.json`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results.tokenInfo = { status: r.status, body: (await r.text()).substring(0, 500) };
+    } catch (e) { results.tokenInfo = { error: String(e) }; }
+
     console.log("[verifyVideo] RESULTS:", JSON.stringify(results, null, 2));
     return results;
   },
