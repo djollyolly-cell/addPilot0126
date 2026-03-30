@@ -925,7 +925,7 @@ export const discoverAdvertiserId = action({
   },
 });
 
-// TEMP: Verify if a video exists in myTarget content listing
+// TEMP: Test video upload/listing on multiple API domains
 export const verifyVideoInVk = action({
   args: { accountId: v.id("adAccounts"), mediaId: v.string() },
   handler: async (ctx, args) => {
@@ -934,58 +934,72 @@ export const verifyVideoInVk = action({
     const token = accountInfo.accessToken;
     const results: Record<string, any> = {};
 
-    // 1. Check content/videos listing
-    try {
-      const r = await fetch(`${MT_API_BASE}/api/v2/content/videos.json?_id=${args.mediaId}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results.videoListing = { status: r.status, body: (await r.text()).substring(0, 500) };
-    } catch (e) { results.videoListing = { error: String(e) }; }
+    const domains = [
+      { name: "target.my.com", base: "https://target.my.com" },
+      { name: "target.vk.ru", base: "https://target.vk.ru" },
+      { name: "target.vk.com", base: "https://target.vk.com" },
+    ];
 
-    // 2. Check all videos listing (without filter)
-    try {
-      const r = await fetch(`${MT_API_BASE}/api/v2/content/videos.json?limit=5`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results.allVideos = { status: r.status, body: (await r.text()).substring(0, 500) };
-    } catch (e) { results.allVideos = { error: String(e) }; }
+    for (const domain of domains) {
+      const d: Record<string, any> = {};
 
-    // 3. Check user info
-    try {
-      const r = await fetch(`${MT_API_BASE}/api/v2/user.json`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results.user = { status: r.status, body: (await r.text()).substring(0, 300) };
-    } catch (e) { results.user = { error: String(e) }; }
-
-    // 4. Try content/statics to see if content API works at all
-    try {
-      const r = await fetch(`${MT_API_BASE}/api/v2/content/statics.json?limit=3`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results.statics = { status: r.status, body: (await r.text()).substring(0, 300) };
-    } catch (e) { results.statics = { error: String(e) }; }
-
-    // 5. Try VK API (api.vk.com) media endpoints — VK Ads might use different API
-    const userRecord = await ctx.runQuery(internal.users.getById, { userId: accountInfo.userId });
-    const vkToken = userRecord?.vkAccessToken;
-    if (vkToken) {
-      // Try VK API ads.getAds or video.get
+      // user.json
       try {
-        const r = await fetch(`https://api.vk.com/method/video.get?owner_id=${userRecord.vkId}&count=5&access_token=${vkToken}&v=5.131`);
-        results.vkVideoGet = { status: r.status, body: (await r.text()).substring(0, 500) };
-      } catch (e) { results.vkVideoGet = { error: String(e) }; }
-    } else {
-      results.vkVideoGet = { note: "no VK token available" };
+        const r = await fetch(`${domain.base}/api/v2/user.json`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        d.user = r.status;
+      } catch (e) { d.user = String(e).substring(0, 80); }
+
+      // content/videos listing
+      try {
+        const r = await fetch(`${domain.base}/api/v2/content/videos.json?limit=3`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        d.videosList = { status: r.status, body: (await r.text()).substring(0, 200) };
+      } catch (e) { d.videosList = String(e).substring(0, 80); }
+
+      // content/video by ID
+      try {
+        const r = await fetch(`${domain.base}/api/v2/content/videos.json?_id=${args.mediaId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        d.videoById = { status: r.status, body: (await r.text()).substring(0, 200) };
+      } catch (e) { d.videoById = String(e).substring(0, 80); }
+
+      // content/statics listing
+      try {
+        const r = await fetch(`${domain.base}/api/v2/content/statics.json?limit=3`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        d.staticsList = { status: r.status, body: (await r.text()).substring(0, 200) };
+      } catch (e) { d.staticsList = String(e).substring(0, 80); }
+
+      results[domain.name] = d;
     }
 
-    // 6. Check token scopes
-    try {
-      const r = await fetch(`${MT_API_BASE}/api/v2/oauth2/token/info.json`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      results.tokenInfo = { status: r.status, body: (await r.text()).substring(0, 500) };
-    } catch (e) { results.tokenInfo = { error: String(e) }; }
+    // Try ads.vk.com API patterns
+    const adsVkTests: Record<string, any> = {};
+
+    // ads.vk.com/api/* patterns
+    const adsEndpoints = [
+      "https://ads.vk.com/api/v1/me",
+      "https://ads.vk.com/api/v2/me",
+      "https://ads.vk.com/api/v1/media.json",
+      "https://ads.vk.com/api/v2/media.json",
+      "https://ads.vk.com/api/v1/creatives.json",
+      "https://ads.vk.com/api/v2/creatives.json",
+      "https://api.ads.vk.com/api/v1/me",
+    ];
+    for (const url of adsEndpoints) {
+      try {
+        const r = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        adsVkTests[url] = { status: r.status, body: (await r.text()).substring(0, 150) };
+      } catch (e) { adsVkTests[url] = String(e).substring(0, 80); }
+    }
+    results["ads.vk.com"] = adsVkTests;
 
     console.log("[verifyVideo] RESULTS:", JSON.stringify(results, null, 2));
     return results;
