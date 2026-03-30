@@ -183,69 +183,54 @@ export const uploadToVk = action({
     if (!accountInfo?.accessToken) throw new Error("Нет токена доступа для аккаунта. Переподключите аккаунт.");
 
     const { accessToken } = accountInfo;
-    let mtAdvertiserId = accountInfo.mtAdvertiserId;
 
-    // Auto-discover mtAdvertiserId if missing — try multiple sources
-    if (!mtAdvertiserId) {
-      console.log(`[video upload] mtAdvertiserId missing, trying auto-discovery...`);
-      const video = await ctx.runQuery(internal.videos.getInternal, { id: args.videoId });
+    // Determine correct ?account= parameter by querying myTarget API directly.
+    // IMPORTANT: Don't use stored mtAdvertiserId — it may contain a VK Ads cabinet ID
+    // (from ads.getAccounts) which is a DIFFERENT ID space than myTarget user IDs.
+    // myTarget API ?account= expects a myTarget client ID (from agency/clients.json).
+    let accountParam: string | null = null;
 
-      // Source 1: user's vkAdsCabinetId (discovered at VK ID login via ads.getAccounts)
-      if (!mtAdvertiserId && video?.userId) {
-        try {
-          const userRecord = await ctx.runQuery(internal.users.getById, { userId: video.userId });
-          if (userRecord?.vkAdsCabinetId) {
-            mtAdvertiserId = userRecord.vkAdsCabinetId;
-            console.log(`[video upload] Source 1 (user record): ${mtAdvertiserId}`);
+    try {
+      // Check myTarget user info
+      const userResp = await fetch(`${MT_API_BASE}/api/v2/user.json`, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+      if (userResp.ok) {
+        const userData = await userResp.json();
+        console.log(`[video upload] myTarget user: id=${userData.id}, username=${userData.username}`);
+
+        // Check for agency access — agency tokens need ?account=<client_id>
+        const agencyResp = await fetch(`${MT_API_BASE}/api/v2/agency/clients.json`, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (agencyResp.ok) {
+          const clients = await agencyResp.json();
+          if (Array.isArray(clients) && clients.length > 0) {
+            accountParam = String(clients[0].id);
+            console.log(`[video upload] Agency token, using client account=${accountParam}`);
           }
-        } catch (e) {
-          console.log(`[video upload] Source 1 failed: ${e}`);
         }
-      }
 
-      // Source 2: agency/clients.json — for agency tokens (Vitamin.tools, eLama etc.)
-      if (!mtAdvertiserId) {
-        try {
-          const clientsResp = await fetch(`${MT_API_BASE}/api/v2/agency/clients.json`, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-          });
-          if (clientsResp.ok) {
-            const clients = await clientsResp.json();
-            if (Array.isArray(clients) && clients.length > 0) {
-              mtAdvertiserId = String(clients[0].id);
-              console.log(`[video upload] Source 2 (agency/clients): ${mtAdvertiserId}`);
-            }
-          }
-        } catch (e) {
-          console.log(`[video upload] Source 2 failed: ${e}`);
-        }
-      }
-
-      // Source 3: manager/clients.json — for manager-access accounts
-      if (!mtAdvertiserId) {
-        try {
+        // Check for manager access if not agency
+        if (!accountParam) {
           const mgrResp = await fetch(`${MT_API_BASE}/api/v2/manager/clients.json`, {
             headers: { Authorization: `Bearer ${accessToken}` },
           });
           if (mgrResp.ok) {
             const mgrClients = await mgrResp.json();
             if (Array.isArray(mgrClients) && mgrClients.length > 0) {
-              mtAdvertiserId = String(mgrClients[0].id);
-              console.log(`[video upload] Source 3 (manager/clients): ${mtAdvertiserId}`);
+              accountParam = String(mgrClients[0].id);
+              console.log(`[video upload] Manager token, using client account=${accountParam}`);
             }
           }
-        } catch (e) {
-          console.log(`[video upload] Source 3 failed: ${e}`);
+        }
+
+        if (!accountParam) {
+          console.log(`[video upload] Direct advertiser token, uploading without ?account=`);
         }
       }
-
-      // Save discovered ID for future uploads
-      if (mtAdvertiserId) {
-        await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
-          accountId: args.accountId,
-          mtAdvertiserId,
-        });
-      }
+    } catch (e) {
+      console.log(`[video upload] Account type detection failed: ${e}`);
     }
 
     // Mark as uploading and save storageId for transcription
@@ -265,11 +250,11 @@ export const uploadToVk = action({
       const filename = video?.filename || "video.mp4";
       const fileSize = video?.fileSize || 0;
 
-      // Build endpoint: use v2 per official docs, ?account= only for agency tokens
-      const endpoint = mtAdvertiserId
-        ? `${MT_API_BASE}/api/v2/content/video.json?account=${mtAdvertiserId}`
+      // Build endpoint: v2 per official docs, ?account= only for agency/manager tokens
+      const endpoint = accountParam
+        ? `${MT_API_BASE}/api/v2/content/video.json?account=${accountParam}`
         : `${MT_API_BASE}/api/v2/content/video.json`;
-      console.log(`[video upload] Uploading ${filename} (${(fileSize / (1024*1024)).toFixed(1)} MB) to ${endpoint} (mtAdvertiserId=${mtAdvertiserId || "none"})`);
+      console.log(`[video upload] Uploading ${filename} (${(fileSize / (1024*1024)).toFixed(1)} MB) to ${endpoint}`);
 
       // Step 1: Download file from Convex storage
       console.log(`[video upload] Step 1: downloading from storage...`);
@@ -284,9 +269,8 @@ export const uploadToVk = action({
       const ulStart = Date.now();
       const formData = new FormData();
       formData.append("file", fileBlob, filename);
-      // width/height are required per docs, 0 means auto-detect
-      formData.append("width", "0");
-      formData.append("height", "0");
+      // Per official docs: width/height must be in a JSON "data" field
+      formData.append("data", JSON.stringify({ width: 0, height: 0 }));
 
       const resp = await fetch(endpoint, {
         method: "POST",
@@ -304,14 +288,37 @@ export const uploadToVk = action({
       const uploadData = JSON.parse(respText);
       console.log(`[video upload] Success, id=${uploadData?.id}`);
 
+      const mediaId = String(uploadData.id || "");
+
       // Update video record with VK media ID
       await ctx.runMutation(internal.videos.updateUploadStatus, {
         id: args.videoId,
         uploadStatus: "processing",
         uploadProgress: 100,
-        vkMediaId: String(uploadData.id || ""),
+        vkMediaId: mediaId,
         vkMediaUrl: uploadData.url || uploadData.preview_url || "",
       });
+
+      // Post-upload verification: check that the video appears in the content listing
+      if (mediaId) {
+        try {
+          const verifyUrl = accountParam
+            ? `${MT_API_BASE}/api/v2/content/videos.json?_id=${mediaId}&account=${accountParam}`
+            : `${MT_API_BASE}/api/v2/content/videos.json?_id=${mediaId}`;
+          const verifyResp = await fetch(verifyUrl, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          if (verifyResp.ok) {
+            const verifyData = await verifyResp.json();
+            const found = verifyData.items?.some((v: { id: number }) => String(v.id) === mediaId);
+            console.log(`[video upload] Verification: video ${mediaId} ${found ? "FOUND" : "NOT FOUND"} in content listing`);
+          } else {
+            console.log(`[video upload] Verification request failed: ${verifyResp.status}`);
+          }
+        } catch (e) {
+          console.log(`[video upload] Verification check failed: ${e}`);
+        }
+      }
 
       // Mark as ready
       await ctx.runMutation(internal.videos.updateUploadStatus, {
