@@ -37,6 +37,8 @@ export function VideosPage() {
   const [analyzingId, setAnalyzingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [diagResult, setDiagResult] = useState<string | null>(null);
+  const [diagRunning, setDiagRunning] = useState(false);
 
   // Get active account
   const settings = useQuery(
@@ -80,6 +82,7 @@ export function VideosPage() {
   const uploadToVk = useAction(api.videos.uploadToVk);
   const transcribeVideo = useAction(api.videos.transcribeVideo);
   const analyzeVideo = useAction(api.videos.analyzeVideo);
+  const diagVkAdsApi = useAction(api.videos.diagVkAdsApi);
   const linkToAd = useMutation(api.videos.linkToAd);
   const saveFrameStorageIds = useMutation(api.videos.saveFrameStorageIds);
   const ads = useQuery(
@@ -484,6 +487,40 @@ export function VideosPage() {
           </div>
         )}
       </div>
+
+      {/* TEMP: VK Token Diagnostics */}
+      {accountId && user?.userId && (
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={diagRunning}
+            onClick={async () => {
+              setDiagRunning(true);
+              setDiagResult(null);
+              try {
+                const result = await diagVkAdsApi({
+                  accountId: accountId as Id<"adAccounts">,
+                  userId: user.userId as Id<"users">,
+                });
+                setDiagResult(JSON.stringify(result, null, 2));
+              } catch (e) {
+                setDiagResult(`ERROR: ${e instanceof Error ? e.message : e}`);
+              } finally {
+                setDiagRunning(false);
+              }
+            }}
+          >
+            {diagRunning ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+            Диагностика VK токенов
+          </Button>
+        </div>
+      )}
+      {diagResult && (
+        <pre className="p-3 rounded-lg bg-muted text-xs overflow-auto max-h-96 whitespace-pre-wrap">
+          {diagResult}
+        </pre>
+      )}
 
       {/* Messages */}
       {error && (
