@@ -1172,52 +1172,17 @@ export const testRealUpload = action({
       { name: "v3_with_account", url: `https://target.my.com/api/v3/content/video.json?account=${accountParam}` },
     ];
 
-    // Use the actual coin_video.mp4 from Convex storage if available,
-    // otherwise create a tiny valid video programmatically
-    // Let's download a real 1-second test video from a well-known test source
+    // Download a real video file from the deployed app
     let videoBlob: Blob;
     try {
-      // Try to find any video in Convex storage that might be real
-      // First check if public/coin_video.mp4 was uploaded
-      const storageIds = ["kg2az8snw0x9mbz64rzj4jygzh83w73z", "kg2b0d31xmd04b51a38pmzv92n83vm1w"];
-      let foundReal = false;
-      for (const sid of storageIds) {
-        try {
-          const url = await ctx.storage.getUrl(sid as any);
-          if (url) {
-            const resp = await fetch(url);
-            const blob = await resp.blob();
-            // Check if it's actually a video (not HTML)
-            const firstBytes = new Uint8Array(await blob.slice(0, 20).arrayBuffer());
-            const isHtml = firstBytes[0] === 0x3C; // '<'
-            if (!isHtml && blob.size > 1000) {
-              videoBlob = blob;
-              foundReal = true;
-              results["source"] = `storage ${sid} (${(blob.size/1024).toFixed(0)}KB)`;
-              break;
-            } else {
-              results[`storage_${sid.substring(0,8)}`] = `${isHtml ? 'HTML' : 'unknown'}, ${blob.size}B`;
-            }
-          }
-        } catch { /* skip */ }
-      }
-
-      if (!foundReal) {
-        // Generate absolute minimum valid MP4 (ftyp + mdat)
-        // This is a 137-byte valid MP4 container
-        const header = new Uint8Array([
-          // ftyp box (24 bytes)
-          0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, // size=24, 'ftyp'
-          0x69, 0x73, 0x6F, 0x6D, // 'isom'
-          0x00, 0x00, 0x00, 0x01, // version
-          0x69, 0x73, 0x6F, 0x6D, // 'isom'
-          0x61, 0x76, 0x63, 0x31, // 'avc1'
-          // mdat box (minimal, 8 bytes header + 1 byte data)
-          0x00, 0x00, 0x00, 0x09, 0x6D, 0x64, 0x61, 0x74, 0x00,
-        ]);
-        videoBlob = new Blob([header], { type: "video/mp4" });
-        results["source"] = `generated minimal MP4 (${header.length}B)`;
-      }
+      const videoUrl = "https://aipilot.by/coin_video.mp4";
+      const resp = await fetch(videoUrl);
+      if (!resp.ok) throw new Error(`Failed to fetch video: ${resp.status}`);
+      videoBlob = await resp.blob();
+      const firstBytes = new Uint8Array(await videoBlob.slice(0, 20).arrayBuffer());
+      const isHtml = firstBytes[0] === 0x3C; // '<'
+      if (isHtml) throw new Error("Got HTML instead of video");
+      results["source"] = `coin_video.mp4 (${(videoBlob.size/1024).toFixed(0)}KB)`;
     } catch (e) {
       results["source_error"] = String(e);
       return results;
