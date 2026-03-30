@@ -265,10 +265,10 @@ export const uploadToVk = action({
       const filename = video?.filename || "video.mp4";
       const fileSize = video?.fileSize || 0;
 
-      // Build endpoint — always use ?account= to ensure video lands in correct cabinet
+      // Build endpoint: use v2 per official docs, ?account= only for agency tokens
       const endpoint = mtAdvertiserId
-        ? `${MT_API_BASE}/api/v3/content/video.json?account=${mtAdvertiserId}`
-        : `${MT_API_BASE}/api/v3/content/video.json`;
+        ? `${MT_API_BASE}/api/v2/content/video.json?account=${mtAdvertiserId}`
+        : `${MT_API_BASE}/api/v2/content/video.json`;
       console.log(`[video upload] Uploading ${filename} (${(fileSize / (1024*1024)).toFixed(1)} MB) to ${endpoint} (mtAdvertiserId=${mtAdvertiserId || "none"})`);
 
       // Step 1: Download file from Convex storage
@@ -279,12 +279,14 @@ export const uploadToVk = action({
       const fileBlob = await fileResponse.blob();
       console.log(`[video upload] Step 1 done: ${(fileBlob.size / (1024*1024)).toFixed(1)} MB downloaded in ${Date.now() - dlStart}ms`);
 
-      // Step 2: Upload to myTarget API
-      console.log(`[video upload] Step 2: uploading to myTarget...`);
+      // Step 2: Upload to myTarget API (v2 — per official docs)
+      console.log(`[video upload] Step 2: uploading to myTarget v2...`);
       const ulStart = Date.now();
       const formData = new FormData();
       formData.append("file", fileBlob, filename);
-      formData.append("data", JSON.stringify({ width: 0, height: 0 }));
+      // width/height are required per docs, 0 means auto-detect
+      formData.append("width", "0");
+      formData.append("height", "0");
 
       const resp = await fetch(endpoint, {
         method: "POST",
