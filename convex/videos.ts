@@ -787,67 +787,90 @@ ${hasTranscription ? `- Голос/текст: структура повеств
   },
 });
 
-// DIAGNOSTIC: discover advertiser ID via VK API ads.getAccounts
+// DIAGNOSTIC: test which ?account= value makes video appear in correct Медиатека
 export const discoverAdvertiserId = action({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
     const results: Record<string, any> = {};
 
-    // Get user's VK access token (from VK ID login)
-    const vkTokens = await ctx.runQuery(internal.users.getVkTokens, {
-      userId: args.userId,
-    });
-
-    if (vkTokens?.accessToken) {
-      // Try VK API ads.getAccounts — returns list of ad cabinets
-      try {
-        const r = await fetch("https://api.vk.com/method/ads.getAccounts?v=5.131", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: `access_token=${vkTokens.accessToken}`,
-        });
-        results["ads.getAccounts"] = await r.json();
-      } catch (e) { results["ads.getAccounts"] = { error: String(e) }; }
-
-      // Try VK API ads.getClients
-      try {
-        const r = await fetch("https://api.vk.com/method/ads.getClients?v=5.131&account_id=0", {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: `access_token=${vkTokens.accessToken}`,
-        });
-        results["ads.getClients"] = await r.json();
-      } catch (e) { results["ads.getClients"] = { error: String(e) }; }
-    } else {
-      results["vkToken"] = "no VK access token found";
-    }
-
-    // Also try myTarget user.json for reference
     const accounts = await ctx.runQuery(api.adAccounts.list, {
       userId: args.userId,
     });
 
     if (accounts.length > 0 && accounts[0].accessToken) {
       const mtToken = accounts[0].accessToken;
+      const mtAdvertiserId = accounts[0].mtAdvertiserId;
+      results["account"] = { name: accounts[0].name, vkAccountId: accounts[0].vkAccountId, mtAdvertiserId };
+
+      // 1. user.json — get myTarget user info
       try {
         const r = await fetch("https://target.my.com/api/v2/user.json", {
           headers: { Authorization: `Bearer ${mtToken}` },
         });
-        results["mt_user.json"] = await r.json();
-      } catch (e) { results["mt_user.json"] = { error: String(e) }; }
+        results["user.json"] = await r.json();
+      } catch (e) { results["user.json"] = { error: String(e) }; }
 
-      // Try POST to content/video.json WITHOUT ?account= (maybe it works for non-agency)
+      // 2. agency/clients.json
       try {
-        const formData = new FormData();
-        formData.append("data", JSON.stringify({ url: "https://example.com/test.mp4" }));
-        const r = await fetch("https://target.my.com/api/v3/content/video.json", {
-          method: "POST",
-          headers: { Authorization: `Bearer ${mtToken}`, "Content-Type": "application/json" },
-          body: JSON.stringify({ url: "https://example.com/test.mp4", name: "test.mp4" }),
+        const r = await fetch("https://target.my.com/api/v2/agency/clients.json", {
+          headers: { Authorization: `Bearer ${mtToken}` },
         });
-        results["content_upload_no_account"] = { status: r.status, body: await r.text() };
-      } catch (e) { results["content_upload_no_account"] = { error: String(e) }; }
+        results["agency_clients"] = { status: r.status, body: (await r.text()).substring(0, 500) };
+      } catch (e) { results["agency_clients"] = { error: String(e) }; }
+
+      // 3. manager/clients.json
+      try {
+        const r = await fetch("https://target.my.com/api/v2/manager/clients.json", {
+          headers: { Authorization: `Bearer ${mtToken}` },
+        });
+        results["manager_clients"] = { status: r.status, body: (await r.text()).substring(0, 500) };
+      } catch (e) { results["manager_clients"] = { error: String(e) }; }
+
+      // 4. List uploaded videos (no ?account=)
+      try {
+        const r = await fetch("https://target.my.com/api/v2/content/videos.json?limit=5", {
+          headers: { Authorization: `Bearer ${mtToken}` },
+        });
+        results["videos_no_account"] = { status: r.status, body: (await r.text()).substring(0, 500) };
+      } catch (e) { results["videos_no_account"] = { error: String(e) }; }
+
+      // 5. List videos WITH ?account= (use current mtAdvertiserId)
+      if (mtAdvertiserId) {
+        try {
+          const r = await fetch(`https://target.my.com/api/v2/content/videos.json?limit=5&account=${mtAdvertiserId}`, {
+            headers: { Authorization: `Bearer ${mtToken}` },
+          });
+          results[`videos_account_${mtAdvertiserId}`] = { status: r.status, body: (await r.text()).substring(0, 500) };
+        } catch (e) { results[`videos_account_${mtAdvertiserId}`] = { error: String(e) }; }
+      }
+
+      // 6. user/clients.json (v2)
+      try {
+        const r = await fetch("https://target.my.com/api/v2/user/clients.json", {
+          headers: { Authorization: `Bearer ${mtToken}` },
+        });
+        results["user_clients"] = { status: r.status, body: (await r.text()).substring(0, 500) };
+      } catch (e) { results["user_clients"] = { error: String(e) }; }
     }
+
+    // VK API ads.getAccounts
+    const vkTokens = await ctx.runQuery(internal.users.getVkTokens, { userId: args.userId });
+    if (vkTokens?.accessToken) {
+      try {
+        const r = await fetch("https://api.vk.com/method/ads.getAccounts?v=5.131", {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: `access_token=${vkTokens.accessToken}`,
+        });
+        results["vk_ads_getAccounts"] = await r.json();
+      } catch (e) { results["vk_ads_getAccounts"] = { error: String(e) }; }
+    } else {
+      results["vk_token"] = "expired or missing";
+    }
+
+    // User record
+    const user = await ctx.runQuery(internal.users.getById, { userId: args.userId });
+    results["user_record"] = { vkAdsCabinetId: user?.vkAdsCabinetId || "not set" };
 
     console.log("[discoverAdvertiserId] RESULTS:", JSON.stringify(results, null, 2));
     return results;
