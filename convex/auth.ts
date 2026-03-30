@@ -446,8 +446,10 @@ export const refreshVkToken = internalAction({
     const data = await response.json();
 
     if (data.error) {
+      console.error(`[refreshVkToken] VK error: ${JSON.stringify(data)}`);
       throw new Error(data.error_description || data.error || "Failed to refresh VK token");
     }
+    console.log(`[refreshVkToken] Success: new token expires in ${data.expires_in}s, new refresh_token=${data.refresh_token ? "YES" : "NO"}`);
 
     // Update tokens in the database
     await ctx.runMutation(internal.users.updateVkTokens, {
@@ -503,8 +505,10 @@ export const getValidVkToken = internalAction({
         refreshToken: tokens.refreshToken,
       });
       return refreshed.accessToken;
-    } catch {
-      throw new Error("Не удалось обновить токен VK. Подключите VK Ads заново.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[getValidVkToken] Refresh failed for user ${args.userId}: ${msg}`);
+      throw new Error(`Не удалось обновить токен VK: ${msg}`);
     }
   },
 });
