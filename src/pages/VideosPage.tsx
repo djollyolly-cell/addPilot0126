@@ -83,6 +83,7 @@ export function VideosPage() {
   const transcribeVideo = useAction(api.videos.transcribeVideo);
   const analyzeVideo = useAction(api.videos.analyzeVideo);
   const diagVkAdsApi = useAction(api.videos.diagVkAdsApi);
+  const testRealUpload = useAction(api.videos.testRealUpload);
   const linkToAd = useMutation(api.videos.linkToAd);
   const saveFrameStorageIds = useMutation(api.videos.saveFrameStorageIds);
   const ads = useQuery(
@@ -513,6 +514,28 @@ export function VideosPage() {
           >
             {diagRunning ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
             Диагностика VK токенов
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={diagRunning}
+            onClick={async () => {
+              setDiagRunning(true);
+              setDiagResult(null);
+              try {
+                const result = await testRealUpload({
+                  accountId: accountId as Id<"adAccounts">,
+                });
+                setDiagResult(JSON.stringify(result, null, 2));
+              } catch (e) {
+                setDiagResult(`ERROR: ${e instanceof Error ? e.message : e}`);
+              } finally {
+                setDiagRunning(false);
+              }
+            }}
+          >
+            {diagRunning ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : null}
+            Тест загрузки видео
           </Button>
         </div>
       )}

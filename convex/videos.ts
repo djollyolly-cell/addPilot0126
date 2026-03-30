@@ -1140,3 +1140,109 @@ export const diagVkAdsApi = action({
     return results;
   },
 });
+
+// TEMP: Upload a small real MP4 to myTarget to test if video appears in Медиатека
+export const testRealUpload = action({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, { accountId: args.accountId });
+    if (!accountInfo?.accessToken) throw new Error("No token");
+    const token = accountInfo.accessToken;
+    const results: Record<string, any> = {};
+
+    // Get account param
+    let accountParam = accountInfo.mtAdvertiserId || null;
+    if (!accountParam) {
+      const userResp = await fetch("https://target.my.com/api/v2/user.json", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (userResp.ok) {
+        const ud = await userResp.json();
+        accountParam = String(ud.id);
+      }
+    }
+    results["accountParam"] = accountParam;
+
+    // Try to find a real video file or generate minimal valid MP4
+
+    // Step 1: Try v2 upload (official myTarget docs)
+    const endpoints = [
+      { name: "v2_no_account", url: `https://target.my.com/api/v2/content/video.json` },
+      { name: "v2_with_account", url: `https://target.my.com/api/v2/content/video.json?account=${accountParam}` },
+      { name: "v3_with_account", url: `https://target.my.com/api/v3/content/video.json?account=${accountParam}` },
+    ];
+
+    // Use the actual coin_video.mp4 from Convex storage if available,
+    // otherwise create a tiny valid video programmatically
+    // Let's download a real 1-second test video from a well-known test source
+    let videoBlob: Blob;
+    try {
+      // Try to find any video in Convex storage that might be real
+      // First check if public/coin_video.mp4 was uploaded
+      const storageIds = ["kg2az8snw0x9mbz64rzj4jygzh83w73z", "kg2b0d31xmd04b51a38pmzv92n83vm1w"];
+      let foundReal = false;
+      for (const sid of storageIds) {
+        try {
+          const url = await ctx.storage.getUrl(sid as any);
+          if (url) {
+            const resp = await fetch(url);
+            const blob = await resp.blob();
+            // Check if it's actually a video (not HTML)
+            const firstBytes = new Uint8Array(await blob.slice(0, 20).arrayBuffer());
+            const isHtml = firstBytes[0] === 0x3C; // '<'
+            if (!isHtml && blob.size > 1000) {
+              videoBlob = blob;
+              foundReal = true;
+              results["source"] = `storage ${sid} (${(blob.size/1024).toFixed(0)}KB)`;
+              break;
+            } else {
+              results[`storage_${sid.substring(0,8)}`] = `${isHtml ? 'HTML' : 'unknown'}, ${blob.size}B`;
+            }
+          }
+        } catch { /* skip */ }
+      }
+
+      if (!foundReal) {
+        // Generate absolute minimum valid MP4 (ftyp + mdat)
+        // This is a 137-byte valid MP4 container
+        const header = new Uint8Array([
+          // ftyp box (24 bytes)
+          0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70, // size=24, 'ftyp'
+          0x69, 0x73, 0x6F, 0x6D, // 'isom'
+          0x00, 0x00, 0x00, 0x01, // version
+          0x69, 0x73, 0x6F, 0x6D, // 'isom'
+          0x61, 0x76, 0x63, 0x31, // 'avc1'
+          // mdat box (minimal, 8 bytes header + 1 byte data)
+          0x00, 0x00, 0x00, 0x09, 0x6D, 0x64, 0x61, 0x74, 0x00,
+        ]);
+        videoBlob = new Blob([header], { type: "video/mp4" });
+        results["source"] = `generated minimal MP4 (${header.length}B)`;
+      }
+    } catch (e) {
+      results["source_error"] = String(e);
+      return results;
+    }
+
+    // Try uploading to each endpoint
+    for (const ep of endpoints) {
+      try {
+        const formData = new FormData();
+        formData.append("file", videoBlob!, "test_video.mp4");
+        formData.append("data", JSON.stringify({ width: 0, height: 0 }));
+
+        const resp = await fetch(ep.url, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        });
+        const body = await resp.text();
+        results[ep.name] = { status: resp.status, body: body.substring(0, 300) };
+      } catch (e) {
+        results[ep.name] = `err: ${e}`;
+      }
+    }
+
+    console.log("[testRealUpload] Results:", JSON.stringify(results, null, 2));
+    return results;
+  },
+});
