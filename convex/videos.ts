@@ -925,6 +925,44 @@ export const discoverAdvertiserId = action({
   },
 });
 
+// TEMP: Verify if a video exists in myTarget content listing
+export const verifyVideoInVk = action({
+  args: { accountId: v.id("adAccounts"), mediaId: v.string() },
+  handler: async (ctx, args) => {
+    const accountInfo = await ctx.runQuery(internal.adAccounts.getInternal, { accountId: args.accountId });
+    if (!accountInfo?.accessToken) throw new Error("No token");
+    const token = accountInfo.accessToken;
+    const results: Record<string, any> = {};
+
+    // 1. Check content/videos listing
+    try {
+      const r = await fetch(`${MT_API_BASE}/api/v2/content/videos.json?_id=${args.mediaId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results.videoListing = { status: r.status, body: (await r.text()).substring(0, 500) };
+    } catch (e) { results.videoListing = { error: String(e) }; }
+
+    // 2. Check all videos listing (without filter)
+    try {
+      const r = await fetch(`${MT_API_BASE}/api/v2/content/videos.json?limit=5`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results.allVideos = { status: r.status, body: (await r.text()).substring(0, 500) };
+    } catch (e) { results.allVideos = { error: String(e) }; }
+
+    // 3. Check user info
+    try {
+      const r = await fetch(`${MT_API_BASE}/api/v2/user.json`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      results.user = { status: r.status, body: (await r.text()).substring(0, 300) };
+    } catch (e) { results.user = { error: String(e) }; }
+
+    console.log("[verifyVideo] RESULTS:", JSON.stringify(results, null, 2));
+    return results;
+  },
+});
+
 // Set myTarget advertiser ID for an account
 export const setAdvertiserId = mutation({
   args: {
