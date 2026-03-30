@@ -1021,70 +1021,66 @@ export const saveAnalysis = internalMutation({
   },
 });
 
-// TEMP: Test VK Ads REST API and GraphQL with myTarget token
+// TEMP: Test VK Ads APIs with BOTH tokens (myTarget + VK ID)
 export const diagVkAdsApi = action({
-  args: { accountId: v.id("adAccounts") },
+  args: { accountId: v.id("adAccounts"), userId: v.id("users") },
   handler: async (ctx, args) => {
+    // Get myTarget token from account
     const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, {
       accountId: args.accountId,
     });
-    if (!accountInfo?.accessToken) throw new Error("Нет токена");
-    const token = accountInfo.accessToken;
+    const mtToken = accountInfo?.accessToken || "";
+
+    // Get VK ID token from user
+    const user = await ctx.runQuery(internal.users.getById, { userId: args.userId });
+    const vkToken = user?.vkAccessToken || user?.vkAdsAccessToken || "";
+
     const results: Record<string, string> = {};
+    results["tokens"] = `mt=${mtToken ? "YES(" + mtToken.substring(0, 8) + "...)" : "NO"}, vk=${vkToken ? "YES(" + vkToken.substring(0, 8) + "...)" : "NO"}`;
 
-    // 1. Test ads.vk.com REST API v2 with Bearer token
-    try {
-      const r1 = await fetch("https://ads.vk.com/api/v2/content/videos.json?account=292358", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const t1 = await r1.text();
-      results["rest_v2_videos"] = `${r1.status}: ${t1.substring(0, 200)}`;
-    } catch (e) { results["rest_v2_videos"] = `err: ${e}`; }
+    // Test function
+    const test = async (name: string, url: string, token: string, method = "GET", body?: string) => {
+      try {
+        const opts: RequestInit = {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            ...(body ? { "Content-Type": "application/json" } : {}),
+          },
+          ...(body ? { body } : {}),
+        };
+        const r = await fetch(url, opts);
+        const t = await r.text();
+        results[name] = `${r.status}: ${t.substring(0, 250)}`;
+      } catch (e) { results[name] = `err: ${e}`; }
+    };
 
-    // 2. Test ads.vk.com REST API v2 statics (images)
-    try {
-      const r2 = await fetch("https://ads.vk.com/api/v2/content/statics.json?account=292358", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const t2 = await r2.text();
-      results["rest_v2_statics"] = `${r2.status}: ${t2.substring(0, 200)}`;
-    } catch (e) { results["rest_v2_statics"] = `err: ${e}`; }
+    // Test GraphQL with myTarget token
+    const gqlBody = JSON.stringify({
+      operationName: "MediaLibrary",
+      variables: {},
+      query: `query MediaLibrary($ids: [ID!]) { mediaLibrary(ids: $ids) { items { id source description } } }`,
+    });
 
-    // 3. Test GraphQL with Bearer token
-    try {
-      const r3 = await fetch("https://ads.vk.com/api/graphql?op=MediaLibrary&account=292358", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          operationName: "MediaLibrary",
-          variables: {},
-          query: `query MediaLibrary($ids: [ID!]) { mediaLibrary(ids: $ids) { items { id source description } } }`,
-        }),
-      });
-      const t3 = await r3.text();
-      results["graphql_media_library"] = `${r3.status}: ${t3.substring(0, 300)}`;
-    } catch (e) { results["graphql_media_library"] = `err: ${e}`; }
+    await test("graphql_mt_token", "https://ads.vk.com/api/graphql?op=MediaLibrary&account=292358", mtToken, "POST", gqlBody);
 
-    // 4. Test myTarget content listing (for reference)
-    try {
-      const r4 = await fetch("https://target.my.com/api/v2/content/videos.json?limit=3", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const t4 = await r4.text();
-      results["mt_v2_videos"] = `${r4.status}: ${t4.substring(0, 200)}`;
-    } catch (e) { results["mt_v2_videos"] = `err: ${e}`; }
+    // Test GraphQL with VK ID token
+    if (vkToken && vkToken !== mtToken) {
+      await test("graphql_vk_token", "https://ads.vk.com/api/graphql?op=MediaLibrary&account=292358", vkToken, "POST", gqlBody);
+    }
 
-    // 5. Test myTarget v3 content listing
-    try {
-      const r5 = await fetch("https://target.my.com/api/v3/content/videos.json?limit=3", {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      const t5 = await r5.text();
-      results["mt_v3_videos"] = `${r5.status}: ${t5.substring(0, 200)}`;
-    } catch (e) { results["mt_v3_videos"] = `err: ${e}`; }
+    // Test REST API with both tokens
+    await test("rest_mt", "https://ads.vk.com/api/v2/content/videos.json?account=292358", mtToken);
+    if (vkToken && vkToken !== mtToken) {
+      await test("rest_vk", "https://ads.vk.com/api/v2/content/videos.json?account=292358", vkToken);
+    }
+
+    // Test VK ID exchange_token flow (get ads.vk.com auth)
+    if (vkToken) {
+      await test("vk_exchange", `https://ads.vk.com/api/v2/auth/exchange?access_token=${vkToken}`, vkToken);
+      await test("vk_oauth_exchange", `https://id.vk.com/oauth2/exchange_token`, vkToken, "POST",
+        JSON.stringify({ access_token: vkToken, client_id: "52093798" }));
+    }
 
     console.log("[diagVkAdsApi] Results:", JSON.stringify(results, null, 2));
     return results;
