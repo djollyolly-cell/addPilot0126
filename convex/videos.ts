@@ -1021,94 +1021,119 @@ export const saveAnalysis = internalMutation({
   },
 });
 
-// TEMP: Test VK Ads APIs with BOTH tokens (myTarget + VK ID)
+// TEMP: Diagnose VK token refresh + test video upload APIs
 export const diagVkAdsApi = action({
   args: { accountId: v.id("adAccounts"), userId: v.id("users") },
   handler: async (ctx, args) => {
-    // Get myTarget token from account
-    const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, {
-      accountId: args.accountId,
-    });
-    const mtToken = accountInfo?.accessToken || "";
+    const results: Record<string, any> = {};
 
-    const results: Record<string, string> = {};
+    // 1. Check what tokens are in DB
+    const vkTokens = await ctx.runQuery(internal.users.getVkTokens, { userId: args.userId });
+    results["db_tokens"] = {
+      hasAccessToken: !!vkTokens?.accessToken,
+      hasRefreshToken: !!vkTokens?.refreshToken,
+      expiresAt: vkTokens?.expiresAt ? new Date(vkTokens.expiresAt).toISOString() : "not set",
+      isExpired: vkTokens?.expiresAt ? vkTokens.expiresAt < Date.now() : "unknown",
+      now: new Date().toISOString(),
+    };
 
-    // Get FRESH VK ID token (auto-refresh if expired)
+    // 2. Try getValidVkToken (auto-refresh)
     let vkToken = "";
     try {
       vkToken = await ctx.runAction(internal.auth.getValidVkToken, { userId: args.userId });
+      results["getValidVkToken"] = `OK, token=${vkToken.substring(0, 10)}...`;
     } catch (e) {
-      results["vk_token_refresh"] = `FAILED: ${e}`;
+      results["getValidVkToken"] = `FAILED: ${e instanceof Error ? e.message : e}`;
+
+      // 3. If auto-refresh failed, try manual refresh to see exact VK error
+      if (vkTokens?.refreshToken) {
+        const clientId = process.env.VK_CLIENT_ID;
+        results["VK_CLIENT_ID"] = clientId ? `SET (${clientId})` : "NOT SET!";
+
+        try {
+          const params = new URLSearchParams({
+            grant_type: "refresh_token",
+            refresh_token: vkTokens.refreshToken,
+            client_id: clientId || "",
+          });
+          const resp = await fetch("https://id.vk.com/oauth2/auth", {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: params.toString(),
+          });
+          const body = await resp.text();
+          results["manual_refresh"] = {
+            status: resp.status,
+            body: body.substring(0, 500),
+          };
+          // If refresh succeeded, use the new token
+          try {
+            const data = JSON.parse(body);
+            if (data.access_token) {
+              vkToken = data.access_token;
+              results["manual_refresh_result"] = "GOT NEW TOKEN!";
+              // Save it
+              await ctx.runMutation(internal.users.updateVkTokens, {
+                userId: args.userId,
+                accessToken: data.access_token,
+                refreshToken: data.refresh_token,
+                expiresIn: data.expires_in || 0,
+              });
+            }
+          } catch { /* parse failed, already logged body */ }
+        } catch (e) {
+          results["manual_refresh"] = `fetch error: ${e}`;
+        }
+      } else {
+        results["manual_refresh"] = "SKIPPED: no refresh_token in DB";
+      }
+
+      // 4. Try using the expired access token directly anyway
+      if (vkTokens?.accessToken) {
+        vkToken = vkTokens.accessToken;
+        results["using_expired_token"] = true;
+      }
     }
-    results["tokens"] = `mt=${mtToken ? "YES(" + mtToken.substring(0, 8) + "...)" : "NO"}, vk=${vkToken ? "YES(" + vkToken.substring(0, 8) + "...)" : "NO"}`;
 
-    // Test function
-    const test = async (name: string, url: string, token: string, method = "GET", body?: string) => {
-      try {
-        const opts: RequestInit = {
-          method,
-          headers: {
-            Authorization: `Bearer ${token}`,
-            ...(body ? { "Content-Type": "application/json" } : {}),
-          },
-          ...(body ? { body } : {}),
-        };
-        const r = await fetch(url, opts);
-        const t = await r.text();
-        results[name] = `${r.status}: ${t.substring(0, 250)}`;
-      } catch (e) { results[name] = `err: ${e}`; }
-    };
+    // Get myTarget token
+    const accountInfo = await ctx.runQuery(internal.videos.getAccountToken, { accountId: args.accountId });
+    const mtToken = accountInfo?.accessToken || "";
 
-    // Test GraphQL with myTarget token
-    const gqlBody = JSON.stringify({
-      operationName: "MediaLibrary",
-      variables: {},
-      query: `query MediaLibrary($ids: [ID!]) { mediaLibrary(ids: $ids) { items { id source description } } }`,
-    });
-
-    await test("graphql_mt_token", "https://ads.vk.com/api/graphql?op=MediaLibrary&account=292358", mtToken, "POST", gqlBody);
-
-    // Test GraphQL with VK ID token
-    if (vkToken && vkToken !== mtToken) {
-      await test("graphql_vk_token", "https://ads.vk.com/api/graphql?op=MediaLibrary&account=292358", vkToken, "POST", gqlBody);
-    }
-
-    // Test REST API with both tokens
-    await test("rest_mt", "https://ads.vk.com/api/v2/content/videos.json?account=292358", mtToken);
-    if (vkToken && vkToken !== mtToken) {
-      await test("rest_vk", "https://ads.vk.com/api/v2/content/videos.json?account=292358", vkToken);
-    }
-
-    // Test VK API ads.* methods (api.vk.com uses VK ID token with ads scope)
+    // 5. Test VK API methods with whatever VK token we have
     if (vkToken) {
-      // ads.getAccounts — should work (already used in auth flow)
+      // ads.getAccounts
       try {
         const r = await fetch(`https://api.vk.com/method/ads.getAccounts?v=5.131&access_token=${vkToken}`);
         const t = await r.text();
-        // Remove token from output
-        results["vk_api_getAccounts"] = `${r.status}: ${t.substring(0, 200).replace(/access_token=[^&"]+/g, 'access_token=REDACTED')}`;
-      } catch (e) { results["vk_api_getAccounts"] = `err: ${e}`; }
+        results["vk_getAccounts"] = JSON.parse(t);
+      } catch (e) { results["vk_getAccounts"] = `err: ${e}`; }
 
-      // ads.getVideoUploadURL — get URL for uploading video to VK Ads
+      // ads.getVideoUploadURL
       try {
         const r = await fetch(`https://api.vk.com/method/ads.getVideoUploadURL?v=5.131&access_token=${vkToken}`);
         const t = await r.text();
-        results["vk_api_getVideoUploadURL"] = `${r.status}: ${t.substring(0, 200).replace(/access_token=[^&"]+/g, 'access_token=REDACTED')}`;
-      } catch (e) { results["vk_api_getVideoUploadURL"] = `err: ${e}`; }
+        results["vk_getVideoUploadURL"] = JSON.parse(t);
+      } catch (e) { results["vk_getVideoUploadURL"] = `err: ${e}`; }
 
-      // video.save — VK video platform upload
+      // video.save
       try {
-        const r = await fetch(`https://api.vk.com/method/video.save?v=5.131&access_token=${vkToken}&name=test_upload&is_private=1`);
+        const r = await fetch(`https://api.vk.com/method/video.save?v=5.131&access_token=${vkToken}&name=test_diag&is_private=1`);
         const t = await r.text();
-        results["vk_api_videoSave"] = `${r.status}: ${t.substring(0, 200).replace(/access_token=[^&"]+/g, 'access_token=REDACTED')}`;
-      } catch (e) { results["vk_api_videoSave"] = `err: ${e}`; }
+        results["vk_videoSave"] = JSON.parse(t);
+      } catch (e) { results["vk_videoSave"] = `err: ${e}`; }
+    } else {
+      results["vk_api_tests"] = "SKIPPED: no VK token available";
+    }
 
-      // ads.getUploadURL — might exist for creatives
+    // 6. Test myTarget content listing (should work with mtToken)
+    if (mtToken) {
       try {
-        const r = await fetch(`https://api.vk.com/method/ads.getUploadURL?v=5.131&ad_format=9&icon=1&access_token=${vkToken}`);
+        const r = await fetch("https://target.my.com/api/v2/content/videos.json?limit=3", {
+          headers: { Authorization: `Bearer ${mtToken}` },
+        });
         const t = await r.text();
-        results["vk_api_getUploadURL"] = `${r.status}: ${t.substring(0, 200).replace(/access_token=[^&"]+/g, 'access_token=REDACTED')}`;
-      } catch (e) { results["vk_api_getUploadURL"] = `err: ${e}`; }
+        results["mt_videos_listing"] = { status: r.status, body: t.substring(0, 300) };
+      } catch (e) { results["mt_videos_listing"] = `err: ${e}`; }
     }
 
     console.log("[diagVkAdsApi] Results:", JSON.stringify(results, null, 2));
