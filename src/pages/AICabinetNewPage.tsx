@@ -52,8 +52,15 @@ export default function AICabinetNewPage() {
   );
   const accountId = settings?.activeAccountId;
 
+  // Saved business directions
+  const savedDirections = useQuery(
+    api.businessDirections.list,
+    accountId ? { accountId: accountId as Id<"adAccounts"> } : 'skip'
+  );
+
   // Step state
   const [activeStep, setActiveStep] = useState(1);
+  const [maxStepReached, setMaxStepReached] = useState(1);
   const [error, setError] = useState<string | null>(null);
 
   // Step 1 — Business info
@@ -89,6 +96,7 @@ export default function AICabinetNewPage() {
     if (!targetUrl.trim()) { setError('Введите ссылку'); return; }
     setError(null);
     setActiveStep(2);
+    setMaxStepReached((prev) => Math.max(prev, 2));
   };
 
   const handleStep2Next = () => {
@@ -96,6 +104,7 @@ export default function AICabinetNewPage() {
     if (dailyBudget < 100) { setError('Минимальный бюджет: 100₽'); return; }
     setError(null);
     setActiveStep(3);
+    setMaxStepReached((prev) => Math.max(prev, 3));
     // Auto-generate banners
     if (banners.length === 0) {
       handleGenerateTexts();
@@ -252,10 +261,12 @@ export default function AICabinetNewPage() {
 
   const stepCompleted = (step: number) => {
     if (step === 1) return businessDirection.trim() !== '' && targetUrl.trim() !== '';
-    if (step === 2) return selectedRegions.length > 0 && dailyBudget >= 100;
-    if (step === 3) return banners.some(b => b.isSelected);
+    if (step === 2) return maxStepReached > 2 && selectedRegions.length > 0 && dailyBudget >= 100;
+    if (step === 3) return maxStepReached > 3 && banners.some(b => b.isSelected);
     return false;
   };
+
+  const canOpenStep = (step: number) => step <= maxStepReached;
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto" data-testid="ai-cabinet-new-page">
@@ -321,6 +332,25 @@ export default function AICabinetNewPage() {
                     value={businessDirection}
                     onChange={(e) => setBusinessDirection(e.target.value)}
                   />
+                  {savedDirections && savedDirections.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      <span className="text-xs text-muted-foreground">Сохранённые:</span>
+                      {savedDirections.filter(d => d.isActive).map((d) => (
+                        <button
+                          key={d._id}
+                          type="button"
+                          onClick={() => setBusinessDirection(d.name)}
+                          className={`px-2 py-0.5 rounded-full text-xs transition-colors ${
+                            businessDirection === d.name
+                              ? 'bg-primary text-primary-foreground'
+                              : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                          }`}
+                        >
+                          {d.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div>
                   <Label htmlFor="url">Ссылка</Label>
@@ -346,7 +376,7 @@ export default function AICabinetNewPage() {
           <Card>
             <CardHeader
               className="cursor-pointer"
-              onClick={() => stepCompleted(1) && setActiveStep(2)}
+              onClick={() => canOpenStep(2) && setActiveStep(activeStep === 2 ? 1 : 2)}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -470,7 +500,7 @@ export default function AICabinetNewPage() {
           <Card>
             <CardHeader
               className="cursor-pointer"
-              onClick={() => stepCompleted(2) && setActiveStep(3)}
+              onClick={() => canOpenStep(3) && setActiveStep(activeStep === 3 ? 2 : 3)}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
@@ -650,7 +680,7 @@ export default function AICabinetNewPage() {
                       </Card>
                     ))}
 
-                    <Button onClick={() => setActiveStep(4)} className="w-full">
+                    <Button onClick={() => { setActiveStep(4); setMaxStepReached((prev) => Math.max(prev, 4)); }} className="w-full">
                       Далее — Превью и запуск
                     </Button>
                   </>
@@ -663,7 +693,7 @@ export default function AICabinetNewPage() {
           <Card>
             <CardHeader
               className="cursor-pointer"
-              onClick={() => stepCompleted(3) && setActiveStep(4)}
+              onClick={() => canOpenStep(4) && setActiveStep(activeStep === 4 ? 3 : 4)}
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
