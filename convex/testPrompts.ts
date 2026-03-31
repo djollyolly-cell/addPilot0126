@@ -34,17 +34,14 @@ const FLUX_SUFFIX = "Professional commercial photography or high-quality 3D rend
 
 const TEST_INPUT = "Стоматология. Болит зуб? Вылечим! Современная стоматология без боли и очередей. Запись онлайн 24/7.";
 
-export const compareModels = action({
+// Step 1: Fast — just compare prompts from both models
+export const comparePrompts = action({
   args: {},
-  handler: async (_ctx) => {
+  handler: async (_ctx): Promise<{ haiku: string; sonnet: string; testInput: string }> => {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
-    const bflApiKey = process.env.BFL_API_KEY;
-    if (!bflApiKey) throw new Error("BFL_API_KEY not set");
-
-    // Call both models in parallel
     const [haikuResp, sonnetResp] = await Promise.all([
       fetch(`${baseUrl}/v1/messages`, {
         method: "POST",
@@ -79,51 +76,45 @@ export const compareModels = action({
     const haikuData = await haikuResp.json();
     const sonnetData = await sonnetResp.json();
 
-    const haikuPrompt = haikuData.content?.[0]?.text?.trim() || "ERROR";
-    const sonnetPrompt = sonnetData.content?.[0]?.text?.trim() || "ERROR";
-
-    const haikuFlux = `${haikuPrompt} ${FLUX_SUFFIX}`;
-    const sonnetFlux = `${sonnetPrompt} ${FLUX_SUFFIX}`;
-
-    // Generate both images via FLUX
-    const [haikuImg, sonnetImg] = await Promise.all([
-      submitFlux(haikuFlux, bflApiKey),
-      submitFlux(sonnetFlux, bflApiKey),
-    ]);
-
     return {
-      haiku: { prompt: haikuPrompt, fluxPrompt: haikuFlux, imageUrl: haikuImg },
-      sonnet: { prompt: sonnetPrompt, fluxPrompt: sonnetFlux, imageUrl: sonnetImg },
+      haiku: (haikuData.content?.[0]?.text?.trim() || "ERROR") + " " + FLUX_SUFFIX,
+      sonnet: (sonnetData.content?.[0]?.text?.trim() || "ERROR") + " " + FLUX_SUFFIX,
       testInput: TEST_INPUT,
     };
   },
 });
 
-async function submitFlux(prompt: string, apiKey: string): Promise<string> {
-  const resp = await fetch("https://api.bfl.ml/v1/flux-pro-1.1", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "x-key": apiKey },
-    body: JSON.stringify({ prompt, width: 600, height: 600 }),
-  });
-  if (!resp.ok) {
-    const t = await resp.text();
-    return `FLUX_ERROR: ${resp.status} ${t}`;
-  }
-  const { id } = await resp.json();
+// Step 2: Generate one FLUX image from a given prompt
+export const generateTestImage = action({
+  args: { prompt: v.string() },
+  handler: async (_ctx, args): Promise<string> => {
+    const bflApiKey = process.env.BFL_API_KEY;
+    if (!bflApiKey) throw new Error("BFL_API_KEY not set");
 
-  // Poll for result
-  for (let i = 0; i < 60; i++) {
-    await new Promise(r => setTimeout(r, 2000));
-    const poll = await fetch(`https://api.bfl.ml/v1/get_result?id=${id}`, {
-      headers: { "x-key": apiKey },
+    const resp = await fetch("https://api.bfl.ml/v1/flux-pro-1.1", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-key": bflApiKey },
+      body: JSON.stringify({ prompt: args.prompt, width: 600, height: 600 }),
     });
-    const result = await poll.json();
-    if (result.status === "Ready") {
-      return result.result?.sample || "NO_URL";
+    if (!resp.ok) {
+      const t = await resp.text();
+      throw new Error(`FLUX submit error: ${resp.status} ${t}`);
     }
-    if (result.status === "failed") {
-      return `FLUX_FAILED: ${JSON.stringify(result)}`;
+    const { id } = await resp.json();
+
+    for (let i = 0; i < 60; i++) {
+      await new Promise(r => setTimeout(r, 2000));
+      const poll = await fetch(`https://api.bfl.ml/v1/get_result?id=${id}`, {
+        headers: { "x-key": bflApiKey },
+      });
+      const result = await poll.json();
+      if (result.status === "Ready") {
+        return result.result?.sample || "NO_URL";
+      }
+      if (result.status === "failed") {
+        throw new Error(`FLUX failed: ${JSON.stringify(result)}`);
+      }
     }
-  }
-  return "FLUX_TIMEOUT";
-}
+    throw new Error("FLUX timeout");
+  },
+});
