@@ -14,6 +14,7 @@ import {
   ChevronUp,
   Sparkles,
   Image,
+  ImagePlus,
   Rocket,
   Building2,
 } from 'lucide-react';
@@ -37,6 +38,7 @@ interface BannerVariant {
   title: string;
   text: string;
   imageStorageId?: string;
+  imageUrl?: string; // direct URL (from existing creative)
   isSelected: boolean;
   generatingImage: boolean;
 }
@@ -58,6 +60,15 @@ export default function AICabinetNewPage() {
     accountId ? { accountId: accountId as Id<"adAccounts"> } : 'skip'
   );
 
+  // Existing creatives for image picker
+  const existingCreatives = useQuery(
+    api.creatives.list,
+    user?.userId && accountId
+      ? { userId: user.userId as Id<"users">, accountId: accountId as Id<"adAccounts"> }
+      : 'skip'
+  );
+  const readyCreatives = existingCreatives?.filter(c => c.status === 'ready' && c.imageUrl) || [];
+
   // Step state
   const [activeStep, setActiveStep] = useState(1);
   const [maxStepReached, setMaxStepReached] = useState(1);
@@ -78,6 +89,7 @@ export default function AICabinetNewPage() {
   // Step 3 — Banners
   const [banners, setBanners] = useState<BannerVariant[]>([]);
   const [generatingTexts, setGeneratingTexts] = useState(false);
+  const [showCreativePicker, setShowCreativePicker] = useState<number | null>(null); // banner index
 
   // Step 4 — Launch
   const [launching, setLaunching] = useState(false);
@@ -90,6 +102,13 @@ export default function AICabinetNewPage() {
   const improveField = useAction(api.aiGenerate.improveTextField);
   const launchCampaign = useAction(api.aiCabinet.launchCampaign);
   const [improvingField, setImprovingField] = useState<string | null>(null); // "title-0", "text-1", etc.
+
+  const handlePickCreative = (bannerIndex: number, imageUrl: string) => {
+    setBanners(prev => prev.map((b, i) =>
+      i === bannerIndex ? { ...b, imageUrl, imageStorageId: undefined } : b
+    ));
+    setShowCreativePicker(null);
+  };
 
   const handleStep1Next = () => {
     if (!businessDirection.trim()) { setError('Введите направление бизнеса'); return; }
@@ -633,47 +652,88 @@ export default function AICabinetNewPage() {
 
                           {/* Image */}
                           <div>
-                            {banner.imageStorageId ? (
+                            {(banner.imageStorageId || banner.imageUrl) ? (
                               <div className="relative">
                                 <img
-                                  src={`${import.meta.env.VITE_CONVEX_SITE_URL || ''}/api/storage/${banner.imageStorageId}`}
+                                  src={banner.imageUrl || `${import.meta.env.VITE_CONVEX_SITE_URL || ''}/api/storage/${banner.imageStorageId}`}
                                   alt="Баннер"
                                   className="w-full max-w-[200px] rounded-lg border border-border"
                                 />
+                                <div className="flex gap-1.5 mt-2">
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => handleGenerateImage(index)}
+                                    disabled={banner.generatingImage}
+                                  >
+                                    {banner.generatingImage ? (
+                                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                    ) : (
+                                      <Image className="h-4 w-4 mr-1" />
+                                    )}
+                                    Новое
+                                  </Button>
+                                  {readyCreatives.length > 0 && (
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setShowCreativePicker(showCreativePicker === index ? null : index)}
+                                    >
+                                      <ImagePlus className="h-4 w-4 mr-1" />
+                                      Из креативов
+                                    </Button>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="flex gap-1.5">
                                 <Button
                                   variant="outline"
                                   size="sm"
-                                  className="mt-2"
                                   onClick={() => handleGenerateImage(index)}
                                   disabled={banner.generatingImage}
                                 >
                                   {banner.generatingImage ? (
-                                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                    <>
+                                      <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                      Генерация...
+                                    </>
                                   ) : (
-                                    <Image className="h-4 w-4 mr-1" />
+                                    <>
+                                      <Image className="h-4 w-4 mr-1" />
+                                      Сгенерировать
+                                    </>
                                   )}
-                                  Новое изображение
                                 </Button>
-                              </div>
-                            ) : (
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => handleGenerateImage(index)}
-                                disabled={banner.generatingImage}
-                              >
-                                {banner.generatingImage ? (
-                                  <>
-                                    <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                    Генерация...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Image className="h-4 w-4 mr-1" />
-                                    Сгенерировать изображение
-                                  </>
+                                {readyCreatives.length > 0 && (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => setShowCreativePicker(showCreativePicker === index ? null : index)}
+                                  >
+                                    <ImagePlus className="h-4 w-4 mr-1" />
+                                    Из креативов
+                                  </Button>
                                 )}
-                              </Button>
+                              </div>
+                            )}
+                            {/* Creative picker grid */}
+                            {showCreativePicker === index && readyCreatives.length > 0 && (
+                              <div className="mt-2 border border-border rounded-lg p-2">
+                                <p className="text-xs text-muted-foreground mb-2">Выберите креатив:</p>
+                                <div className="grid grid-cols-3 gap-2 max-h-48 overflow-y-auto">
+                                  {readyCreatives.map((c) => (
+                                    <button
+                                      key={c._id}
+                                      type="button"
+                                      onClick={() => handlePickCreative(index, c.imageUrl!)}
+                                      className="rounded-md border border-border hover:border-primary overflow-hidden transition-colors"
+                                    >
+                                      <img src={c.imageUrl!} alt={c.offer} className="w-full aspect-square object-cover" />
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
                             )}
                           </div>
                         </CardContent>
