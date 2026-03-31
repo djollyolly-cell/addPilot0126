@@ -65,3 +65,11 @@ Detailed rules are in `.claude/rules/`:
   - route → layout → page → hooks → API → backend
 - Prefer systemic fixes, but keep changes proportional.
 - If re-architecture is needed, define scope, safety, and rollout order.
+
+## Skills
+
+| File | Trigger |
+|---|---|
+| `vk-banner.md` | Banner generation: FLUX prompts, visual styles, layouts, text coverage, composite |
+
+When working on banner generation (creating/modifying banners, FLUX prompts, visual styles, text overlay, coverage checks), ALWAYS follow `.claude/rules/vk-banner.md` first.
