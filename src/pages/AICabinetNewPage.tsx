@@ -76,6 +76,8 @@ export default function AICabinetNewPage() {
 
   // Step 1 — Business info
   const [businessDirection, setBusinessDirection] = useState('');
+  const [targetAudience, setTargetAudience] = useState('');
+  const [usp, setUsp] = useState('');
   const [targetUrl, setTargetUrl] = useState('');
 
   // Step 2 — Campaign settings
@@ -140,6 +142,8 @@ export default function AICabinetNewPage() {
         businessDirection,
         objective,
         targetUrl,
+        targetAudience: targetAudience || undefined,
+        usp: usp || undefined,
       });
       setBanners(results.map((r: { title: string; text: string }) => ({
         title: r.title,
@@ -183,6 +187,8 @@ export default function AICabinetNewPage() {
         userId: user.userId as Id<"users">,
         businessDirection,
         objective,
+        targetAudience: targetAudience || undefined,
+        usp: usp || undefined,
         field,
         currentValue: banners[index][field],
       });
@@ -358,7 +364,11 @@ export default function AICabinetNewPage() {
                         <button
                           key={d._id}
                           type="button"
-                          onClick={() => setBusinessDirection(d.name)}
+                          onClick={() => {
+                            setBusinessDirection(d.name);
+                            setTargetAudience(d.targetAudience || '');
+                            setUsp(d.usp || '');
+                          }}
                           className={`px-2 py-0.5 rounded-full text-xs transition-colors ${
                             businessDirection === d.name
                               ? 'bg-primary text-primary-foreground'
@@ -368,6 +378,12 @@ export default function AICabinetNewPage() {
                           {d.name}
                         </button>
                       ))}
+                    </div>
+                  )}
+                  {(targetAudience || usp) && (
+                    <div className="mt-2 p-2 rounded-md bg-muted/50 text-xs space-y-1">
+                      {targetAudience && <p><span className="text-muted-foreground">ЦА:</span> {targetAudience}</p>}
+                      {usp && <p><span className="text-muted-foreground">УТП:</span> {usp}</p>}
                     </div>
                   )}
                 </div>

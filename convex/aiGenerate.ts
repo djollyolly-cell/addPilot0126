@@ -9,6 +9,8 @@ export const generateBannerTexts = action({
     businessDirection: v.string(),
     objective: v.string(),
     targetUrl: v.string(),
+    targetAudience: v.optional(v.string()),
+    usp: v.optional(v.string()),
     context: v.optional(v.string()), // parsed page content
   },
   handler: async (ctx, args) => {
@@ -71,7 +73,7 @@ export const generateBannerTexts = action({
 
 Бизнес: ${args.businessDirection}
 Цель: ${objectiveNames[args.objective] || args.objective}
-URL: ${args.targetUrl}
+URL: ${args.targetUrl}${args.targetAudience ? `\nЦелевая аудитория: ${args.targetAudience}` : ""}${args.usp ? `\nУТП: ${args.usp}` : ""}
 ${pageContext ? `\nКонтент страницы: ${pageContext}` : ""}
 
 Принципы:
@@ -256,6 +258,8 @@ export const improveTextField = action({
     userId: v.id("users"),
     businessDirection: v.string(),
     objective: v.string(),
+    targetAudience: v.optional(v.string()),
+    usp: v.optional(v.string()),
     field: v.union(v.literal("title"), v.literal("text")),
     currentValue: v.string(),
   },
@@ -300,7 +304,7 @@ export const improveTextField = action({
         system: `Ты — direct-response копирайтер для VK Ads. Улучши ${fieldName} рекламного баннера.
 СТРОГО до ${maxLen} символов. Считай символы!
 Бизнес: ${args.businessDirection}
-Цель: ${objectiveNames[args.objective] || args.objective}
+Цель: ${objectiveNames[args.objective] || args.objective}${args.targetAudience ? `\nЦА: ${args.targetAudience}` : ""}${args.usp ? `\nУТП: ${args.usp}` : ""}
 Ответ — ТОЛЬКО улучшенный текст, без кавычек и пояснений.`,
         messages: [{
           role: "user",
