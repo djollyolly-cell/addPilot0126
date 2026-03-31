@@ -72,4 +72,4 @@ Detailed rules are in `.claude/rules/`:
 |---|---|
 | `vk-banner.md` | Banner generation: FLUX prompts, visual styles, layouts, text coverage, composite |
 
-When working on banner generation (creating/modifying banners, FLUX prompts, visual styles, text overlay, coverage checks), ALWAYS follow `.claude/rules/vk-banner.md` first.
+When working on banner generation (creating/modifying banners, FLUX prompts, visual styles, text overlay, coverage checks), ALWAYS follow `docs/skills/vk-banner.md` first.
