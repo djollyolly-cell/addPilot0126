@@ -10,7 +10,7 @@ test.describe('Sprint 1 - VK OAuth Flow', () => {
     await expect(loginButton).toBeVisible();
 
     // Click and wait for navigation
-    const [_response] = await Promise.all([
+    await Promise.all([
       page.waitForURL(/oauth\.vk\.com|localhost/, { timeout: 10000 }),
       loginButton.click(),
     ]);

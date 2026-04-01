@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Check frontend auth flow', async ({ page }) => {
   // Go to frontend

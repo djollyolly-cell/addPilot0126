@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Check frontend loads and connects to Convex', async ({ page }) => {
   // Go to frontend

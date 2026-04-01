@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test } from '@playwright/test';
 
 test('Login to Convex Dashboard with admin key', async ({ page }) => {
   const DEPLOYMENT_URL = 'http://localhost:4210';
