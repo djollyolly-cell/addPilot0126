@@ -26,6 +26,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/utils';
 import { BannerPreview } from '@/components/BannerPreview';
+import BannerCompositor from '@/components/BannerCompositor';
 
 const statusLabels: Record<string, { label: string; variant: 'default' | 'success' | 'warning' | 'destructive' | 'secondary' }> = {
   draft: { label: 'Черновик', variant: 'secondary' },
@@ -470,14 +471,47 @@ export default function AICabinetDetailPage() {
                 /* eslint-disable-next-line @typescript-eslint/no-explicit-any */
                 banners.map((banner: any) => (
                   <div key={banner._id}>
-                    <BannerPreview
-                      title={banner.title}
-                      text={banner.text}
-                      imageStorageId={banner.imageStorageId}
-                      isSelected={banner.isSelected}
-                      vkBannerId={banner.vkBannerId}
-                      onToggleSelected={() => toggleBannerSelected({ id: banner._id })}
-                    />
+                    {banner.headline && banner.imageStorageId ? (
+                      <div className={`p-4 rounded-lg border-2 transition-colors ${
+                        banner.isSelected ? 'border-primary/50 bg-primary/5' : 'border-border'
+                      }`}>
+                        <div className="flex items-start justify-between mb-2">
+                          <div className="flex-1 min-w-0">
+                            <h4 className="font-medium text-sm">{banner.headline}</h4>
+                            {banner.subtitle && <p className="text-xs text-muted-foreground">{banner.subtitle}</p>}
+                            <p className="text-sm text-muted-foreground mt-1">{banner.title} — {banner.text}</p>
+                          </div>
+                          <label className="flex items-center gap-1 ml-3 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={banner.isSelected}
+                              onChange={() => toggleBannerSelected({ id: banner._id })}
+                              className="w-4 h-4 rounded"
+                            />
+                          </label>
+                        </div>
+                        <BannerCompositor
+                          imageUrl={`${import.meta.env.VITE_CONVEX_SITE_URL || ''}/api/storage/${banner.imageStorageId}`}
+                          headline={banner.headline}
+                          subtitle={banner.subtitle}
+                          bullets={banner.bullets || []}
+                          size={1080}
+                          className="max-w-[250px]"
+                        />
+                        {banner.vkBannerId && (
+                          <p className="text-xs text-muted-foreground mt-2">myTarget ID: {banner.vkBannerId}</p>
+                        )}
+                      </div>
+                    ) : (
+                      <BannerPreview
+                        title={banner.title}
+                        text={banner.text}
+                        imageStorageId={banner.imageStorageId}
+                        isSelected={banner.isSelected}
+                        vkBannerId={banner.vkBannerId}
+                        onToggleSelected={() => toggleBannerSelected({ id: banner._id })}
+                      />
+                    )}
                     {campaign.status !== 'draft' && (
                       <div className="flex gap-2 mt-2 pl-4">
                         <Button variant="ghost" size="sm" className="text-xs h-7" disabled>

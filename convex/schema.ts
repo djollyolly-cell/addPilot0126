@@ -472,9 +472,12 @@ export default defineSchema({
   // AI Cabinet: banners (ads) within AI campaigns
   aiBanners: defineTable({
     campaignId: v.id("aiCampaigns"),
-    title: v.string(),       // ≤25 chars
-    text: v.string(),        // ≤90 chars
-    imageStorageId: v.optional(v.id("_storage")),     // 600×600
+    title: v.string(),       // ≤25 chars (adTitle for VK Ads)
+    text: v.string(),        // ≤90 chars (adText for VK Ads)
+    headline: v.optional(v.string()),    // ≤35 chars (text ON banner image)
+    subtitle: v.optional(v.string()),    // ≤60 chars (subtitle ON banner image)
+    bullets: v.optional(v.array(v.string())), // up to 4 bullets ON banner image
+    imageStorageId: v.optional(v.id("_storage")),     // 1080×1080 (FLUX Ultra)
     wideImageStorageId: v.optional(v.id("_storage")), // 1080×607
     iconStorageId: v.optional(v.id("_storage")),      // 256×256
     vkContentIds: v.optional(v.object({

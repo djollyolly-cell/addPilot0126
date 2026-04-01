@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useAction } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '@/lib/useAuth';
@@ -25,6 +25,7 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency } from '@/lib/utils';
 import { RegionSelect } from '@/components/RegionSelect';
+import BannerCompositor from '@/components/BannerCompositor';
 
 const objectives = [
   { value: 'traffic', label: 'Трафик на сайт', desc: 'Клики на ваш сайт' },
@@ -35,10 +36,13 @@ const objectives = [
 ];
 
 interface BannerVariant {
-  title: string;
-  text: string;
+  headline: string;
+  subtitle?: string;
+  bullets: string[];
+  adTitle: string;
+  adText: string;
   imageStorageId?: string;
-  imageUrl?: string; // direct URL (from existing creative)
+  imageUrl?: string;
   isSelected: boolean;
   generatingImage: boolean;
 }
@@ -96,14 +100,35 @@ export default function AICabinetNewPage() {
   // Step 4 — Launch
   const [launching, setLaunching] = useState(false);
 
+  // Composited banner blobs (canvas output with text overlay)
+  const compositedBlobsRef = useRef<Map<number, Blob>>(new Map());
+
   // Mutations & actions
   const createCampaign = useMutation(api.aiCabinet.createCampaign);
   const createBanner = useMutation(api.aiCabinet.createBanner);
+  const generateUploadUrl = useMutation(api.aiCabinet.generateUploadUrl);
   const generateTexts = useAction(api.aiGenerate.generateBannerTexts);
   const generateImage = useAction(api.aiGenerate.generateBannerImage);
   const improveField = useAction(api.aiGenerate.improveTextField);
   const launchCampaign = useAction(api.aiCabinet.launchCampaign);
   const [improvingField, setImprovingField] = useState<string | null>(null); // "title-0", "text-1", etc.
+
+  // Store composited blob when BannerCompositor finishes rendering
+  const handleComposite = useCallback((index: number, blob: Blob) => {
+    compositedBlobsRef.current.set(index, blob);
+  }, []);
+
+  // Upload composited blob to Convex storage, returns storageId
+  const uploadCompositedBlob = async (blob: Blob): Promise<string> => {
+    const uploadUrl = await generateUploadUrl();
+    const result = await fetch(uploadUrl, {
+      method: "POST",
+      headers: { "Content-Type": "image/jpeg" },
+      body: blob,
+    });
+    const { storageId } = await result.json();
+    return storageId;
+  };
 
   const handlePickCreative = (bannerIndex: number, imageUrl: string) => {
     setBanners(prev => prev.map((b, i) =>
@@ -145,9 +170,12 @@ export default function AICabinetNewPage() {
         targetAudience: targetAudience || undefined,
         usp: usp || undefined,
       });
-      setBanners(results.map((r: { title: string; text: string }) => ({
-        title: r.title,
-        text: r.text,
+      setBanners(results.map((r: { headline: string; subtitle?: string; bullets: string[]; adTitle: string; adText: string }) => ({
+        headline: r.headline,
+        subtitle: r.subtitle,
+        bullets: r.bullets || [],
+        adTitle: r.adTitle,
+        adText: r.adText,
         isSelected: true,
         generatingImage: false,
       })));
@@ -166,8 +194,9 @@ export default function AICabinetNewPage() {
       const result = await generateImage({
         userId: user.userId as Id<"users">,
         businessDirection,
-        title: banner.title,
-        text: banner.text,
+        title: banner.headline,
+        text: banner.adText,
+        niche: businessDirection,
       });
       setBanners(prev => prev.map((b, i) =>
         i === index ? { ...b, imageStorageId: result.storageId, generatingImage: false } : b
@@ -178,11 +207,14 @@ export default function AICabinetNewPage() {
     }
   };
 
-  const handleImproveField = async (index: number, field: 'title' | 'text') => {
+  const handleImproveField = async (index: number, field: 'headline' | 'subtitle' | 'adTitle' | 'adText') => {
     if (!user?.userId) return;
     const key = `${field}-${index}`;
     setImprovingField(key);
     try {
+      const currentValue = field === 'subtitle'
+        ? (banners[index].subtitle || '')
+        : banners[index][field];
       const improved = await improveField({
         userId: user.userId as Id<"users">,
         businessDirection,
@@ -190,7 +222,7 @@ export default function AICabinetNewPage() {
         targetAudience: targetAudience || undefined,
         usp: usp || undefined,
         field,
-        currentValue: banners[index][field],
+        currentValue,
       });
       setBanners(prev => prev.map((b, i) =>
         i === index ? { ...b, [field]: improved } : b
@@ -224,13 +256,23 @@ export default function AICabinetNewPage() {
         dailyBudget,
       });
 
-      // 2. Create banners in DB
-      for (const banner of banners) {
+      // 2. Upload composited images and create banners in DB
+      for (let i = 0; i < banners.length; i++) {
+        const banner = banners[i];
+        // Upload composited image (with text overlay) if available
+        let imageStorageId = banner.imageStorageId;
+        const compositedBlob = compositedBlobsRef.current.get(i);
+        if (compositedBlob) {
+          imageStorageId = await uploadCompositedBlob(compositedBlob);
+        }
         await createBanner({
           campaignId: campaignId as Id<"aiCampaigns">,
-          title: banner.title,
-          text: banner.text,
-          imageStorageId: banner.imageStorageId as Id<"_storage"> | undefined,
+          title: banner.adTitle,
+          text: banner.adText,
+          headline: banner.headline,
+          subtitle: banner.subtitle,
+          bullets: banner.bullets,
+          imageStorageId: imageStorageId as Id<"_storage"> | undefined,
           isSelected: banner.isSelected,
         });
       }
@@ -267,13 +309,22 @@ export default function AICabinetNewPage() {
         dailyBudget,
       });
 
-      // Save banners if any
-      for (const banner of banners) {
+      // Save banners if any (upload composited images with text overlay)
+      for (let i = 0; i < banners.length; i++) {
+        const banner = banners[i];
+        let imageStorageId = banner.imageStorageId;
+        const compositedBlob = compositedBlobsRef.current.get(i);
+        if (compositedBlob) {
+          imageStorageId = await uploadCompositedBlob(compositedBlob);
+        }
         await createBanner({
           campaignId: campaignId as Id<"aiCampaigns">,
-          title: banner.title,
-          text: banner.text,
-          imageStorageId: banner.imageStorageId as Id<"_storage"> | undefined,
+          title: banner.adTitle,
+          text: banner.adText,
+          headline: banner.headline,
+          subtitle: banner.subtitle,
+          bullets: banner.bullets,
+          imageStorageId: imageStorageId as Id<"_storage"> | undefined,
           isSelected: banner.isSelected,
         });
       }
@@ -603,16 +654,16 @@ export default function AICabinetNewPage() {
                             </label>
                           </div>
 
-                          {/* Editable title */}
+                          {/* Headline (on banner) */}
                           <div>
-                            <Label className="text-xs">Заголовок ({banner.title.length}/25)</Label>
+                            <Label className="text-xs">Заголовок на баннере ({banner.headline.length}/35)</Label>
                             <div className="flex gap-1">
                               <Input
-                                value={banner.title}
-                                maxLength={25}
+                                value={banner.headline}
+                                maxLength={35}
                                 onChange={(e) => {
                                   setBanners(prev => prev.map((b, i) =>
-                                    i === index ? { ...b, title: e.target.value } : b
+                                    i === index ? { ...b, headline: e.target.value } : b
                                   ));
                                 }}
                                 className="flex-1"
@@ -621,11 +672,11 @@ export default function AICabinetNewPage() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-10 w-10 shrink-0"
-                                onClick={() => handleImproveField(index, 'title')}
-                                disabled={improvingField === `title-${index}`}
+                                onClick={() => handleImproveField(index, 'headline')}
+                                disabled={improvingField === `headline-${index}`}
                                 title="AI улучшение"
                               >
-                                {improvingField === `title-${index}` ? (
+                                {improvingField === `headline-${index}` ? (
                                   <Loader2 className="h-4 w-4 animate-spin" />
                                 ) : (
                                   <Sparkles className="h-4 w-4 text-primary" />
@@ -634,17 +685,147 @@ export default function AICabinetNewPage() {
                             </div>
                           </div>
 
-                          {/* Editable text */}
+                          {/* Subtitle (on banner, optional) */}
                           <div>
-                            <Label className="text-xs">Текст ({banner.text.length}/90)</Label>
+                            <Label className="text-xs">Подзаголовок ({(banner.subtitle || '').length}/60)</Label>
+                            <div className="flex gap-1">
+                              <Input
+                                value={banner.subtitle || ''}
+                                maxLength={60}
+                                placeholder="Опционально"
+                                onChange={(e) => {
+                                  setBanners(prev => prev.map((b, i) =>
+                                    i === index ? { ...b, subtitle: e.target.value || undefined } : b
+                                  ));
+                                }}
+                                className="flex-1"
+                              />
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-10 w-10 shrink-0"
+                                onClick={() => handleImproveField(index, 'subtitle')}
+                                disabled={improvingField === `subtitle-${index}`}
+                                title="AI улучшение"
+                              >
+                                {improvingField === `subtitle-${index}` ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-4 w-4 text-primary" />
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+
+                          {/* Bullets (on banner) */}
+                          <div>
+                            <Label className="text-xs">Буллеты на баннере</Label>
+                            {banner.bullets.map((bullet, bi) => (
+                              <div key={bi} className="flex gap-1 mt-1">
+                                <Input
+                                  value={bullet}
+                                  maxLength={40}
+                                  placeholder={`Буллет ${bi + 1}`}
+                                  onChange={(e) => {
+                                    setBanners(prev => prev.map((b, i) => {
+                                      if (i !== index) return b;
+                                      const newBullets = [...b.bullets];
+                                      newBullets[bi] = e.target.value;
+                                      return { ...b, bullets: newBullets };
+                                    }));
+                                  }}
+                                  className="flex-1 h-8 text-sm"
+                                />
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 shrink-0"
+                                  onClick={async () => {
+                                    if (!user?.userId) return;
+                                    const key = `bullet-${index}-${bi}`;
+                                    setImprovingField(key);
+                                    try {
+                                      const improved = await improveField({
+                                        userId: user.userId as Id<"users">,
+                                        businessDirection,
+                                        objective,
+                                        targetAudience: targetAudience || undefined,
+                                        usp: usp || undefined,
+                                        field: 'bullet',
+                                        currentValue: bullet,
+                                      });
+                                      setBanners(prev => prev.map((b, i) => {
+                                        if (i !== index) return b;
+                                        const newBullets = [...b.bullets];
+                                        newBullets[bi] = improved;
+                                        return { ...b, bullets: newBullets };
+                                      }));
+                                    } catch (err) {
+                                      setError(err instanceof Error ? err.message : 'Ошибка улучшения');
+                                    } finally {
+                                      setImprovingField(null);
+                                    }
+                                  }}
+                                  disabled={improvingField === `bullet-${index}-${bi}`}
+                                  title="AI улучшение"
+                                >
+                                  {improvingField === `bullet-${index}-${bi}` ? (
+                                    <Loader2 className="h-3 w-3 animate-spin" />
+                                  ) : (
+                                    <Sparkles className="h-3 w-3 text-primary" />
+                                  )}
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Separator: VK Ads text */}
+                          <div className="border-t border-border pt-2 mt-2">
+                            <p className="text-xs text-muted-foreground mb-2">Текст для VK Ads:</p>
+                          </div>
+
+                          {/* adTitle (for VK Ads) */}
+                          <div>
+                            <Label className="text-xs">Title VK Ads ({banner.adTitle.length}/25)</Label>
+                            <div className="flex gap-1">
+                              <Input
+                                value={banner.adTitle}
+                                maxLength={25}
+                                onChange={(e) => {
+                                  setBanners(prev => prev.map((b, i) =>
+                                    i === index ? { ...b, adTitle: e.target.value } : b
+                                  ));
+                                }}
+                                className="flex-1"
+                              />
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-10 w-10 shrink-0"
+                                onClick={() => handleImproveField(index, 'adTitle')}
+                                disabled={improvingField === `adTitle-${index}`}
+                                title="AI улучшение"
+                              >
+                                {improvingField === `adTitle-${index}` ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Sparkles className="h-4 w-4 text-primary" />
+                                )}
+                              </Button>
+                            </div>
+                          </div>
+
+                          {/* adText (for VK Ads) */}
+                          <div>
+                            <Label className="text-xs">Text VK Ads ({banner.adText.length}/90)</Label>
                             <div className="flex gap-1">
                               <textarea
-                                value={banner.text}
+                                value={banner.adText}
                                 maxLength={90}
                                 rows={2}
                                 onChange={(e) => {
                                   setBanners(prev => prev.map((b, i) =>
-                                    i === index ? { ...b, text: e.target.value } : b
+                                    i === index ? { ...b, adText: e.target.value } : b
                                   ));
                                 }}
                                 className="flex-1 px-3 py-2 text-sm border border-border rounded-lg bg-background resize-none"
@@ -653,11 +834,11 @@ export default function AICabinetNewPage() {
                                 variant="ghost"
                                 size="icon"
                                 className="h-10 w-10 shrink-0 self-start mt-1"
-                                onClick={() => handleImproveField(index, 'text')}
-                                disabled={improvingField === `text-${index}`}
+                                onClick={() => handleImproveField(index, 'adText')}
+                                disabled={improvingField === `adText-${index}`}
                                 title="AI улучшение"
                               >
-                                {improvingField === `text-${index}` ? (
+                                {improvingField === `adText-${index}` ? (
                                   <Loader2 className="h-4 w-4 animate-spin" />
                                 ) : (
                                   <Sparkles className="h-4 w-4 text-primary" />
@@ -666,14 +847,18 @@ export default function AICabinetNewPage() {
                             </div>
                           </div>
 
-                          {/* Image */}
+                          {/* Image with text compositing */}
                           <div>
                             {(banner.imageStorageId || banner.imageUrl) ? (
-                              <div className="relative">
-                                <img
-                                  src={banner.imageUrl || `${import.meta.env.VITE_CONVEX_SITE_URL || ''}/api/storage/${banner.imageStorageId}`}
-                                  alt="Баннер"
-                                  className="w-full max-w-[200px] rounded-lg border border-border"
+                              <div>
+                                <BannerCompositor
+                                  imageUrl={banner.imageUrl || `${import.meta.env.VITE_CONVEX_SITE_URL || ''}/api/storage/${banner.imageStorageId}`}
+                                  headline={banner.headline}
+                                  subtitle={banner.subtitle}
+                                  bullets={banner.bullets}
+                                  size={1080}
+                                  onComposite={(blob) => handleComposite(index, blob)}
+                                  className="max-w-[300px]"
                                 />
                                 <div className="flex gap-1.5 mt-2">
                                   <Button
@@ -687,7 +872,7 @@ export default function AICabinetNewPage() {
                                     ) : (
                                       <Image className="h-4 w-4 mr-1" />
                                     )}
-                                    Новое
+                                    Новое фото
                                   </Button>
                                   {readyCreatives.length > 0 && (
                                     <Button
@@ -712,12 +897,12 @@ export default function AICabinetNewPage() {
                                   {banner.generatingImage ? (
                                     <>
                                       <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                      Генерация...
+                                      Генерация (~90 сек)...
                                     </>
                                   ) : (
                                     <>
                                       <Image className="h-4 w-4 mr-1" />
-                                      Сгенерировать
+                                      Сгенерировать фон
                                     </>
                                   )}
                                 </Button>
@@ -842,8 +1027,8 @@ export default function AICabinetNewPage() {
                             />
                           )}
                           <div className="min-w-0">
-                            <p className="text-sm font-medium">{banner.title}</p>
-                            <p className="text-xs text-muted-foreground mt-1">{banner.text}</p>
+                            <p className="text-sm font-medium">{banner.headline}</p>
+                            <p className="text-xs text-muted-foreground mt-1">{banner.adTitle} — {banner.adText}</p>
                           </div>
                         </div>
                       </div>

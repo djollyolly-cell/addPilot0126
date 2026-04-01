@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { query, mutation, action, internalQuery, internalMutation, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { selectStyle } from "./bannerStyles";
 
 const TWO_DAYS_MS = 2 * 24 * 60 * 60 * 1000;
 
@@ -220,7 +221,7 @@ export const generateText = action({
   },
 });
 
-// Generate banner image using Google Gemini
+// Generate banner image using Haiku (style prompt) + FLUX Ultra
 export const generateImage = action({
   args: {
     creativeId: v.id("creatives"),
@@ -251,37 +252,39 @@ export const generateImage = action({
     if (!bflApiKey) throw new Error("BFL_API_KEY не настроен");
 
     try {
-      // Use Claude to translate Russian ad text into English visual keywords
       const anthropicKey = process.env.ANTHROPIC_API_KEY;
       const anthropicBase = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
-      let visualKeywords = "professional business scene";
-      if (anthropicKey) {
-        try {
-          const translateResp = await fetch(`${anthropicBase}/v1/messages`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-api-key": anthropicKey,
-              "anthropic-version": "2023-06-01",
-            },
-            body: JSON.stringify({
-              model: "claude-haiku-4-5-20251001",
-              max_tokens: 100,
-              system: "You create image prompts for advertising banners. Given Russian ad text, create a vivid scene that represents the product benefit.\n\nExamples:\n- Lead generation → powerful magnet pulling golden coins from the air, dark moody background, volumetric light\n- Growth/scaling → rocket launching from a launchpad, trail of fire, dramatic sky at dusk\n- Fitness → athlete mid-jump seen from behind, gym atmosphere, chalk dust in dramatic side lighting\n- Flower delivery → luxurious bouquet of roses on black marble, water droplets, studio lighting\n- Speed/efficiency → sleek sports car in motion blur on empty highway, sunset\n- Marketing → giant bullseye target with arrow in center, sparks flying, epic lighting\n- Education → woman from behind looking at a vast library, warm golden light flooding in\n\nPeople rules (CRITICAL):\n- People ARE allowed but must look natural and candid, never posed\n- NEVER show people looking directly at camera\n- NEVER show typical stock photo poses (smiling at camera, thumbs up, handshake)\n- Show people from BEHIND, from the SIDE, in SILHOUETTE, or from far away\n- Show people in ACTION: walking, working, running — not posing\n- Faces should be partially hidden: turned away, in shadow, out of focus, cropped out\n\nGeneral rules:\n- Bold saturated colors, high contrast, dark or blurred backgrounds\n- Bottom third darker (text overlay area)\n- Style: cinematic photography or high-quality 3D render\n- NEVER include: text, letters, words, logos, screens, laptops, phones, UI, charts, icons\n\nOutput ONLY the prompt (2-3 sentences).",
-              messages: [{ role: "user", content: `${args.offer}. ${args.bullets}. ${args.benefit}. ${args.businessContext || ""}` }],
-            }),
-          });
-          if (translateResp.ok) {
-            const trData = await translateResp.json();
-            visualKeywords = trData.content?.[0]?.text || visualKeywords;
-          }
-        } catch { /* fallback to default */ }
+      if (!anthropicKey) throw new Error("ANTHROPIC_API_KEY не настроен");
+
+      // Step 1: Select style based on business context
+      const style = selectStyle(args.businessContext || args.offer);
+
+      // Step 2: Generate FLUX prompt via Haiku with style system prompt
+      const translateResp = await fetch(anthropicBase + "/v1/messages", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-api-key": anthropicKey,
+          "anthropic-version": "2023-06-01",
+        },
+        body: JSON.stringify({
+          model: "claude-haiku-4-5-20251001",
+          max_tokens: 300,
+          system: style.systemPrompt,
+          messages: [{ role: "user", content: args.offer + ". " + args.bullets + ". " + args.benefit + ". " + (args.businessContext || "") }],
+        }),
+      });
+
+      let visualKeywords = "Professional commercial photography scene";
+      if (translateResp.ok) {
+        const trData = await translateResp.json();
+        visualKeywords = trData.content?.[0]?.text || visualKeywords;
       }
 
-      const prompt = `${visualKeywords}. Vibrant colors, professional commercial photography, dramatic lighting. Bottom area slightly darker for text. No text, no letters, no words, no watermarks.`;
+      const prompt = visualKeywords + " " + style.suffix;
 
-      // Submit generation request to FLUX API
-      const submitResp = await fetch("https://api.bfl.ai/v1/flux-pro-1.1", {
+      // Step 3: Submit to FLUX Ultra (square, raw)
+      const submitResp = await fetch("https://api.bfl.ai/v1/flux-pro-1.1-ultra", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -289,25 +292,24 @@ export const generateImage = action({
         },
         body: JSON.stringify({
           prompt,
-          width: 1024,
-          height: 1024,
+          aspect_ratio: "1:1",
+          raw: true,
         }),
       });
 
       if (!submitResp.ok) {
         const text = await submitResp.text();
-        throw new Error(`FLUX API submit error: ${submitResp.status} ${text}`);
+        throw new Error("FLUX Ultra API error: " + submitResp.status + " " + text);
       }
 
       const submitData = await submitResp.json();
       const taskId = submitData.id;
-      const pollingUrl = submitData.polling_url || `https://api.bfl.ai/v1/get_result?id=${taskId}`;
 
-      // Poll for result (max 60 seconds)
+      // Step 4: Poll for result (Ultra ~90 sec, max 60 × 3 sec = 3 min)
       let imageUrl: string | null = null;
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const pollResp = await fetch(pollingUrl, {
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const pollResp = await fetch("https://api.bfl.ai/v1/get_result?id=" + taskId, {
           headers: { "x-key": bflApiKey },
         });
         if (!pollResp.ok) continue;
@@ -317,15 +319,15 @@ export const generateImage = action({
           break;
         }
         if (pollData.status === "Error" || pollData.status === "Failed") {
-          throw new Error(`FLUX generation failed: ${pollData.status}`);
+          throw new Error("FLUX генерация не удалась: " + pollData.status);
         }
       }
 
       if (!imageUrl) {
-        throw new Error("FLUX: таймаут генерации изображения");
+        throw new Error("FLUX: таймаут генерации изображения (3 мин)");
       }
 
-      // Download image from FLUX signed URL
+      // Step 5: Download and store
       const imgResp = await fetch(imageUrl);
       if (!imgResp.ok) throw new Error("Не удалось скачать изображение от FLUX");
       const imgBlob = await imgResp.blob();

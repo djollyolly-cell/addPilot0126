@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { formatRelativeTime } from '@/lib/utils';
+import BannerCompositor from '@/components/BannerCompositor';
 
 interface Creative {
   _id: string;
@@ -57,49 +58,14 @@ export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalle
                   </span>
                 </div>
               ) : creative.imageUrl ? (
-                <>
-                  <img
-                    src={creative.imageUrl}
-                    alt={creative.offer}
-                    className="w-full h-full object-cover"
-                  />
-                  {/* Gradient overlays: top for headline, bottom for CTA */}
-                  <div className="absolute inset-0 bg-gradient-to-b from-black/60 via-transparent to-black/50" />
-                  {/* Z-pattern text layout: headline top → details middle → CTA bottom-right */}
-                  <div className="absolute inset-0 flex flex-col justify-between p-4 text-white">
-                    {/* Top: main offer headline — first thing the eye sees */}
-                    <div>
-                      <p className="text-lg font-extrabold leading-snug drop-shadow-lg line-clamp-2"
-                         style={{ textShadow: '0 2px 8px rgba(0,0,0,0.8)' }}>
-                        {creative.offer}
-                      </p>
-                    </div>
-                    {/* Middle: bullets + benefit */}
-                    <div className="space-y-1">
-                      {creative.bullets && (
-                        <p className="text-xs leading-snug drop-shadow line-clamp-2"
-                           style={{ textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
-                          {creative.bullets}
-                        </p>
-                      )}
-                      {creative.benefit && (
-                        <p className="text-sm font-semibold drop-shadow"
-                           style={{ textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
-                          {creative.benefit}
-                        </p>
-                      )}
-                    </div>
-                    {/* Bottom-right: CTA text */}
-                    {creative.cta && (
-                      <div className="flex justify-end">
-                        <p className="text-sm font-bold drop-shadow-lg"
-                           style={{ textShadow: '0 1px 4px rgba(0,0,0,0.8)' }}>
-                          {creative.cta}
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                </>
+                <BannerCompositor
+                  imageUrl={creative.imageUrl}
+                  headline={creative.offer}
+                  subtitle={creative.benefit}
+                  bullets={creative.bullets ? creative.bullets.split(' • ') : []}
+                  size={1080}
+                  className="w-full h-full"
+                />
               ) : (
                 <ImageIcon className="h-12 w-12 text-muted-foreground" />
               )}

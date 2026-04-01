@@ -10,7 +10,10 @@
 
 import type * as adAccounts from "../adAccounts.js";
 import type * as admin from "../admin.js";
+import type * as aiCabinet from "../aiCabinet.js";
+import type * as aiGenerate from "../aiGenerate.js";
 import type * as aiLimits from "../aiLimits.js";
+import type * as aiRecommendations from "../aiRecommendations.js";
 import type * as auth from "../auth.js";
 import type * as authEmail from "../authEmail.js";
 import type * as authInternal from "../authInternal.js";
@@ -29,6 +32,7 @@ import type * as ruleEngine from "../ruleEngine.js";
 import type * as rules from "../rules.js";
 import type * as syncMetrics from "../syncMetrics.js";
 import type * as telegram from "../telegram.js";
+import type * as testPrompts from "../testPrompts.js";
 import type * as userSettings from "../userSettings.js";
 import type * as users from "../users.js";
 import type * as videos from "../videos.js";
@@ -43,7 +47,10 @@ import type {
 declare const fullApi: ApiFromModules<{
   adAccounts: typeof adAccounts;
   admin: typeof admin;
+  aiCabinet: typeof aiCabinet;
+  aiGenerate: typeof aiGenerate;
   aiLimits: typeof aiLimits;
+  aiRecommendations: typeof aiRecommendations;
   auth: typeof auth;
   authEmail: typeof authEmail;
   authInternal: typeof authInternal;
@@ -62,6 +69,7 @@ declare const fullApi: ApiFromModules<{
   rules: typeof rules;
   syncMetrics: typeof syncMetrics;
   telegram: typeof telegram;
+  testPrompts: typeof testPrompts;
   userSettings: typeof userSettings;
   users: typeof users;
   videos: typeof videos;

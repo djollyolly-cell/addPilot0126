@@ -189,6 +189,9 @@ export const createBanner = mutation({
     campaignId: v.id("aiCampaigns"),
     title: v.string(),
     text: v.string(),
+    headline: v.optional(v.string()),
+    subtitle: v.optional(v.string()),
+    bullets: v.optional(v.array(v.string())),
     imageStorageId: v.optional(v.id("_storage")),
     wideImageStorageId: v.optional(v.id("_storage")),
     iconStorageId: v.optional(v.id("_storage")),
@@ -203,6 +206,9 @@ export const createBanner = mutation({
       campaignId: args.campaignId,
       title: args.title,
       text: args.text,
+      headline: args.headline,
+      subtitle: args.subtitle,
+      bullets: args.bullets,
       imageStorageId: args.imageStorageId,
       wideImageStorageId: args.wideImageStorageId,
       iconStorageId: args.iconStorageId,
@@ -219,6 +225,9 @@ export const updateBanner = mutation({
     id: v.id("aiBanners"),
     title: v.optional(v.string()),
     text: v.optional(v.string()),
+    headline: v.optional(v.string()),
+    subtitle: v.optional(v.string()),
+    bullets: v.optional(v.array(v.string())),
     isSelected: v.optional(v.boolean()),
     vkBannerId: v.optional(v.string()),
     vkContentIds: v.optional(v.object({
@@ -327,6 +336,14 @@ export const fetchRegions = action({
       { accountId: args.accountId }
     );
     return ctx.runAction(api.vkApi.getMtRegions, { accessToken });
+  },
+});
+
+// Generate upload URL for composited banner images from client
+export const generateUploadUrl = mutation({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.storage.generateUploadUrl();
   },
 });
 

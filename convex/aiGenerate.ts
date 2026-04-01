@@ -1,8 +1,10 @@
 import { v } from "convex/values";
 import { action } from "./_generated/server";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
+import { selectStyle } from "./bannerStyles";
 
-// Generate 3 banner variants (title + text) for an AI campaign
+// Generate banner text variants for an AI campaign
+// Returns headline/subtitle/bullets (for banner image) + adTitle/adText (for VK Ads)
 export const generateBannerTexts = action({
   args: {
     userId: v.id("users"),
@@ -11,7 +13,7 @@ export const generateBannerTexts = action({
     targetUrl: v.string(),
     targetAudience: v.optional(v.string()),
     usp: v.optional(v.string()),
-    context: v.optional(v.string()), // parsed page content
+    context: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Check limits
@@ -40,7 +42,6 @@ export const generateBannerTexts = action({
         });
         if (resp.ok) {
           const html = await resp.text();
-          // Extract text content (strip HTML tags, take first 1000 chars)
           pageContext = html
             .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
             .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
@@ -50,7 +51,7 @@ export const generateBannerTexts = action({
             .substring(0, 1000);
         }
       } catch {
-        // Ignore fetch errors, proceed without page context
+        // Ignore fetch errors
       }
     }
 
@@ -62,27 +63,30 @@ export const generateBannerTexts = action({
       engagement: "Продвижение поста",
     };
 
-    const systemPrompt = `Ты — агрессивный direct-response копирайтер для VK Ads.
-Генерируй текст для рекламных баннеров мультиформата.
+    const systemPrompt = "Ты — агрессивный direct-response копирайтер для VK Ads.\n" +
+      "Генерируй два типа текста:\n" +
+      "1. Текст НА баннере (headline, subtitle, bullets) — крупный, читается за секунду\n" +
+      "2. Текст ДЛЯ VK Ads (adTitle, adText) — текст объявления в ленте\n\n" +
+      "ЖЁСТКИЕ ОГРАНИЧЕНИЯ:\n" +
+      "- headline: до 35 символов (заголовок НА баннере, крупный шрифт)\n" +
+      "- subtitle: до 60 символов (подзаголовок НА баннере, опционально)\n" +
+      "- bullets: 2-4 штуки, каждый до 40 символов (буллеты НА баннере)\n" +
+      "- adTitle: СТРОГО до 25 символов (заголовок для VK Ads)\n" +
+      "- adText: СТРОГО до 90 символов (текст для VK Ads)\n\n" +
+      "Считай символы! Если длиннее — обрежь и перефразируй.\n\n" +
+      "Бизнес: " + args.businessDirection + "\n" +
+      "Цель: " + (objectiveNames[args.objective] || args.objective) + "\n" +
+      "URL: " + args.targetUrl +
+      (args.targetAudience ? "\nЦелевая аудитория: " + args.targetAudience : "") +
+      (args.usp ? "\nУТП: " + args.usp : "") +
+      (pageContext ? "\nКонтент страницы: " + pageContext : "") + "\n\n" +
+      "Принципы:\n" +
+      "- Бей в боль или желание ЦА\n" +
+      "- Используй цифры и факты\n" +
+      "- Каждое слово работает — убирай воду\n" +
+      "- Пиши на русском";
 
-ЖЁСТКИЕ ОГРАНИЧЕНИЯ:
-- title: СТРОГО до 25 символов (заголовок)
-- text: СТРОГО до 90 символов (текст объявления)
-
-Считай символы! Если длиннее — обрежь и перефразируй.
-
-Бизнес: ${args.businessDirection}
-Цель: ${objectiveNames[args.objective] || args.objective}
-URL: ${args.targetUrl}${args.targetAudience ? `\nЦелевая аудитория: ${args.targetAudience}` : ""}${args.usp ? `\nУТП: ${args.usp}` : ""}
-${pageContext ? `\nКонтент страницы: ${pageContext}` : ""}
-
-Принципы:
-- Бей в боль или желание ЦА
-- Используй цифры и факты
-- Каждое слово работает — убирай воду
-- Пиши на русском`;
-
-    const response = await fetch(`${baseUrl}/v1/messages`, {
+    const response = await fetch(baseUrl + "/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -91,34 +95,35 @@ ${pageContext ? `\nКонтент страницы: ${pageContext}` : ""}
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 500,
+        max_tokens: 800,
         system: systemPrompt,
         messages: [{
           role: "user",
-          content: `Сгенерируй 3 варианта баннера для A/B тестирования.
-
-Ответ строго в JSON формате (без markdown):
-[
-  {"title": "...", "text": "..."},
-  {"title": "...", "text": "..."},
-  {"title": "...", "text": "..."}
-]`,
+          content: "Сгенерируй 3 варианта баннера для A/B тестирования.\n\n" +
+            "Ответ строго в JSON формате (без markdown):\n" +
+            '[\n  {\n    "headline": "...",\n    "subtitle": "...",\n    "bullets": ["...", "...", "..."],\n    "adTitle": "...",\n    "adText": "..."\n  }\n]',
         }],
       }),
     });
 
     if (!response.ok) {
       const text = await response.text();
-      throw new Error(`Claude API error: ${response.status} ${text}`);
+      throw new Error("Claude API error: " + response.status + " " + text);
     }
 
     const data = await response.json();
     const raw = data.content?.[0]?.text || "[]";
 
-    // Parse JSON response
-    let banners: { title: string; text: string }[];
+    interface BannerTextVariant {
+      headline: string;
+      subtitle?: string;
+      bullets: string[];
+      adTitle: string;
+      adText: string;
+    }
+
+    let banners: BannerTextVariant[];
     try {
-      // Remove markdown code fences if present
       const cleaned = raw.replace(/```json?\s*/g, "").replace(/```\s*/g, "").trim();
       banners = JSON.parse(cleaned);
     } catch {
@@ -126,9 +131,12 @@ ${pageContext ? `\nКонтент страницы: ${pageContext}` : ""}
     }
 
     // Enforce length limits
-    banners = banners.map((b: { title: string; text: string }) => ({
-      title: b.title.substring(0, 25),
-      text: b.text.substring(0, 90),
+    banners = banners.map((b: BannerTextVariant) => ({
+      headline: (b.headline || "").substring(0, 35),
+      subtitle: b.subtitle ? b.subtitle.substring(0, 60) : undefined,
+      bullets: (b.bullets || []).slice(0, 4).map((bl: string) => bl.substring(0, 40)),
+      adTitle: (b.adTitle || b.headline || "").substring(0, 25),
+      adText: (b.adText || "").substring(0, 90),
     }));
 
     // Record usage
@@ -141,13 +149,14 @@ ${pageContext ? `\nКонтент страницы: ${pageContext}` : ""}
   },
 });
 
-// Generate image for a banner (wrapper around existing FLUX generation)
+// Generate image for a banner using Haiku (style prompt) + FLUX Ultra
 export const generateBannerImage = action({
   args: {
     userId: v.id("users"),
     businessDirection: v.string(),
     title: v.string(),
     text: v.string(),
+    niche: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Check limits
@@ -169,8 +178,11 @@ export const generateBannerImage = action({
     const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
     if (!anthropicKey) throw new Error("ANTHROPIC_API_KEY не настроен");
 
-    // Step 1: Generate visual prompt via Claude (translate Russian to English visual keywords)
-    const promptResp = await fetch(`${baseUrl}/v1/messages`, {
+    // Step 1: Select style based on niche/businessDirection
+    const style = selectStyle(args.niche || args.businessDirection);
+
+    // Step 2: Generate FLUX prompt via Claude Haiku with style system prompt
+    const promptResp = await fetch(baseUrl + "/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -178,22 +190,23 @@ export const generateBannerImage = action({
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 100,
-        system: "You generate FLUX image prompts. Return ONLY the prompt in English, no explanations. Style: clean, modern, professional ad creative. No text on image.",
+        model: "claude-haiku-4-5-20251001",
+        max_tokens: 300,
+        system: style.systemPrompt,
         messages: [{
           role: "user",
-          content: `Business: ${args.businessDirection}\nAd title: ${args.title}\nAd text: ${args.text}\n\nGenerate a visual prompt for a square ad image (600x600).`,
+          content: args.businessDirection + ". " + args.title + ". " + args.text,
         }],
       }),
     });
 
     if (!promptResp.ok) throw new Error("Ошибка генерации промпта");
     const promptData = await promptResp.json();
-    const imagePrompt = promptData.content?.[0]?.text || `Professional ad for ${args.businessDirection}`;
+    const visualKeywords = promptData.content?.[0]?.text || "Professional commercial photography scene";
+    const imagePrompt = visualKeywords + " " + style.suffix;
 
-    // Step 2: Generate image via BFL FLUX API
-    const fluxResp = await fetch("https://api.bfl.ml/v1/flux-pro-1.1", {
+    // Step 3: Submit to FLUX Ultra (square, raw)
+    const fluxResp = await fetch("https://api.bfl.ai/v1/flux-pro-1.1-ultra", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -201,25 +214,25 @@ export const generateBannerImage = action({
       },
       body: JSON.stringify({
         prompt: imagePrompt,
-        width: 600,
-        height: 600,
+        aspect_ratio: "1:1",
+        raw: true,
       }),
     });
 
     if (!fluxResp.ok) {
       const t = await fluxResp.text();
-      throw new Error(`FLUX API error: ${fluxResp.status} ${t}`);
+      throw new Error("FLUX Ultra API error: " + fluxResp.status + " " + t);
     }
 
     const fluxData = await fluxResp.json();
     const taskId = fluxData.id;
     if (!taskId) throw new Error("FLUX не вернул task ID");
 
-    // Step 3: Poll for result
+    // Step 4: Poll for result (Ultra takes ~90 sec, max 60 iterations × 3 sec = 3 min)
     let imageUrl = "";
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
-      const pollResp = await fetch(`https://api.bfl.ml/v1/get_result?id=${taskId}`, {
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const pollResp = await fetch("https://api.bfl.ai/v1/get_result?id=" + taskId, {
         headers: { "x-key": bflApiKey },
       });
       if (pollResp.ok) {
@@ -228,15 +241,15 @@ export const generateBannerImage = action({
           imageUrl = pollData.result.sample;
           break;
         }
-        if (pollData.status === "Error") {
+        if (pollData.status === "Error" || pollData.status === "Failed") {
           throw new Error("FLUX генерация не удалась");
         }
       }
     }
 
-    if (!imageUrl) throw new Error("Таймаут генерации изображения");
+    if (!imageUrl) throw new Error("Таймаут генерации изображения (3 мин)");
 
-    // Step 4: Download and store in Convex
+    // Step 5: Download and store in Convex
     const imgResp = await fetch(imageUrl);
     if (!imgResp.ok) throw new Error("Не удалось скачать изображение");
     const blob = await imgResp.blob();
@@ -248,11 +261,11 @@ export const generateBannerImage = action({
       type: "image",
     });
 
-    return { storageId, imageUrl };
+    return { storageId, imageUrl, style: style.code };
   },
 });
 
-// Improve a single text field (title or text) via AI
+// Improve a single text field via AI
 export const improveTextField = action({
   args: {
     userId: v.id("users"),
@@ -260,11 +273,15 @@ export const improveTextField = action({
     objective: v.string(),
     targetAudience: v.optional(v.string()),
     usp: v.optional(v.string()),
-    field: v.union(v.literal("title"), v.literal("text")),
+    field: v.union(
+      v.literal("title"), v.literal("text"),
+      v.literal("headline"), v.literal("subtitle"), v.literal("bullet"),
+      v.literal("adTitle"), v.literal("adText")
+    ),
     currentValue: v.string(),
   },
   handler: async (ctx, args) => {
-    // Check limits (counts as text generation)
+    // Check limits
     const usage = await ctx.runQuery(internal.aiLimits.getUsageInternal, {
       userId: args.userId,
       type: "text",
@@ -280,8 +297,17 @@ export const improveTextField = action({
     const baseUrl = process.env.ANTHROPIC_BASE_URL || "https://api.anthropic.com";
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY не настроен");
 
-    const maxLen = args.field === "title" ? 25 : 90;
-    const fieldName = args.field === "title" ? "заголовок (title)" : "текст объявления (text)";
+    const fieldMap: Record<string, { maxLen: number; name: string }> = {
+      title: { maxLen: 25, name: "заголовок VK Ads (title)" },
+      text: { maxLen: 90, name: "текст VK Ads (text)" },
+      headline: { maxLen: 35, name: "заголовок на баннере" },
+      subtitle: { maxLen: 60, name: "подзаголовок на баннере" },
+      bullet: { maxLen: 40, name: "буллет на баннере" },
+      adTitle: { maxLen: 25, name: "заголовок VK Ads" },
+      adText: { maxLen: 90, name: "текст VK Ads" },
+    };
+
+    const config = fieldMap[args.field] || { maxLen: 90, name: args.field };
 
     const objectiveNames: Record<string, string> = {
       traffic: "Трафик на сайт",
@@ -291,7 +317,7 @@ export const improveTextField = action({
       engagement: "Продвижение поста",
     };
 
-    const response = await fetch(`${baseUrl}/v1/messages`, {
+    const response = await fetch(baseUrl + "/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -301,14 +327,16 @@ export const improveTextField = action({
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
         max_tokens: 100,
-        system: `Ты — direct-response копирайтер для VK Ads. Улучши ${fieldName} рекламного баннера.
-СТРОГО до ${maxLen} символов. Считай символы!
-Бизнес: ${args.businessDirection}
-Цель: ${objectiveNames[args.objective] || args.objective}${args.targetAudience ? `\nЦА: ${args.targetAudience}` : ""}${args.usp ? `\nУТП: ${args.usp}` : ""}
-Ответ — ТОЛЬКО улучшенный текст, без кавычек и пояснений.`,
+        system: "Ты — direct-response копирайтер для VK Ads. Улучши " + config.name + ".\n" +
+          "СТРОГО до " + config.maxLen + " символов. Считай символы!\n" +
+          "Бизнес: " + args.businessDirection + "\n" +
+          "Цель: " + (objectiveNames[args.objective] || args.objective) +
+          (args.targetAudience ? "\nЦА: " + args.targetAudience : "") +
+          (args.usp ? "\nУТП: " + args.usp : "") +
+          "\nОтвет — ТОЛЬКО улучшенный текст, без кавычек и пояснений.",
         messages: [{
           role: "user",
-          content: `Улучши: "${args.currentValue}"`,
+          content: 'Улучши: "' + args.currentValue + '"',
         }],
       }),
     });
@@ -321,7 +349,7 @@ export const improveTextField = action({
     const improved = (data.content?.[0]?.text || args.currentValue)
       .replace(/^["«]|["»]$/g, "")
       .trim()
-      .substring(0, maxLen);
+      .substring(0, config.maxLen);
 
     await ctx.runMutation(internal.aiLimits.recordGeneration, {
       userId: args.userId,
