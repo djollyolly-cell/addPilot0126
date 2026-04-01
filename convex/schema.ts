@@ -121,7 +121,8 @@ export default defineSchema({
       v.literal("budget_limit"),
       v.literal("low_impressions"),
       v.literal("clicks_no_leads"),
-      v.literal("new_lead")
+      v.literal("new_lead"),
+      v.literal("uz_budget_manage")
     ),
     conditions: v.object({
       metric: v.string(),
@@ -135,12 +136,20 @@ export default defineSchema({
           v.literal("24h")
         )
       ),
+      // uz_budget_manage fields
+      initialBudget: v.optional(v.number()),
+      budgetStep: v.optional(v.number()),
+      maxDailyBudget: v.optional(v.number()),
+      resetDaily: v.optional(v.boolean()),
     }),
     actions: v.object({
       stopAd: v.boolean(),
       notify: v.boolean(),
       notifyChannel: v.optional(v.string()),
       customMessage: v.optional(v.string()),
+      // uz_budget_manage notification options
+      notifyOnEveryIncrease: v.optional(v.boolean()),
+      notifyOnKeyEvents: v.optional(v.boolean()),
     }),
     targetAccountIds: v.array(v.id("adAccounts")),
     targetCampaignIds: v.optional(v.array(v.string())),
@@ -164,7 +173,9 @@ export default defineSchema({
     actionType: v.union(
       v.literal("stopped"),
       v.literal("notified"),
-      v.literal("stopped_and_notified")
+      v.literal("stopped_and_notified"),
+      v.literal("budget_increased"),
+      v.literal("budget_reset")
     ),
     reason: v.string(),
     metricsSnapshot: v.object({
