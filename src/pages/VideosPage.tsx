@@ -319,6 +319,7 @@ export function VideosPage() {
       setSuccess('Транскрибация завершена');
       setTimeout(() => setSuccess(null), 3000);
     } catch (err) {
+      setSuccess(null);
       setError(err instanceof Error ? err.message : 'Ошибка транскрибации');
     } finally {
       setTranscribingId(null);

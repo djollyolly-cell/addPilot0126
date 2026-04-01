@@ -1,3 +1,5 @@
+import { extractAudioWithFFmpeg } from './extractFrames';
+
 /**
  * Extract audio track from a video file using Web Audio API.
  * Returns a compressed audio Blob (webm/opus) suitable for Whisper API (<25MB).
@@ -10,20 +12,25 @@ export async function extractAudioFromVideo(videoUrl: string): Promise<Blob> {
 }
 
 /**
- * Extract audio from a video Blob (no network request needed).
+ * Extract audio from a video Blob.
+ * Tries Web Audio API first (fast, no wasm), falls back to ffmpeg.wasm
+ * for codecs the browser can't decode (MOV/QuickTime, ProRes, etc.).
  */
 export async function extractAudioFromBlob(videoBlob: Blob): Promise<Blob> {
-  const arrayBuffer = await videoBlob.arrayBuffer();
+  // Try Web Audio API first (fast path)
+  try {
+    const arrayBuffer = await videoBlob.arrayBuffer();
+    const audioContext = new AudioContext();
+    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+    const wavBlob = audioBufferToWav(audioBuffer);
+    await audioContext.close();
+    return wavBlob;
+  } catch (err) {
+    console.warn('[extractAudio] Web Audio API failed, falling back to ffmpeg.wasm:', err);
+  }
 
-  // Decode audio from video
-  const audioContext = new AudioContext();
-  const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-  // Encode to WAV (Whisper accepts wav, mp3, webm, etc.)
-  const wavBlob = audioBufferToWav(audioBuffer);
-  await audioContext.close();
-
-  return wavBlob;
+  // Fallback: ffmpeg.wasm handles any codec
+  return extractAudioWithFFmpeg(videoBlob);
 }
 
 /**

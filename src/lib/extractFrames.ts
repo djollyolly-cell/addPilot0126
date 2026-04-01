@@ -134,6 +134,37 @@ export async function extractFramesFromBlob(
 }
 
 /**
+ * Extract audio from a video Blob using ffmpeg.wasm.
+ * Returns a 16kHz mono WAV suitable for Whisper API.
+ * Works with ANY codec (HEVC, ProRes, QuickTime, etc.).
+ */
+export async function extractAudioWithFFmpeg(videoBlob: Blob): Promise<Blob> {
+  const ffmpeg = await getFFmpeg();
+
+  const inputData = new Uint8Array(await videoBlob.arrayBuffer());
+  await ffmpeg.writeFile('input_audio.mp4', inputData);
+
+  await ffmpeg.exec([
+    '-i', 'input_audio.mp4',
+    '-vn',                  // no video
+    '-acodec', 'pcm_s16le', // 16-bit PCM
+    '-ar', '16000',         // 16kHz (optimal for Whisper)
+    '-ac', '1',             // mono
+    'output.wav',
+  ]);
+
+  const data = await ffmpeg.readFile('output.wav');
+  try { await ffmpeg.deleteFile('input_audio.mp4'); } catch { /* ignore */ }
+  try { await ffmpeg.deleteFile('output.wav'); } catch { /* ignore */ }
+
+  if (!(data instanceof Uint8Array) || data.length === 0) {
+    throw new Error('ffmpeg не смог извлечь аудио из видео');
+  }
+
+  return new Blob([data as BlobPart], { type: 'audio/wav' });
+}
+
+/**
  * Determine video MIME type from filename.
  */
 export function getVideoMimeType(filename: string): string {
