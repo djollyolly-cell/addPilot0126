@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action } from "./_generated/server";
+import { action, internalAction, query } from "./_generated/server";
 
 // ─── OLD VK API (api.vk.com/method/ads.*) ─────────────────────────
 // Kept for backwards compatibility; may work with tokens that have `ads` scope
@@ -141,9 +141,12 @@ export interface MtCampaign {
   status: string;
   budget_limit: string;
   budget_limit_day: string;
+  package_id?: number;
   created: string;
   updated: string;
 }
+
+export const UZ_PACKAGE_ID = 960;
 
 export interface MtBannerContentSlot {
   id: number;
@@ -284,7 +287,7 @@ export const getMtCampaigns = action({
     const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
       "campaigns.json",
       args.accessToken,
-      { fields: "id,name,status,budget_limit,budget_limit_day,created,updated" }
+      { fields: "id,name,status,budget_limit,budget_limit_day,package_id,created,updated" }
     );
     return data.items || [];
   },
@@ -928,6 +931,86 @@ export const uploadMtImage = action({
       args.filename,
       args.width,
       args.height
+    );
+  },
+});
+
+// ─── UZ Budget Management (internal actions for ruleEngine) ──────
+
+/**
+ * Get campaigns with package_id field, optionally filtered.
+ */
+export const getCampaignsForAccount = internalAction({
+  args: {
+    accessToken: v.string(),
+    packageId: v.optional(v.number()),
+  },
+  handler: async (_, args): Promise<MtCampaign[]> => {
+    const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
+      "campaigns.json",
+      args.accessToken,
+      { fields: "id,name,status,package_id,budget_limit_day" }
+    );
+    const campaigns = data.items || [];
+    if (args.packageId !== undefined) {
+      return campaigns.filter((c) => c.package_id === args.packageId);
+    }
+    return campaigns;
+  },
+});
+
+/**
+ * Set daily budget on a campaign (group).
+ * @param newLimitRubles — budget in rubles (converted to kopecks for API)
+ */
+export const setCampaignBudget = internalAction({
+  args: {
+    accessToken: v.string(),
+    campaignId: v.number(),
+    newLimitRubles: v.number(),
+  },
+  handler: async (_, args) => {
+    const newLimitKopecks = Math.round(args.newLimitRubles * 100);
+    return postMtApi<MtCampaign>(
+      `campaigns/${args.campaignId}.json`,
+      args.accessToken,
+      { budget_limit_day: String(newLimitKopecks) }
+    );
+  },
+});
+
+/**
+ * Activate a campaign (resume after budget block).
+ */
+export const resumeCampaign = internalAction({
+  args: {
+    accessToken: v.string(),
+    campaignId: v.number(),
+  },
+  handler: async (_, args) => {
+    return postMtApi<MtCampaign>(
+      `campaigns/${args.campaignId}.json`,
+      args.accessToken,
+      { status: "active" }
+    );
+  },
+});
+
+/**
+ * Get campaigns with package_id=960 (УЗ format) for rule form UI.
+ */
+export const getUzCampaigns = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const accounts = await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .filter((q) => q.eq(q.field("status"), "active"))
+      .collect();
+
+    const allCampaigns = await ctx.db.query("campaigns").collect();
+    return allCampaigns.filter((c: any) =>
+      accounts.some((a) => a._id === c.accountId)
     );
   },
 });
