@@ -265,7 +265,7 @@ function AdminDashboard() {
                         </Badge>
                       </td>
                       <td className="py-3 pr-4">
-                        {u.subscriptionTier !== 'freemium' && u.subscriptionExpiresAt ? (
+                        {u.subscriptionTier !== 'freemium' ? (
                           editingExpiry === u._id ? (
                             <div className="flex items-center gap-1">
                               <input
@@ -281,7 +281,7 @@ function AdminDashboard() {
                                 <AlertCircle className="w-3.5 h-3.5 text-muted-foreground" />
                               </Button>
                             </div>
-                          ) : (
+                          ) : u.subscriptionExpiresAt ? (
                             <button
                               className={`text-xs ${u.subscriptionExpiresAt < Date.now() ? 'text-destructive' : 'text-muted-foreground'} hover:underline`}
                               onClick={() => {
@@ -291,6 +291,16 @@ function AdminDashboard() {
                             >
                               {formatDate(u.subscriptionExpiresAt)}
                               {u.subscriptionExpiresAt < Date.now() && ' (истёк)'}
+                            </button>
+                          ) : (
+                            <button
+                              className="text-xs text-primary hover:underline"
+                              onClick={() => {
+                                setEditingExpiry(u._id);
+                                setExpiryInput(toDateInput(Date.now() + 30 * 24 * 60 * 60 * 1000));
+                              }}
+                            >
+                              задать
                             </button>
                           )
                         ) : (
