@@ -1132,8 +1132,7 @@ export const getActiveAccountsForUser = internalQuery({
 
 /**
  * Fetch УЗ campaigns (package_id=960) from VK API for rule form UI.
- * Uses ad_groups.json which reliably returns package_id.
- * campaigns.json may not return package_id even when requested.
+ * Uses campaigns.json (same as getCampaignsForAccount used by rule engine).
  */
 export const fetchUzCampaigns = action({
   args: { accountId: v.id("adAccounts") },
@@ -1148,28 +1147,21 @@ export const fetchUzCampaigns = action({
       { accountId: args.accountId }
     );
 
-    // ad_groups.json reliably returns package_id (campaigns.json may not)
-    const data = await callMtApi<{
-      items: Array<{
-        id: number;
-        name: string;
-        status: string;
-        package_id: number;
-        budget_limit_day?: string;
-      }>;
-    }>(
-      "ad_groups.json",
+    // Use campaigns.json — same endpoint as getCampaignsForAccount (proven to work)
+    const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
+      "campaigns.json",
       accessToken,
       { fields: "id,name,status,package_id,budget_limit_day", limit: "250" }
     );
 
-    const groups = (data.items || []).filter((g) => g.package_id === UZ_PACKAGE_ID);
+    const allItems = data.items || [];
+    const groups = allItems.filter((c) => c.package_id === UZ_PACKAGE_ID);
 
-    return groups.map((g) => ({
-      id: String(g.id),
-      name: g.name,
-      status: g.status,
-      budgetLimitDay: Number(g.budget_limit_day || "0") / 100,
+    return groups.map((c) => ({
+      id: String(c.id),
+      name: c.name,
+      status: c.status,
+      budgetLimitDay: Number(c.budget_limit_day || "0") / 100,
     }));
   },
 });
