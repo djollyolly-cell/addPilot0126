@@ -271,15 +271,8 @@ export const syncAll = internalAction({
       );
     }
 
-    // Check uz_budget_manage rules (separate from standard rules)
-    try {
-      await ctx.runAction(internal.ruleEngine.checkUzBudgetRules, {});
-    } catch (error) {
-      console.error(
-        "[syncMetrics] Error running UZ budget rules:",
-        error instanceof Error ? error.message : error
-      );
-    }
+    // UZ budget rules — handled by uzBudgetCron separately
+    // (checkUzBudgetRules is in uzBudgetCron.ts, not ruleEngine)
 
     // Poll moderation status for AI Cabinet banners
     try {
