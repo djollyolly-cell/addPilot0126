@@ -75,6 +75,22 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
+const ADMIN_EMAILS = ['13632013@vk.com', '786709647@vk.com'];
+
+function AdminGate({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  if (!user || !ADMIN_EMAILS.includes(user.email)) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] text-center px-4">
+        <div className="text-4xl mb-4">🚧</div>
+        <h2 className="text-xl font-bold mb-2">Модуль в разработке</h2>
+        <p className="text-muted-foreground">Эта функция скоро станет доступна.</p>
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
 function App() {
   return (
     <Suspense fallback={<PageLoader />}>
@@ -112,13 +128,13 @@ function App() {
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/accounts" element={<AccountsPage />} />
-        <Route path="/ai-cabinet" element={<AICabinetPage />} />
-        <Route path="/ai-cabinet/new" element={<AICabinetNewPage />} />
-        <Route path="/ai-cabinet/:id" element={<AICabinetDetailPage />} />
+        <Route path="/ai-cabinet" element={<AdminGate><AICabinetPage /></AdminGate>} />
+        <Route path="/ai-cabinet/new" element={<AdminGate><AICabinetNewPage /></AdminGate>} />
+        <Route path="/ai-cabinet/:id" element={<AdminGate><AICabinetDetailPage /></AdminGate>} />
         <Route path="/rules" element={<RulesPage />} />
         <Route path="/reports" element={<ReportsPage />} />
-        <Route path="/creatives" element={<CreativesPage />} />
-        <Route path="/videos" element={<VideosPage />} />
+        <Route path="/creatives" element={<AdminGate><CreativesPage /></AdminGate>} />
+        <Route path="/videos" element={<AdminGate><VideosPage /></AdminGate>} />
         <Route path="/analytics" element={<Navigate to="/dashboard" replace />} />
         <Route path="/logs" element={<LogsPage />} />
         <Route path="/settings" element={<SettingsPage />} />
