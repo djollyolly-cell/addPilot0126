@@ -1156,7 +1156,7 @@ export const debugUzData = action({
     while (true) {
       const res = await callMtApi<{ items: Array<Record<string, unknown>>; count: number }>(
         "campaigns.json", accessToken,
-        { fields: "id,name,status,ad_plan_id,budget_limit_day,issue,status_moderation", limit: "250", offset: String(offset) }
+        { fields: "id,name,status,ad_plan_id,budget_limit_day,delivery,efficiency_status", limit: "250", offset: String(offset) }
       );
       const items = res.items || [];
       allCampaigns.push(...items);
@@ -1172,7 +1172,7 @@ export const debugUzData = action({
     // Fetch parent ad_plans
     const adPlansRes = await callMtApi<{ items: Array<Record<string, unknown>> }>(
       "ad_plans.json", accessToken,
-      { fields: "id,name,status,budget_limit,budget_limit_day,issue" }
+      { fields: "id,name,status,budget_limit,budget_limit_day,delivery" }
     );
     const parentPlans = (adPlansRes.items || []).filter((p) => parentPlanIds.includes(p.id as number));
 
