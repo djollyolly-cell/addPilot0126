@@ -11,9 +11,8 @@ import {
   buildInlineKeyboard,
   parseCallbackData,
   isQuietHours,
-  formatDailyDigest,
+  formatDigestMessage,
   RuleNotificationEvent,
-  DigestActionLogSummary,
 } from "./telegram";
 import { REVERT_TIMEOUT_MS } from "./ruleEngine";
 
@@ -849,47 +848,30 @@ describe("telegram", () => {
   // ═══════════════════════════════════════════════════════════
 
   // S12-DoD#1: sendDailyDigest — формирование дайджеста (сводка за день)
-  test("S12-DoD#1: formatDailyDigest produces daily summary", () => {
-    const events: DigestActionLogSummary[] = [
-      {
-        adName: "Баннер 1",
-        actionType: "stopped",
-        reason: "CPL 500₽ превысил лимит",
-        savedAmount: 1500,
-        metricsSnapshot: { spent: 3000, leads: 6, cpl: 500 },
-      },
-      {
-        adName: "Баннер 2",
-        actionType: "notified",
-        reason: "CTR 0.3% ниже минимума",
-        savedAmount: 0,
-        metricsSnapshot: { spent: 800, leads: 0, ctr: 0.3 },
-      },
-      {
-        adName: "Баннер 3",
-        actionType: "stopped_and_notified",
-        reason: "Бюджет исчерпан",
-        savedAmount: 2000,
-        metricsSnapshot: { spent: 5000, leads: 3 },
-      },
-    ];
-
-    const message = formatDailyDigest(events, "27.01.2026");
+  test("S12-DoD#1: formatDigestMessage produces daily summary", () => {
+    const message = formatDigestMessage("daily", {
+      accounts: [{
+        name: "Тестовый кабинет",
+        metrics: { impressions: 10000, clicks: 50, spent: 8800, leads: 6, subscriptions: 0, cpl: 500, costPerSub: 0 },
+        ruleEvents: [
+          { ruleName: "CPL лимит", count: 2 },
+          { ruleName: "Бюджет исчерпан", count: 1 },
+        ],
+        savedAmount: 3500,
+      }],
+      totals: { impressions: 10000, clicks: 50, spent: 8800, leads: 6, subscriptions: 0, cpl: 500, costPerSub: 0 },
+    }, "27.01.2026");
 
     // Contains date header
     expect(message).toContain("Дайджест за 27.01.2026");
-    // Contains rule count
-    expect(message).toContain("Сработало: 3");
-    // Contains stopped count (2: stopped + stopped_and_notified)
-    expect(message).toContain("Остановлено: 2");
-    // Contains warning count
-    expect(message).toContain("Предупреждений: 1");
-    // Contains total savings (1500 + 2000 = 3500)
-    expect(message).toContain("3500₽");
-    // Contains details for each ad
-    expect(message).toContain("Баннер 1");
-    expect(message).toContain("Баннер 2");
-    expect(message).toContain("Баннер 3");
+    // Contains account name
+    expect(message).toContain("Тестовый кабинет");
+    // Contains rule event grouping
+    expect(message).toContain("сработало 3");
+    expect(message).toContain("CPL лимит — 2");
+    expect(message).toContain("Бюджет исчерпан — 1");
+    // Contains total savings (formatted with locale)
+    expect(message.replace(/\s/g, " ")).toContain("3 500");
   });
 
   // S12-DoD#2: Тихие часы блокируют — 23:00-07:00, now=02:00 → не отправляется
@@ -986,14 +968,20 @@ describe("telegram", () => {
   });
 
   // S12-DoD#7: Нет событий за день — дайджест всё равно содержит метрики
-  test("S12-DoD#7: formatDailyDigest with 0 events still shows metrics", () => {
-    const message = formatDailyDigest([], "27.01.2026", {
-      spent: 500, leads: 2, clicks: 50, impressions: 10000, cpl: 250,
-    });
+  test("S12-DoD#7: formatDigestMessage with 0 events still shows metrics", () => {
+    const message = formatDigestMessage("daily", {
+      accounts: [{
+        name: "Тест",
+        metrics: { impressions: 10000, clicks: 50, spent: 500, leads: 2, subscriptions: 0, cpl: 250, costPerSub: 0 },
+        ruleEvents: [],
+        savedAmount: 0,
+      }],
+      totals: { impressions: 10000, clicks: 50, spent: 500, leads: 2, subscriptions: 0, cpl: 250, costPerSub: 0 },
+    }, "27.01.2026");
     expect(message).toContain("Дайджест за 27.01.2026");
     expect(message).toContain("Лиды: 2");
     expect(message).toContain("CPL: 250₽");
-    expect(message).toContain("Расход: 500₽");
+    expect(message).toContain("Расход: 500");
     expect(message).toContain("Правила не сработали");
   });
 
