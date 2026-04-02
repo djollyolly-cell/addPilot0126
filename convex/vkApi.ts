@@ -1160,7 +1160,7 @@ export const fetchUzCampaigns = action({
     }>(
       "ad_groups.json",
       accessToken,
-      { fields: "id,name,status,package_id,budget_limit_day", limit: "500" }
+      { fields: "id,name,status,package_id,budget_limit_day", limit: "250" }
     );
 
     const groups = (data.items || []).filter((g) => g.package_id === UZ_PACKAGE_ID);
