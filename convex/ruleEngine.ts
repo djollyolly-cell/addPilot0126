@@ -1555,6 +1555,7 @@ export const logBudgetAction = internalMutation({
     oldBudget: v.number(),
     newBudget: v.number(),
     step: v.number(),
+    spentToday: v.optional(v.number()),
     error: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
@@ -1570,10 +1571,10 @@ export const logBudgetAction = internalMutation({
         ? `Бюджет увеличен: ${args.oldBudget}₽ → ${args.newBudget}₽ (+${args.step}₽)`
         : `Бюджет сброшен до ${args.newBudget}₽`,
       metricsSnapshot: {
-        spent: args.oldBudget,
+        spent: args.spentToday ?? 0,
         leads: 0,
       },
-      savedAmount: args.step,
+      savedAmount: 0,
       status: args.error ? ("failed" as const) : ("success" as const),
       errorMessage: args.error,
       createdAt: Date.now(),
@@ -1710,6 +1711,7 @@ export const checkUzBudgetRules = internalAction({
                 oldBudget: dailyLimitRubles,
                 newBudget: newLimit,
                 step: budgetStep,
+                spentToday,
               });
 
               if (rule.actions.notifyOnEveryIncrease ||
@@ -1746,6 +1748,7 @@ export const checkUzBudgetRules = internalAction({
                 oldBudget: dailyLimitRubles,
                 newBudget: newLimit,
                 step: budgetStep,
+                spentToday,
                 error: err instanceof Error ? err.message : "Unknown error",
               });
             }

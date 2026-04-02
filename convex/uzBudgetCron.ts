@@ -75,9 +75,19 @@ export const resetBudgets = internalAction({
           }
 
           const targetIds = rule.targetCampaignIds || [];
+
+          // Fetch campaign names from VK API
+          const campaigns = await ctx.runAction(
+            internal.vkApi.getCampaignsForAccount,
+            { accessToken }
+          ) as Array<{ id: number; name: string }>;
+          const nameMap = new Map(campaigns.map((c) => [String(c.id), c.name]));
+
+          const resetNames: string[] = [];
           for (const campaignIdStr of targetIds) {
             const campaignId = parseInt(campaignIdStr);
             if (isNaN(campaignId)) continue;
+            const campaignName = nameMap.get(campaignIdStr) || `Группа #${campaignIdStr}`;
 
             try {
               await ctx.runAction(internal.vkApi.setCampaignBudget, {
@@ -91,24 +101,27 @@ export const resetBudgets = internalAction({
                 ruleId: rule._id,
                 accountId,
                 campaignId: campaignIdStr,
-                campaignName: `Campaign ${campaignIdStr}`,
+                campaignName,
                 actionType: "budget_reset" as const,
                 oldBudget: 0,
                 newBudget: initialBudget,
                 step: 0,
               });
+              resetNames.push(campaignName);
             } catch (err) {
               console.error(`[uz_budget_reset] Failed for campaign ${campaignId}:`, err);
             }
           }
 
-          // Notify about reset
-          if (rule.actions.notifyOnKeyEvents) {
+          // Notify only about successfully reset campaigns
+          if (rule.actions.notifyOnKeyEvents && resetNames.length > 0) {
             try {
               await ctx.runAction(internal.telegram.sendBudgetNotification, {
                 userId: rule.userId,
                 type: "reset" as const,
-                campaignName: `${targetIds.length} групп(а)`,
+                campaignName: resetNames.length === 1
+                  ? resetNames[0]
+                  : `${resetNames.length} групп: ${resetNames.join(", ")}`,
                 newBudget: initialBudget,
               });
             } catch (notifErr) {
