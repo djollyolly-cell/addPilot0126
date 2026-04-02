@@ -67,6 +67,7 @@ export const createBepaidCheckout = action({
   args: {
     userId: v.id("users"),
     tier: v.union(v.literal("start"), v.literal("pro")),
+    promoCode: v.optional(v.string()),
     returnUrl: v.string(),
     amountBYN: v.number(), // Price in BYN (calculated on frontend with NBRB rate)
   },
@@ -149,6 +150,7 @@ export const createBepaidCheckout = action({
         token: data.checkout.token as string,
         amount: args.amountBYN,
         currency: "BYN",
+        promoCode: args.promoCode,
       });
 
       return {
@@ -175,9 +177,9 @@ export const savePendingPayment = internalMutation({
     token: v.string(),
     amount: v.number(),
     currency: v.string(),
+    promoCode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    // Check if payments table exists, create record
     await ctx.db.insert("payments", {
       userId: args.userId,
       tier: args.tier,
@@ -185,6 +187,7 @@ export const savePendingPayment = internalMutation({
       token: args.token,
       amount: args.amount,
       currency: args.currency,
+      promoCode: args.promoCode?.trim().toUpperCase(),
       status: "pending",
       createdAt: Date.now(),
     });
@@ -215,15 +218,32 @@ export const handleBepaidWebhook = internalMutation({
     }
 
     if (args.status === "successful") {
+      // Check promo code bonus days
+      let bonusDays = 0;
+      if (payment.promoCode) {
+        const promo = await ctx.db
+          .query("promoCodes")
+          .withIndex("by_code", (q) => q.eq("code", payment.promoCode!))
+          .first();
+        if (promo && promo.isActive
+            && (!promo.expiresAt || promo.expiresAt > Date.now())
+            && (!promo.maxUses || promo.usedCount < promo.maxUses)) {
+          bonusDays = promo.bonusDays;
+          await ctx.db.patch(promo._id, { usedCount: promo.usedCount + 1 });
+        }
+      }
+
       // Update payment status
       await ctx.db.patch(payment._id, {
         status: "completed",
         bepaidUid: args.uid,
+        bonusDays: bonusDays > 0 ? bonusDays : undefined,
         completedAt: Date.now(),
       });
 
-      // Activate subscription
-      const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000; // 30 days
+      // Activate subscription (30 days + bonus)
+      const totalDays = 30 + bonusDays;
+      const expiresAt = Date.now() + totalDays * 24 * 60 * 60 * 1000;
 
       await ctx.db.patch(payment.userId, {
         subscriptionTier: payment.tier,
@@ -231,7 +251,7 @@ export const handleBepaidWebhook = internalMutation({
         updatedAt: Date.now(),
       });
 
-      console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId}`);
+      console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId} (${totalDays} days, promo: ${payment.promoCode || "none"})`);
       return { success: true };
     }
 
@@ -258,6 +278,7 @@ export const processPayment = mutation({
     userId: v.id("users"),
     tier: v.union(v.literal("start"), v.literal("pro")),
     cardNumber: v.string(),
+    promoCode: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
@@ -284,8 +305,25 @@ export const processPayment = mutation({
       };
     }
 
-    // Calculate expiration (30 days from now)
-    const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+    // Check promo code bonus days
+    let bonusDays = 0;
+    if (args.promoCode) {
+      const code = args.promoCode.trim().toUpperCase();
+      const promo = await ctx.db
+        .query("promoCodes")
+        .withIndex("by_code", (q) => q.eq("code", code))
+        .first();
+      if (promo && promo.isActive
+          && (!promo.expiresAt || promo.expiresAt > Date.now())
+          && (!promo.maxUses || promo.usedCount < promo.maxUses)) {
+        bonusDays = promo.bonusDays;
+        await ctx.db.patch(promo._id, { usedCount: promo.usedCount + 1 });
+      }
+    }
+
+    // Calculate expiration (30 days + bonus)
+    const totalDays = 30 + bonusDays;
+    const expiresAt = Date.now() + totalDays * 24 * 60 * 60 * 1000;
 
     // Update user subscription
     await ctx.db.patch(args.userId, {
@@ -299,6 +337,7 @@ export const processPayment = mutation({
       tier: args.tier,
       expiresAt,
       cardLast4,
+      bonusDays,
     };
   },
 });
@@ -673,5 +712,93 @@ export const getFreemiumUsers = internalQuery({
   handler: async (ctx) => {
     const users = await ctx.db.query("users").collect();
     return users.filter((u) => u.subscriptionTier === "freemium");
+  },
+});
+
+// ─── Promo Codes ─────────────────────────────────────
+
+/** Validate promo code (public — called from frontend) */
+export const validatePromoCode = query({
+  args: { code: v.string() },
+  handler: async (ctx, args) => {
+    const code = args.code.trim().toUpperCase();
+    if (!code) return { valid: false, error: "Введите промокод" };
+
+    const promo = await ctx.db
+      .query("promoCodes")
+      .withIndex("by_code", (q) => q.eq("code", code))
+      .first();
+
+    if (!promo) return { valid: false, error: "Промокод не найден" };
+    if (!promo.isActive) return { valid: false, error: "Промокод неактивен" };
+    if (promo.expiresAt && promo.expiresAt < Date.now()) return { valid: false, error: "Промокод истёк" };
+    if (promo.maxUses && promo.usedCount >= promo.maxUses) return { valid: false, error: "Промокод исчерпан" };
+
+    return {
+      valid: true,
+      bonusDays: promo.bonusDays,
+      description: promo.description,
+    };
+  },
+});
+
+/** Apply promo code — increment usedCount (called after successful payment) */
+export const applyPromoCode = internalMutation({
+  args: { code: v.string() },
+  handler: async (ctx, args) => {
+    const promo = await ctx.db
+      .query("promoCodes")
+      .withIndex("by_code", (q) => q.eq("code", args.code.toUpperCase()))
+      .first();
+    if (!promo) return;
+    await ctx.db.patch(promo._id, { usedCount: promo.usedCount + 1 });
+  },
+});
+
+/** Create promo code (admin) */
+export const createPromoCode = mutation({
+  args: {
+    code: v.string(),
+    description: v.string(),
+    bonusDays: v.number(),
+    maxUses: v.optional(v.number()),
+    expiresAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const code = args.code.trim().toUpperCase();
+    const existing = await ctx.db
+      .query("promoCodes")
+      .withIndex("by_code", (q) => q.eq("code", code))
+      .first();
+    if (existing) throw new Error("Промокод уже существует");
+
+    return await ctx.db.insert("promoCodes", {
+      code,
+      description: args.description,
+      bonusDays: args.bonusDays,
+      maxUses: args.maxUses,
+      usedCount: 0,
+      isActive: true,
+      expiresAt: args.expiresAt,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/** List all promo codes (admin) */
+export const listPromoCodes = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db.query("promoCodes").collect();
+  },
+});
+
+/** Toggle promo code active/inactive (admin) */
+export const togglePromoCode = mutation({
+  args: { promoId: v.id("promoCodes") },
+  handler: async (ctx, args) => {
+    const promo = await ctx.db.get(args.promoId);
+    if (!promo) throw new Error("Промокод не найден");
+    await ctx.db.patch(args.promoId, { isActive: !promo.isActive });
   },
 });

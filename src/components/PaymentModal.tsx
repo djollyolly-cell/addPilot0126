@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react';
-import { useAction, useMutation } from 'convex/react';
+import { useAction, useMutation, useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { X, CreditCard, Lock, CheckCircle, AlertCircle, Loader2, ExternalLink, ChevronLeft } from 'lucide-react';
+import { X, CreditCard, Lock, CheckCircle, AlertCircle, Loader2, ExternalLink, ChevronLeft, Tag } from 'lucide-react';
 import { useAuth } from '@/lib/useAuth';
 import { cn } from '@/lib/utils';
 
@@ -59,9 +59,16 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
   const [bepaidLoading, setBepaidLoading] = useState(false);
   const [exchangeRate, setExchangeRate] = useState<{ rate: number; scale: number } | null>(null);
   const [rateLoading, setRateLoading] = useState(true);
+  const [promoCode, setPromoCode] = useState('');
+  const [promoApplied, setPromoApplied] = useState<{ bonusDays: number; description: string } | null>(null);
+  const [promoError, setPromoError] = useState<string | null>(null);
 
   const processPayment = useMutation(api.billing.processPayment);
   const createBepaidCheckout = useAction(api.billing.createBepaidCheckout);
+  const promoValidation = useQuery(
+    api.billing.validatePromoCode,
+    promoCode.trim().length >= 3 ? { code: promoCode.trim() } : "skip"
+  );
 
   // Fetch exchange rate from NBRB API on mount
   useEffect(() => {
@@ -119,6 +126,23 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
     return cleaned;
   };
 
+  const handleApplyPromo = () => {
+    if (!promoCode.trim()) return;
+    setPromoError(null);
+    if (!promoValidation) {
+      // Query still loading — shouldn't happen since button is disabled, but guard anyway
+      setPromoError('Подождите, идёт проверка...');
+      return;
+    }
+    if (promoValidation.valid) {
+      setPromoApplied({ bonusDays: promoValidation.bonusDays!, description: promoValidation.description! });
+      setPromoError(null);
+    } else {
+      setPromoError(promoValidation.error || 'Промокод недействителен');
+      setPromoApplied(null);
+    }
+  };
+
   const handleSelectCountry = (selectedCurrency: Currency) => {
     setCurrency(selectedCurrency);
     setStep('payment');
@@ -146,6 +170,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
         tier,
         returnUrl,
         amountBYN: priceBYN,
+        promoCode: promoApplied ? promoCode.trim().toUpperCase() : undefined,
       });
 
       if (result.success && result.redirectUrl) {
@@ -175,6 +200,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
         userId: user.userId as Id<"users">,
         tier,
         cardNumber: cleanCardNumber,
+        promoCode: promoApplied ? promoCode.trim().toUpperCase() : undefined,
       });
 
       if (result.success) {
@@ -371,6 +397,65 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
               </ul>
             </div>
 
+            {/* Промокод */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5 text-sm">
+                <Tag className="h-3.5 w-3.5" />
+                Промокод
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Введите промокод"
+                  value={promoCode}
+                  onChange={(e) => {
+                    setPromoCode(e.target.value.toUpperCase());
+                    setPromoApplied(null);
+                    setPromoError(null);
+                  }}
+                  disabled={!!promoApplied}
+                  data-testid="promo-input"
+                />
+                {promoApplied ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => {
+                      setPromoCode('');
+                      setPromoApplied(null);
+                      setPromoError(null);
+                    }}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={handleApplyPromo}
+                    disabled={promoCode.trim().length < 3 || promoValidation === undefined}
+                    data-testid="promo-apply"
+                  >
+                    {promoValidation === undefined && promoCode.trim().length >= 3
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : 'Применить'}
+                  </Button>
+                )}
+              </div>
+              {promoApplied && (
+                <div className="flex items-center gap-2 p-2 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
+                  <CheckCircle className="h-4 w-4 shrink-0" />
+                  <span>+{promoApplied.bonusDays} дней бонус: {promoApplied.description}</span>
+                </div>
+              )}
+              {promoError && (
+                <p className="text-sm text-destructive">{promoError}</p>
+              )}
+            </div>
+
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Lock className="h-3 w-3" />
               <span>Безопасная оплата через bePaid</span>
@@ -393,6 +478,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
                 <>
                   <ExternalLink className="h-4 w-4 mr-2" />
                   Перейти к оплате {price} {currencySymbol}
+                  {promoApplied && ` + ${promoApplied.bonusDays} дней`}
                 </>
               )}
             </Button>
@@ -486,6 +572,65 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
               </div>
             </div>
 
+            {/* Промокод */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5 text-sm">
+                <Tag className="h-3.5 w-3.5" />
+                Промокод
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="Введите промокод"
+                  value={promoCode}
+                  onChange={(e) => {
+                    setPromoCode(e.target.value.toUpperCase());
+                    setPromoApplied(null);
+                    setPromoError(null);
+                  }}
+                  disabled={!!promoApplied}
+                  data-testid="promo-input"
+                />
+                {promoApplied ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => {
+                      setPromoCode('');
+                      setPromoApplied(null);
+                      setPromoError(null);
+                    }}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={handleApplyPromo}
+                    disabled={promoCode.trim().length < 3 || promoValidation === undefined}
+                    data-testid="promo-apply"
+                  >
+                    {promoValidation === undefined && promoCode.trim().length >= 3
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : 'Применить'}
+                  </Button>
+                )}
+              </div>
+              {promoApplied && (
+                <div className="flex items-center gap-2 p-2 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
+                  <CheckCircle className="h-4 w-4 shrink-0" />
+                  <span>+{promoApplied.bonusDays} дней бонус: {promoApplied.description}</span>
+                </div>
+              )}
+              {promoError && (
+                <p className="text-sm text-destructive">{promoError}</p>
+              )}
+            </div>
+
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Lock className="h-3 w-3" />
               <span>Безопасная оплата. Данные защищены.</span>
@@ -505,7 +650,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
                   Обработка...
                 </>
               ) : (
-                `Оплатить ${price} ${currencySymbol}`
+                `Оплатить ${price} ${currencySymbol}${promoApplied ? ` + ${promoApplied.bonusDays} дней` : ''}`
               )}
             </Button>
             <p className="text-xs text-center text-muted-foreground">
