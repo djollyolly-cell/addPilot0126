@@ -1260,6 +1260,138 @@ export const getAdDailyMetrics = internalQuery({
   },
 });
 
+/** Get metrics grouped by account for given dates, with campaignId for classification */
+export const getMetricsByAccount = internalQuery({
+  args: {
+    userId: v.id("users"),
+    dates: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const accounts = await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    const result: Array<{
+      accountId: string;
+      accountName: string;
+      campaigns: Array<{ campaignId: string; impressions: number; clicks: number; spent: number; leads: number }>;
+      impressions: number;
+      clicks: number;
+      spent: number;
+      leads: number;
+    }> = [];
+
+    for (const account of accounts) {
+      let totalImpressions = 0;
+      let totalClicks = 0;
+      let totalSpent = 0;
+      let totalLeads = 0;
+      const campaignMetrics = new Map<string, { impressions: number; clicks: number; spent: number; leads: number }>();
+
+      for (const date of args.dates) {
+        const metrics = await ctx.db
+          .query("metricsDaily")
+          .withIndex("by_accountId_date", (q) =>
+            q.eq("accountId", account._id).eq("date", date)
+          )
+          .collect();
+
+        for (const m of metrics) {
+          totalImpressions += m.impressions || 0;
+          totalClicks += m.clicks || 0;
+          totalSpent += m.spent || 0;
+          totalLeads += m.leads || 0;
+
+          if (m.campaignId) {
+            const existing = campaignMetrics.get(m.campaignId) || { impressions: 0, clicks: 0, spent: 0, leads: 0 };
+            existing.impressions += m.impressions || 0;
+            existing.clicks += m.clicks || 0;
+            existing.spent += m.spent || 0;
+            existing.leads += m.leads || 0;
+            campaignMetrics.set(m.campaignId, existing);
+          }
+        }
+      }
+
+      const campaignsArray: Array<{ campaignId: string; impressions: number; clicks: number; spent: number; leads: number }> = [];
+      campaignMetrics.forEach((v, k) => campaignsArray.push({ campaignId: k, ...v }));
+
+      result.push({
+        accountId: account._id,
+        accountName: account.name,
+        campaigns: campaignsArray,
+        impressions: totalImpressions,
+        clicks: totalClicks,
+        spent: Math.round(totalSpent * 100) / 100,
+        leads: totalLeads,
+      });
+    }
+
+    return result;
+  },
+});
+
+/** Get action logs grouped by account + rule for digest period */
+export const getActionLogsByAccount = internalQuery({
+  args: {
+    userId: v.id("users"),
+    since: v.number(),
+    until: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_userId_date", (q) =>
+        q.eq("userId", args.userId).gte("createdAt", args.since)
+      )
+      .collect();
+
+    const filtered = logs.filter((l) => l.createdAt < args.until);
+
+    // Pre-fetch all rules referenced by logs
+    const ruleIds = [...new Set(filtered.map((l) => l.ruleId))];
+    const ruleMap = new Map<string, string>();
+    for (const ruleId of ruleIds) {
+      const rule = await ctx.db.get(ruleId);
+      if (rule) ruleMap.set(ruleId, rule.name);
+    }
+
+    // Group by accountId → ruleName → count
+    const byAccount = new Map<string, { events: Map<string, number>; savedAmount: number }>();
+
+    for (const log of filtered) {
+      const accId = log.accountId as string;
+      if (!byAccount.has(accId)) {
+        byAccount.set(accId, { events: new Map(), savedAmount: 0 });
+      }
+      const acc = byAccount.get(accId)!;
+
+      const ruleName = ruleMap.get(log.ruleId) || log.reason.split("—")[0].trim();
+      acc.events.set(ruleName, (acc.events.get(ruleName) || 0) + 1);
+      acc.savedAmount += log.savedAmount;
+    }
+
+    // Convert to serializable
+    const result: Array<{
+      accountId: string;
+      ruleEvents: Array<{ ruleName: string; count: number }>;
+      savedAmount: number;
+    }> = [];
+
+    byAccount.forEach((data, accountId) => {
+      const ruleEvents: Array<{ ruleName: string; count: number }> = [];
+      data.events.forEach((count, ruleName) => {
+        ruleEvents.push({ ruleName, count });
+      });
+      ruleEvents.sort((a, b) => b.count - a.count);
+      result.push({ accountId, ruleEvents, savedAmount: data.savedAmount });
+    });
+
+    return result;
+  },
+});
+
 /** Internal: get all users with Telegram connected and digest enabled */
 export const getDigestRecipients = internalQuery({
   args: {},
