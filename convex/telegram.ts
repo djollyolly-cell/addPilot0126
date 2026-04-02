@@ -113,7 +113,7 @@ export function isQuietHours(
   return nowHHMM >= startHHMM || nowHHMM < endHHMM;
 }
 
-/** Action log summary for daily digest */
+/** Action log summary for daily digest (legacy — kept for getDigestActionLogs) */
 export interface DigestActionLogSummary {
   adName: string;
   adId: string;
@@ -121,6 +121,7 @@ export interface DigestActionLogSummary {
   actionType: string;
   reason: string;
   savedAmount: number;
+  ruleName: string;
   metricsSnapshot: {
     spent: number;
     leads: number;
@@ -129,13 +130,44 @@ export interface DigestActionLogSummary {
   };
 }
 
-/** Metrics summary for digest */
+// ─── Digest interfaces (v2 — per-account, leads/subscriptions split) ──────
+
 export interface DigestMetrics {
+  impressions: number;
+  clicks: number;
   spent: number;
   leads: number;
-  clicks: number;
-  impressions: number;
+  subscriptions: number;
   cpl: number;
+  costPerSub: number;
+}
+
+export interface DigestAccountData {
+  name: string;
+  metrics: DigestMetrics;
+  prevMetrics?: DigestMetrics;
+  ruleEvents: { ruleName: string; count: number }[];
+  savedAmount: number;
+}
+
+export interface DigestData {
+  accounts: DigestAccountData[];
+  totals: DigestMetrics;
+  prevTotals?: DigestMetrics;
+}
+
+// ─── Digest pure helpers ─────────────────────────────────────────────
+
+export function isSubscriptionPackage(packageName: string): boolean {
+  const lower = packageName.toLowerCase();
+  return ["подписк", "subscribe", "community", "join"].some(kw => lower.includes(kw));
+}
+
+export function formatDelta(current: number, previous: number): string {
+  if (previous === 0) return "";
+  const pct = Math.round(((current - previous) / previous) * 100);
+  if (pct === 0) return "";
+  return pct > 0 ? ` (↑${pct}%)` : ` (↓${Math.abs(pct)}%)`;
 }
 
 /**
