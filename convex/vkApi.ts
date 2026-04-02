@@ -1140,58 +1140,38 @@ export const getActiveAccountsForUser = internalQuery({
   },
 });
 
-/** TEMP: Debug what both endpoints return for an account */
+/** TEMP: Debug — fetch ALL fields for specific campaign IDs + parent ad_plans */
 export const debugUzData = action({
-  args: { accountId: v.id("adAccounts") },
+  args: { accountId: v.id("adAccounts"), campaignIds: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const accessToken: string = await ctx.runAction(
       internal.auth.getValidTokenForAccount,
       { accountId: args.accountId }
     );
 
-    // Fetch packages, campaigns, and ad_groups
-    const packagesRes = await callMtApi<{ items: Array<{ id: number; name: string }> }>(
-      "packages.json", accessToken,
-      { fields: "id,name", limit: "50" }
-    );
-    const campaignsRes = await callMtApi<{ items: Array<{ id: number; name: string; status: string; package_id?: number; budget_limit_day?: string }>; count: number }>(
+    const ids = args.campaignIds || "133593859,133593860,133593425";
+
+    // Fetch specific campaigns with ALL available fields
+    const campaignsRes = await callMtApi<{ items: Array<Record<string, unknown>> }>(
       "campaigns.json", accessToken,
-      { fields: "id,name,status,package_id,budget_limit_day", limit: "50" }
-    );
-    const adGroupsRes = await callMtApi<{ items: Array<{ id: number; name: string; status: string; ad_plan_id: number; package_id: number; budget_limit_day?: string }> }>(
-      "ad_groups.json", accessToken,
-      { fields: "id,name,status,ad_plan_id,package_id,budget_limit_day", limit: "50" }
+      { id: ids }
     );
 
-    // Build package name map
-    const pkgMap: Record<number, string> = {};
-    for (const p of packagesRes.items || []) pkgMap[p.id] = p.name;
-
-    // Unique package_ids used in this account with names
-    const usedPkgIds = [...new Set((adGroupsRes.items || []).map((g) => g.package_id))];
-    const packageNames = usedPkgIds.map((id) => ({ id, name: pkgMap[id] || "unknown" }));
-
-    // Find target campaigns by name pattern (latest ones)
-    const targetNames = ["Копия Группа 2026-03-31", "Копия_1 Копия Группа 2026-03-31", "Группа 2026-03-31"];
-    const rawTargets = (campaignsRes.items || []).filter((c) =>
-      targetNames.some((n) => c.name.includes(n)) || c.id === 133593859 || c.id === 133593860
+    // Fetch ad_plans (parent level) to check their status
+    const adPlansRes = await callMtApi<{ items: Array<Record<string, unknown>> }>(
+      "ad_plans.json", accessToken,
+      { fields: "id,name,status,date_start,date_end,budget_limit,budget_limit_day" }
     );
+
+    // Find parent ad_plan_ids from campaigns
+    const campaigns = campaignsRes.items || [];
+    const parentPlanIds = new Set(campaigns.map((c) => c.ad_plan_id));
+    const parentPlans = (adPlansRes.items || []).filter((p) => parentPlanIds.has(p.id));
 
     return {
-      campaigns_count: campaignsRes.count,
-      // RAW data from API — no conversion
-      raw_target_campaigns: rawTargets.map((c) => ({
-        id: c.id,
-        name: c.name,
-        status: c.status,
-        budget_limit_day_RAW: c.budget_limit_day,
-        budget_limit_day_type: typeof c.budget_limit_day,
-      })),
-      // Sample of first 5 campaigns with raw budget
-      raw_sample: (campaignsRes.items || []).slice(0, 5).map((c) => ({
-        id: c.id, name: c.name, status: c.status,
-        budget_limit_day_RAW: c.budget_limit_day,
-      })),
+      campaigns_raw: campaigns,
+      parent_ad_plans: parentPlans,
+      all_ad_plan_statuses: [...new Set((adPlansRes.items || []).map((p) => p.status))],
     };
   },
 });
