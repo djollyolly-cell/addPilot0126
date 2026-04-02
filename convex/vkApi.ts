@@ -1077,7 +1077,7 @@ export const getCampaignsForAccount = internalAction({
       const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
         "campaigns.json",
         args.accessToken,
-        { fields: "id,name,status,package_id,budget_limit_day", limit: String(LIMIT), offset: String(offset) }
+        { fields: "id,name,status,package_id,budget_limit_day,delivery", limit: String(LIMIT), offset: String(offset) }
       );
       const items = data.items || [];
       allCampaigns.push(...items);
@@ -1192,10 +1192,41 @@ export const debugUzData = action({
       parentPlans = allPlans.filter((p) => parentPlanIds.includes(p.id as number));
     }
 
+    // Fetch banners (ads) for target campaigns to understand why not_delivering
+    const targetCampaignIds = targets.map((c) => c.id as number);
+    let allBanners: Array<Record<string, unknown>> = [];
+    if (targetCampaignIds.length > 0) {
+      try {
+        const bannersRes = await callMtApi<{ items: Array<Record<string, unknown>>; count: number }>(
+          "banners.json", accessToken,
+          { fields: "id,campaign_id,status,moderation_status,delivery,textblocks", _campaign_id: targetCampaignIds.join(","), limit: "50" }
+        );
+        allBanners = bannersRes.items || [];
+      } catch (e) {
+        allBanners = [{ error: e instanceof Error ? e.message : "fetch failed" }];
+      }
+    }
+
+    // Also fetch issues for target campaigns
+    let campaignIssues: Array<Record<string, unknown>> = [];
+    for (const cid of targetCampaignIds.slice(0, 3)) {
+      try {
+        const issueRes = await callMtApi<Record<string, unknown>>(
+          `campaigns/${cid}.json`, accessToken,
+          { fields: "id,name,status,delivery,issues,moderation_status,audit_pixels" }
+        );
+        campaignIssues.push(issueRes);
+      } catch (e) {
+        campaignIssues.push({ id: cid, error: e instanceof Error ? e.message : "fetch failed" });
+      }
+    }
+
     return {
       total_campaigns: allCampaigns.length,
       target_campaigns: targets,
       parent_ad_plans: parentPlans,
+      banners_in_target_campaigns: allBanners,
+      campaign_details: campaignIssues,
       all_campaign_statuses: [...new Set(allCampaigns.map((c) => c.status))],
       all_ad_plan_statuses: [...new Set((adPlansRes.items || []).map((p) => p.status))],
     };

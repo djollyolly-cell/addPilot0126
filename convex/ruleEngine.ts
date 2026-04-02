@@ -1656,17 +1656,19 @@ export const checkUzBudgetRules = internalAction({
 
           for (const campaign of targetCampaigns) {
             const dailyLimitRubles = Number(campaign.budget_limit_day || "0");
+            if (dailyLimitRubles <= 0) continue; // No budget set — skip
 
-            // Check if paused due to budget: status == "blocked"
-            if (campaign.status !== "blocked") continue;
+            // Skip deleted campaigns
+            if (campaign.status === "deleted") continue;
 
-            // Get spent today to confirm budget exhaustion
+            // Get spent today
             const spentToday = await ctx.runQuery(
               internal.ruleEngine.getCampaignSpentToday,
               { accountId, campaignId: String(campaign.id) }
             );
 
-            // Confirm budget exhaustion (95% threshold for float precision)
+            // Budget exhaustion check: spent >= 95% of daily limit
+            // Works for both status:"blocked" and status:"active"+delivery:"not_delivering"
             if (spentToday < dailyLimitRubles * 0.95) continue;
 
             // Dedup: skip if budget was increased within last 5 minutes
