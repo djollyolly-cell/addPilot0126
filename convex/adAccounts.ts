@@ -639,7 +639,7 @@ export const fetchAndConnect = action({
   },
 });
 
-// List campaigns for an account
+// List campaigns for an account (from local DB — used by rule engine)
 export const listCampaigns = query({
   args: {
     accountId: v.id("adAccounts"),
@@ -649,6 +649,65 @@ export const listCampaigns = query({
       .query("campaigns")
       .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
       .collect();
+  },
+});
+
+// Fetch live campaigns from VK API (ad_plans.json) with banners
+// Returns current data without delay — no local DB dependency
+export const fetchLiveCampaigns = action({
+  args: {
+    accountId: v.id("adAccounts"),
+  },
+  handler: async (ctx, args): Promise<{
+    campaigns: {
+      id: number;
+      name: string;
+      status: string;
+      objective: string;
+      dailyLimit: number | null;
+      allLimit: number | null;
+      banners: {
+        id: number;
+        name: string;
+        status: string;
+        moderationStatus: string;
+      }[];
+    }[];
+  }> => {
+    const accessToken = await ctx.runAction(internal.auth.getValidTokenForAccount, {
+      accountId: args.accountId,
+    });
+
+    // Fetch ad_plans + banners in parallel
+    const [adPlans, banners] = await Promise.all([
+      ctx.runAction(api.vkApi.getMtAdPlans, { accessToken }),
+      ctx.runAction(api.vkApi.getMtBanners, { accessToken }),
+    ]);
+
+    // Group banners by campaign_id
+    const bannersByCampaign = new Map<number, typeof banners>();
+    for (const b of banners) {
+      const list = bannersByCampaign.get(b.campaign_id) || [];
+      list.push(b);
+      bannersByCampaign.set(b.campaign_id, list);
+    }
+
+    return {
+      campaigns: adPlans.map((plan) => ({
+        id: plan.id,
+        name: plan.name,
+        status: plan.status,
+        objective: plan.objective,
+        dailyLimit: plan.budget_limit_day,
+        allLimit: plan.budget_limit,
+        banners: (bannersByCampaign.get(plan.id) || []).map((b) => ({
+          id: b.id,
+          name: b.textblocks?.title?.text || `Баннер ${b.id}`,
+          status: b.status,
+          moderationStatus: b.moderation_status,
+        })),
+      })),
+    };
   },
 });
 

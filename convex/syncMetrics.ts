@@ -271,6 +271,16 @@ export const syncAll = internalAction({
       );
     }
 
+    // Check uz_budget_manage rules (separate from standard rules)
+    try {
+      await ctx.runAction(internal.ruleEngine.checkUzBudgetRules, {});
+    } catch (error) {
+      console.error(
+        "[syncMetrics] Error running UZ budget rules:",
+        error instanceof Error ? error.message : error
+      );
+    }
+
     // Poll moderation status for AI Cabinet banners
     try {
       await ctx.runAction(internal.syncMetrics.pollAiBannerModeration, {});
@@ -527,6 +537,7 @@ export const backfillVkResults = action({
 });
 
 // TEMP diagnostic — check raw VK API response for leads
+
 export const diagnosLeadsForAccount = action({
   args: {
     userId: v.id("users"),

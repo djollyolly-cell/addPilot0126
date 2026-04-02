@@ -633,6 +633,29 @@ export const getMtLeadCounts = action({
   },
 });
 
+// Get ad_plans (VK Ads campaigns) via myTarget API v2
+// This is the authoritative source for campaign data (more complete than campaigns.json)
+export const getMtAdPlans = action({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (_, args): Promise<{
+    id: number;
+    name: string;
+    status: string;
+    objective: string;
+    budget_limit: number | null;
+    budget_limit_day: number | null;
+  }[]> => {
+    const data = await callMtApi<{ items: { id: number; name: string; status: string; objective: string; budget_limit: number | null; budget_limit_day: number | null }[]; count: number }>(
+      "ad_plans.json",
+      args.accessToken,
+      { fields: "id,name,status,objective,budget_limit,budget_limit_day", limit: "250" }
+    );
+    return data.items || [];
+  },
+});
+
 // Get banners (ads) via myTarget API v2
 export const getMtBanners = action({
   args: {
@@ -785,6 +808,50 @@ export const probeVkCampaignEndpoints = action({
     }
 
     return results;
+  },
+});
+
+// TEMP: Diagnostic — show package_id → name mapping for ad_groups
+export const diagnosPackages = action({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (_, args): Promise<unknown> => {
+    const [packagesRes, adPlansRes, adGroupsRes] = await Promise.all([
+      callMtApi<{ items: { id: number; name: string; status: string }[] }>(
+        "packages.json", args.accessToken,
+        { fields: "id,name,status", limit: "200" }
+      ),
+      callMtApi<{ items: { id: number; name: string; status: string; objective: string }[] }>(
+        "ad_plans.json", args.accessToken,
+        { fields: "id,name,status,objective", limit: "100" }
+      ),
+      callMtApi<{ items: { id: number; name: string; status: string; ad_plan_id: number; package_id: number }[] }>(
+        "ad_groups.json", args.accessToken,
+        { fields: "id,name,status,ad_plan_id,package_id", limit: "100" }
+      ),
+    ]);
+
+    const packageMap: Record<number, string> = {};
+    for (const pkg of packagesRes.items || []) {
+      packageMap[pkg.id] = pkg.name;
+    }
+
+    const adGroups = (adGroupsRes.items || []).map((g) => ({
+      id: g.id,
+      name: g.name,
+      ad_plan_id: g.ad_plan_id,
+      package_id: g.package_id,
+      package_name: packageMap[g.package_id] || "unknown",
+    }));
+
+    return {
+      packageMap,
+      ad_plans: (adPlansRes.items || []).map((p) => ({
+        id: p.id, name: p.name, status: p.status, objective: p.objective,
+      })),
+      ad_groups: adGroups,
+    };
   },
 });
 

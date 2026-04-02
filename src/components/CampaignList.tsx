@@ -1,8 +1,8 @@
-import { useQuery } from 'convex/react';
+import { useAction } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
-import { Megaphone, ChevronDown, ChevronRight, Loader2, ImageIcon } from 'lucide-react';
-import { useState } from 'react';
+import { Megaphone, ChevronDown, ChevronRight, Loader2, ImageIcon, RefreshCw, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useCallback } from 'react';
 import { cn } from '../lib/utils';
 
 const campaignStatusLabels: Record<string, { label: string; color: string }> = {
@@ -11,23 +11,30 @@ const campaignStatusLabels: Record<string, { label: string; color: string }> = {
   deleted: { label: 'Удалена', color: 'text-muted-foreground' },
 };
 
-function formatBudget(value?: number): string {
+function formatBudget(value?: number | null): string {
   if (!value || value === 0) return '—';
-  return `${value.toLocaleString('ru-RU')} \u20BD`;
+  // VK API returns budget in kopecks, convert to rubles
+  const rubles = value / 100;
+  return `${rubles.toLocaleString('ru-RU')} \u20BD`;
 }
 
-function AdsList({ campaignId }: { campaignId: Id<"campaigns"> }) {
-  const ads = useQuery(api.adAccounts.listAds, { campaignId });
+interface LiveCampaign {
+  id: number;
+  name: string;
+  status: string;
+  objective: string;
+  dailyLimit: number | null;
+  allLimit: number | null;
+  banners: {
+    id: number;
+    name: string;
+    status: string;
+    moderationStatus: string;
+  }[];
+}
 
-  if (ads === undefined) {
-    return (
-      <div className="flex items-center justify-center py-3">
-        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-      </div>
-    );
-  }
-
-  if (ads.length === 0) {
+function BannersList({ banners }: { banners: LiveCampaign['banners'] }) {
+  if (banners.length === 0) {
     return (
       <p className="text-xs text-muted-foreground py-2 pl-8">Нет объявлений</p>
     );
@@ -35,16 +42,16 @@ function AdsList({ campaignId }: { campaignId: Id<"campaigns"> }) {
 
   return (
     <div className="space-y-1 pl-8">
-      {ads.map((ad) => {
-        const modStatus = ad.approved === 'allowed' ? 'Одобрено' :
-          ad.approved === 'banned' ? 'Отклонено' :
-          ad.approved === 'moderation' ? 'На модерации' :
-          ad.approved || '—';
+      {banners.map((banner) => {
+        const modStatus = banner.moderationStatus === 'allowed' ? 'Одобрено' :
+          banner.moderationStatus === 'banned' ? 'Отклонено' :
+          banner.moderationStatus === 'moderation' ? 'На модерации' :
+          banner.moderationStatus || '—';
 
         return (
-          <div key={ad._id} className="flex items-center gap-2 py-1.5 px-2 rounded text-xs bg-muted/30">
+          <div key={banner.id} className="flex items-center gap-2 py-1.5 px-2 rounded text-xs bg-muted/30">
             <ImageIcon className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-            <span className="truncate flex-1">{ad.name}</span>
+            <span className="truncate flex-1">{banner.name}</span>
             <span className="text-muted-foreground shrink-0">{modStatus}</span>
           </div>
         );
@@ -65,24 +72,64 @@ const statusFilterOptions = [
 ];
 
 export function CampaignList({ accountId }: CampaignListProps) {
-  const campaigns = useQuery(api.adAccounts.listCampaigns, {
-    accountId: accountId as Id<"adAccounts">,
-  });
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const fetchLive = useAction(api.adAccounts.fetchLiveCampaigns);
+  const [campaigns, setCampaigns] = useState<LiveCampaign[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState('all');
 
-  if (campaigns === undefined) {
+  const loadCampaigns = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchLive({
+        accountId: accountId as Id<"adAccounts">,
+      });
+      setCampaigns(result.campaigns);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка загрузки');
+    } finally {
+      setLoading(false);
+    }
+  }, [fetchLive, accountId]);
+
+  useEffect(() => {
+    loadCampaigns();
+  }, [loadCampaigns]);
+
+  if (loading) {
     return (
       <div className="flex items-center justify-center py-4">
         <Loader2 className="w-5 h-5 animate-spin text-muted-foreground" />
+        <span className="text-xs text-muted-foreground ml-2">Загрузка из VK API...</span>
       </div>
     );
   }
 
-  if (campaigns.length === 0) {
+  if (error) {
+    return (
+      <div className="py-3 px-2 space-y-2">
+        <div className="flex items-center gap-2 text-xs text-destructive">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+        <button
+          type="button"
+          onClick={loadCampaigns}
+          className="flex items-center gap-1 text-xs text-primary hover:underline"
+        >
+          <RefreshCw className="w-3 h-3" />
+          Повторить
+        </button>
+      </div>
+    );
+  }
+
+  if (!campaigns || campaigns.length === 0) {
     return (
       <p className="text-sm text-muted-foreground py-3 text-center">
-        Нет кампаний. Нажмите «Синхронизировать».
+        Нет кампаний в этом аккаунте.
       </p>
     );
   }
@@ -115,6 +162,14 @@ export function CampaignList({ accountId }: CampaignListProps) {
             </button>
           );
         })}
+        <button
+          type="button"
+          onClick={loadCampaigns}
+          className="ml-auto text-muted-foreground hover:text-foreground transition-colors"
+          title="Обновить"
+        >
+          <RefreshCw className="w-3.5 h-3.5" />
+        </button>
       </div>
       {filtered.length === 0 ? (
         <p className="text-xs text-muted-foreground py-2 text-center">
@@ -122,17 +177,17 @@ export function CampaignList({ accountId }: CampaignListProps) {
         </p>
       ) : null}
       {filtered.map((campaign) => {
-        const isExpanded = expandedId === campaign._id;
+        const isExpanded = expandedId === campaign.id;
         const statusInfo = campaignStatusLabels[campaign.status] || {
           label: campaign.status,
           color: 'text-muted-foreground',
         };
 
         return (
-          <div key={campaign._id}>
+          <div key={campaign.id}>
             <button
               type="button"
-              onClick={() => setExpandedId(isExpanded ? null : campaign._id)}
+              onClick={() => setExpandedId(isExpanded ? null : campaign.id)}
               className="w-full flex items-center gap-2 py-2 px-2 rounded-md hover:bg-muted/50 transition-colors text-left"
             >
               {isExpanded ? (
@@ -153,7 +208,7 @@ export function CampaignList({ accountId }: CampaignListProps) {
             </button>
             {isExpanded && (
               <div className="pb-2">
-                <AdsList campaignId={campaign._id} />
+                <BannersList banners={campaign.banners} />
               </div>
             )}
           </div>
