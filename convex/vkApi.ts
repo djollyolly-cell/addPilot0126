@@ -826,38 +826,29 @@ export const getCampaignTypeMap = internalAction({
     }
 
     try {
-      // Fetch packages with pagination (max 50 per page)
+      // Fetch packages (max 50 per request) and ad_groups (max 250) sequentially
+      // to avoid Convex dangling promise issues with parallel fetches
+      const packagesRes = await callMtApi<{ items: { id: number; name: string }[] }>(
+        "packages.json", args.accessToken,
+        { fields: "id,name", limit: "50" }
+      );
+
+      const adGroupsRes = await callMtApi<{ items: { id: number; ad_plan_id: number; package_id: number }[] }>(
+        "ad_groups.json", args.accessToken,
+        { fields: "id,ad_plan_id,package_id", limit: "250" }
+      );
+
       const packageNameMap = new Map<number, string>();
-      let pkgOffset = 0;
-      const PKG_LIMIT = 50;
-      while (true) {
-        const packagesRes = await callMtApi<{ items: { id: number; name: string }[]; count: number }>(
-          "packages.json", args.accessToken,
-          { fields: "id,name", limit: String(PKG_LIMIT), offset: String(pkgOffset) }
-        );
-        for (const pkg of packagesRes.items || []) {
-          packageNameMap.set(pkg.id, pkg.name);
-        }
-        if (!packagesRes.items || packagesRes.items.length < PKG_LIMIT) break;
-        pkgOffset += PKG_LIMIT;
+      for (const pkg of packagesRes.items || []) {
+        packageNameMap.set(pkg.id, pkg.name);
       }
 
-      // Fetch ad_groups with pagination (max 250 per page)
+      // Build ad_plan_id → package_id (first group wins)
       const planPackageMap = new Map<number, number>();
-      let groupOffset = 0;
-      const GROUP_LIMIT = 250;
-      while (true) {
-        const adGroupsRes = await callMtApi<{ items: { id: number; ad_plan_id: number; package_id: number }[] }>(
-          "ad_groups.json", args.accessToken,
-          { fields: "id,ad_plan_id,package_id", limit: String(GROUP_LIMIT), offset: String(groupOffset) }
-        );
-        for (const group of adGroupsRes.items || []) {
-          if (!planPackageMap.has(group.ad_plan_id)) {
-            planPackageMap.set(group.ad_plan_id, group.package_id);
-          }
+      for (const group of adGroupsRes.items || []) {
+        if (!planPackageMap.has(group.ad_plan_id)) {
+          planPackageMap.set(group.ad_plan_id, group.package_id);
         }
-        if (!adGroupsRes.items || adGroupsRes.items.length < GROUP_LIMIT) break;
-        groupOffset += GROUP_LIMIT;
       }
 
       const result: Array<{ campaignId: string; type: string }> = [];
