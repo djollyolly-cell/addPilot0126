@@ -1140,37 +1140,47 @@ export const getActiveAccountsForUser = internalQuery({
   },
 });
 
-/** TEMP: Debug — fetch ALL fields for specific campaign IDs + parent ad_plans */
+/** TEMP: Debug — find target campaigns + parent ad_plans statuses */
 export const debugUzData = action({
-  args: { accountId: v.id("adAccounts"), campaignIds: v.optional(v.string()) },
+  args: { accountId: v.id("adAccounts") },
   handler: async (ctx, args) => {
     const accessToken: string = await ctx.runAction(
       internal.auth.getValidTokenForAccount,
       { accountId: args.accountId }
     );
 
-    const ids = args.campaignIds || "133593859,133593860,133593425";
+    // Paginate ALL campaigns to find targets
+    const targetIds = [133593859, 133593860, 133593425];
+    let allCampaigns: Array<Record<string, unknown>> = [];
+    let offset = 0;
+    while (true) {
+      const res = await callMtApi<{ items: Array<Record<string, unknown>>; count: number }>(
+        "campaigns.json", accessToken,
+        { fields: "id,name,status,ad_plan_id,budget_limit_day,issue,status_moderation", limit: "250", offset: String(offset) }
+      );
+      const items = res.items || [];
+      allCampaigns.push(...items);
+      if (items.length < 250) break;
+      offset += 250;
+    }
 
-    // Fetch specific campaigns with ALL available fields
-    const campaignsRes = await callMtApi<{ items: Array<Record<string, unknown>> }>(
-      "campaigns.json", accessToken,
-      { id: ids }
-    );
+    const targets = allCampaigns.filter((c) => targetIds.includes(c.id as number));
 
-    // Fetch ad_plans (parent level) to check their status
+    // Get parent ad_plan IDs
+    const parentPlanIds = [...new Set(targets.map((c) => c.ad_plan_id as number))];
+
+    // Fetch parent ad_plans
     const adPlansRes = await callMtApi<{ items: Array<Record<string, unknown>> }>(
       "ad_plans.json", accessToken,
-      { fields: "id,name,status,date_start,date_end,budget_limit,budget_limit_day" }
+      { fields: "id,name,status,budget_limit,budget_limit_day,issue" }
     );
-
-    // Find parent ad_plan_ids from campaigns
-    const campaigns = campaignsRes.items || [];
-    const parentPlanIds = new Set(campaigns.map((c) => c.ad_plan_id));
-    const parentPlans = (adPlansRes.items || []).filter((p) => parentPlanIds.has(p.id));
+    const parentPlans = (adPlansRes.items || []).filter((p) => parentPlanIds.includes(p.id as number));
 
     return {
-      campaigns_raw: campaigns,
+      total_campaigns: allCampaigns.length,
+      target_campaigns: targets,
       parent_ad_plans: parentPlans,
+      all_campaign_statuses: [...new Set(allCampaigns.map((c) => c.status))],
       all_ad_plan_statuses: [...new Set((adPlansRes.items || []).map((p) => p.status))],
     };
   },
