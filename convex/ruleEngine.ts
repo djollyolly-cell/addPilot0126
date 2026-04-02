@@ -1673,6 +1673,7 @@ export const checkUzBudgetRules = internalAction({
             status: string;
             budget_limit_day: string;
             package_id?: number;
+            delivery?: string;
           }>;
           const targetCampaigns = allCampaigns.filter(
             (c) => targetIds.includes(String(c.id))
@@ -1691,9 +1692,12 @@ export const checkUzBudgetRules = internalAction({
               { accountId, campaignId: String(campaign.id) }
             );
 
-            // Budget exhaustion check: spent >= 95% of daily limit
-            // Works for both status:"blocked" and status:"active"+delivery:"not_delivering"
-            if (spentToday < dailyLimitRubles * 0.95) continue;
+            // Budget exhaustion check: campaign must be actually paused by VK
+            // VK sets delivery:"not_delivering" when daily budget is exhausted
+            // Safety net: spent >= 90% prevents false triggers (e.g. no balance, moderation)
+            const isDeliveryPaused = campaign.delivery === "not_delivering";
+            const isSpentNearLimit = spentToday >= dailyLimitRubles * 0.90;
+            if (!isDeliveryPaused || !isSpentNearLimit) continue;
 
             // Dedup: skip if budget was already increased and spent hasn't grown since
             const recentIncrease = await ctx.runQuery(

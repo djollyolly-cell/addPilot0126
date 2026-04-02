@@ -143,6 +143,7 @@ export interface MtCampaign {
   budget_limit: string;
   budget_limit_day: string;
   package_id?: number;
+  delivery?: string;
   created: string;
   updated: string;
 }
