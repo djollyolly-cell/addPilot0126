@@ -1140,6 +1140,49 @@ export const getActiveAccountsForUser = internalQuery({
   },
 });
 
+/** TEMP: Debug what both endpoints return for an account */
+export const debugUzData = action({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const accessToken: string = await ctx.runAction(
+      internal.auth.getValidTokenForAccount,
+      { accountId: args.accountId }
+    );
+
+    // Fetch from both endpoints
+    const [campaignsRes, adGroupsRes] = await Promise.all([
+      callMtApi<{ items: Array<{ id: number; name: string; status: string; package_id?: number; budget_limit_day?: string }>; count: number }>(
+        "campaigns.json", accessToken,
+        { fields: "id,name,status,package_id,budget_limit_day", limit: "50" }
+      ),
+      callMtApi<{ items: Array<{ id: number; name: string; status: string; ad_plan_id: number; package_id: number; budget_limit_day?: string }> }>(
+        "ad_groups.json", accessToken,
+        { fields: "id,name,status,ad_plan_id,package_id,budget_limit_day", limit: "50" }
+      ),
+    ]);
+
+    return {
+      campaigns: {
+        count: campaignsRes.count,
+        items: (campaignsRes.items || []).map((c) => ({
+          id: c.id, name: c.name, status: c.status,
+          package_id: c.package_id, budget_limit_day: c.budget_limit_day,
+        })),
+      },
+      ad_groups: {
+        items: (adGroupsRes.items || []).map((g) => ({
+          id: g.id, name: g.name, status: g.status,
+          ad_plan_id: g.ad_plan_id, package_id: g.package_id,
+          budget_limit_day: g.budget_limit_day,
+        })),
+      },
+      uz_package_id: UZ_PACKAGE_ID,
+      campaigns_with_960: (campaignsRes.items || []).filter((c) => c.package_id === 960).length,
+      ad_groups_with_960: (adGroupsRes.items || []).filter((g) => g.package_id === 960).length,
+    };
+  },
+});
+
 /**
  * Fetch УЗ campaigns (package_id=960) from VK API for rule form UI.
  * Uses campaigns.json (same as getCampaignsForAccount used by rule engine).
