@@ -1250,7 +1250,7 @@ describe("ruleEngine", () => {
       endDate: now + 86400000,
     });
 
-    expect(data).toHaveLength(3);
+    expect(data).toHaveLength(5);
     const stopped = data.find((d) => d.type === "stopped");
     const notified = data.find((d) => d.type === "notified");
     expect(stopped?.count).toBe(1);
@@ -1353,7 +1353,7 @@ describe("ruleEngine", () => {
       endDate: now,
     });
 
-    expect(data).toHaveLength(3);
+    expect(data).toHaveLength(5);
     expect(data.every((d) => d.count === 0)).toBe(true);
   });
 
