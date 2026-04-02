@@ -119,11 +119,29 @@ function UzAccountNode({ account, value, onChange }: {
   const handleCampaignToggle = useCallback((campaignId: string) => {
     const isChecked = value.campaignIds.includes(campaignId);
     if (isChecked) {
-      onChange({ ...value, campaignIds: value.campaignIds.filter((id) => id !== campaignId) });
+      const remaining = value.campaignIds.filter((id) => id !== campaignId);
+      // If no campaigns left in this account, auto-remove account too
+      const accountCampaignIds = (campaigns || []).map((c) => c.id);
+      const hasOtherSelected = remaining.some((id) => accountCampaignIds.includes(id));
+      onChange({
+        ...value,
+        campaignIds: remaining,
+        accountIds: hasOtherSelected || isAccountChecked
+          ? value.accountIds
+          : value.accountIds.filter((id) => id !== account._id),
+      });
     } else {
-      onChange({ ...value, campaignIds: [...value.campaignIds, campaignId] });
+      // Auto-add account when selecting a campaign
+      const newAccountIds = value.accountIds.includes(account._id)
+        ? value.accountIds
+        : [...value.accountIds, account._id];
+      onChange({
+        ...value,
+        accountIds: newAccountIds,
+        campaignIds: [...value.campaignIds, campaignId],
+      });
     }
-  }, [value, onChange]);
+  }, [value, onChange, account._id, campaigns, isAccountChecked]);
 
   return (
     <div>
@@ -343,12 +361,17 @@ function LiveCampaignNode({ campaign, accountId, isAccountChecked, value, onChan
         adIds: value.adIds.filter((id) => !bannerIdsToRemove.has(id)),
       });
     } else {
+      // Auto-add account when selecting a campaign
+      const newAccountIds = value.accountIds.includes(accountId)
+        ? value.accountIds
+        : [...value.accountIds, accountId];
       onChange({
         ...value,
+        accountIds: newAccountIds,
         campaignIds: [...value.campaignIds, campaignId],
       });
     }
-  }, [isChecked, campaignId, activeBanners, value, onChange]);
+  }, [isChecked, campaignId, accountId, activeBanners, value, onChange]);
 
   return (
     <div>
@@ -429,12 +452,17 @@ function LiveBannerNode({ banner, campaignId, accountId, isParentChecked, value,
         adIds: value.adIds.filter((id) => id !== bannerId),
       });
     } else {
+      // Auto-add account when selecting a banner
+      const newAccountIds = value.accountIds.includes(accountId)
+        ? value.accountIds
+        : [...value.accountIds, accountId];
       onChange({
         ...value,
+        accountIds: newAccountIds,
         adIds: [...value.adIds, bannerId],
       });
     }
-  }, [isChecked, bannerId, value, onChange]);
+  }, [isChecked, bannerId, accountId, value, onChange]);
 
   return (
     <div className="flex items-center gap-2 py-0.5 px-1 rounded hover:bg-muted/30">
