@@ -91,7 +91,11 @@ function UzAccountNode({ account, value, onChange }: {
   const [error, setError] = useState<string | null>(null);
   const fetchUz = useAction(api.vkApi.fetchUzCampaigns);
 
-  const isAccountChecked = value.accountIds.includes(account._id);
+  const isAccountInList = value.accountIds.includes(account._id);
+  // "Whole account" = account checkbox was explicitly checked (no individual campaigns selected for it)
+  const accountCampaignIds = (campaigns || []).map((c) => c.id);
+  const hasIndividualCampaigns = value.campaignIds.some((id) => accountCampaignIds.includes(id));
+  const isWholeAccount = isAccountInList && !hasIndividualCampaigns;
 
   useEffect(() => {
     if (!expanded || campaigns !== null) return;
@@ -104,7 +108,7 @@ function UzAccountNode({ account, value, onChange }: {
   }, [expanded, campaigns, fetchUz, account._id]);
 
   const handleAccountToggle = useCallback(() => {
-    if (isAccountChecked) {
+    if (isAccountInList) {
       const campaignIdsToRemove = new Set((campaigns || []).map((c) => c.id));
       onChange({
         accountIds: value.accountIds.filter((id) => id !== account._id),
@@ -112,26 +116,29 @@ function UzAccountNode({ account, value, onChange }: {
         adIds: [],
       });
     } else {
-      onChange({ ...value, accountIds: [...value.accountIds, account._id] });
+      // Select whole account — also clear any individual campaigns for it
+      const campaignIdsToRemove = new Set((campaigns || []).map((c) => c.id));
+      onChange({
+        ...value,
+        accountIds: [...value.accountIds, account._id],
+        campaignIds: value.campaignIds.filter((id) => !campaignIdsToRemove.has(id)),
+      });
     }
-  }, [isAccountChecked, account._id, campaigns, value, onChange]);
+  }, [isAccountInList, account._id, campaigns, value, onChange]);
 
   const handleCampaignToggle = useCallback((campaignId: string) => {
     const isChecked = value.campaignIds.includes(campaignId);
     if (isChecked) {
       const remaining = value.campaignIds.filter((id) => id !== campaignId);
-      // If no campaigns left in this account, auto-remove account too
-      const accountCampaignIds = (campaigns || []).map((c) => c.id);
-      const hasOtherSelected = remaining.some((id) => accountCampaignIds.includes(id));
+      // If no more individual campaigns for this account, remove accountId too
+      const stillHas = remaining.some((id) => accountCampaignIds.includes(id));
       onChange({
         ...value,
         campaignIds: remaining,
-        accountIds: hasOtherSelected || isAccountChecked
-          ? value.accountIds
-          : value.accountIds.filter((id) => id !== account._id),
+        accountIds: stillHas ? value.accountIds : value.accountIds.filter((id) => id !== account._id),
       });
     } else {
-      // Auto-add account when selecting a campaign
+      // Auto-add account (for backend), but individual campaign tracking prevents "whole account" visual
       const newAccountIds = value.accountIds.includes(account._id)
         ? value.accountIds
         : [...value.accountIds, account._id];
@@ -141,7 +148,7 @@ function UzAccountNode({ account, value, onChange }: {
         campaignIds: [...value.campaignIds, campaignId],
       });
     }
-  }, [value, onChange, account._id, campaigns, isAccountChecked]);
+  }, [value, onChange, account._id, accountCampaignIds]);
 
   return (
     <div>
@@ -153,7 +160,8 @@ function UzAccountNode({ account, value, onChange }: {
         </button>
         <input
           type="checkbox"
-          checked={isAccountChecked}
+          checked={isAccountInList}
+          ref={(el) => { if (el) el.indeterminate = isAccountInList && hasIndividualCampaigns; }}
           onChange={handleAccountToggle}
           className="rounded shrink-0"
         />
@@ -174,15 +182,15 @@ function UzAccountNode({ account, value, onChange }: {
             <p className="text-xs text-muted-foreground py-1 pl-6">Нет активных кампаний</p>
           ) : campaigns ? (
             campaigns.map((c) => {
-              const isChecked = isAccountChecked || value.campaignIds.includes(c.id);
+              const isChecked = isWholeAccount || value.campaignIds.includes(c.id);
               return (
                 <div key={c.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted/50">
                   <input
                     type="checkbox"
                     checked={isChecked}
                     onChange={() => handleCampaignToggle(c.id)}
-                    disabled={isAccountChecked}
-                    className={cn('rounded shrink-0 ml-5', isAccountChecked && 'opacity-50')}
+                    disabled={isWholeAccount}
+                    className={cn('rounded shrink-0 ml-5', isWholeAccount && 'opacity-50')}
                   />
                   <Megaphone className="w-3.5 h-3.5 text-primary shrink-0" />
                   <span className="text-xs truncate">{c.name}</span>
@@ -244,7 +252,12 @@ function LiveAccountNode({ account, value, onChange }: {
   const [error, setError] = useState<string | null>(null);
   const fetchLive = useAction(api.adAccounts.fetchLiveCampaigns);
 
-  const isAccountChecked = value.accountIds.includes(account._id);
+  const isAccountInList = value.accountIds.includes(account._id);
+  const accountCampaignIds = (campaigns || []).map((c) => String(c.id));
+  const accountBannerIds = (campaigns || []).flatMap((c) => c.banners.map((b) => String(b.id)));
+  const hasIndividualCampaigns = value.campaignIds.some((id) => accountCampaignIds.includes(id));
+  const hasIndividualBanners = value.adIds.some((id) => accountBannerIds.includes(id));
+  const isWholeAccount = isAccountInList && !hasIndividualCampaigns && !hasIndividualBanners;
 
   useEffect(() => {
     if (!expanded || campaigns !== null) return;
@@ -263,20 +276,29 @@ function LiveAccountNode({ account, value, onChange }: {
   }, [expanded, campaigns, fetchLive, account._id]);
 
   const handleAccountToggle = useCallback(() => {
-    if (isAccountChecked) {
-      const campaignIdsToRemove = new Set((campaigns || []).map((c) => String(c.id)));
-      const bannerIdsToRemove = new Set(
+    if (isAccountInList) {
+      const cIds = new Set((campaigns || []).map((c) => String(c.id)));
+      const bIds = new Set(
         (campaigns || []).flatMap((c) => c.banners.map((b) => String(b.id)))
       );
       onChange({
         accountIds: value.accountIds.filter((id) => id !== account._id),
-        campaignIds: value.campaignIds.filter((id) => !campaignIdsToRemove.has(id)),
-        adIds: value.adIds.filter((id) => !bannerIdsToRemove.has(id)),
+        campaignIds: value.campaignIds.filter((id) => !cIds.has(id)),
+        adIds: value.adIds.filter((id) => !bIds.has(id)),
       });
     } else {
-      onChange({ ...value, accountIds: [...value.accountIds, account._id] });
+      // Select whole account — clear individual campaigns/banners for it
+      const cIds = new Set((campaigns || []).map((c) => String(c.id)));
+      const bIds = new Set(
+        (campaigns || []).flatMap((c) => c.banners.map((b) => String(b.id)))
+      );
+      onChange({
+        accountIds: [...value.accountIds, account._id],
+        campaignIds: value.campaignIds.filter((id) => !cIds.has(id)),
+        adIds: value.adIds.filter((id) => !bIds.has(id)),
+      });
     }
-  }, [isAccountChecked, account._id, campaigns, value, onChange]);
+  }, [isAccountInList, account._id, campaigns, value, onChange]);
 
   return (
     <div>
@@ -295,7 +317,8 @@ function LiveAccountNode({ account, value, onChange }: {
         </button>
         <input
           type="checkbox"
-          checked={isAccountChecked}
+          checked={isAccountInList}
+          ref={(el) => { if (el) el.indeterminate = isAccountInList && (hasIndividualCampaigns || hasIndividualBanners); }}
           onChange={handleAccountToggle}
           className="rounded shrink-0"
           data-testid={`check-account-${account._id}`}
@@ -321,7 +344,7 @@ function LiveAccountNode({ account, value, onChange }: {
                 key={campaign.id}
                 campaign={campaign}
                 accountId={account._id}
-                isAccountChecked={isAccountChecked}
+                isAccountChecked={isWholeAccount}
                 value={value}
                 onChange={onChange}
               />
@@ -361,7 +384,7 @@ function LiveCampaignNode({ campaign, accountId, isAccountChecked, value, onChan
         adIds: value.adIds.filter((id) => !bannerIdsToRemove.has(id)),
       });
     } else {
-      // Auto-add account when selecting a campaign
+      // Auto-add account for backend filtering
       const newAccountIds = value.accountIds.includes(accountId)
         ? value.accountIds
         : [...value.accountIds, accountId];
@@ -441,7 +464,6 @@ function LiveBannerNode({ banner, campaignId, accountId, isParentChecked, value,
   const isChecked = value.adIds.includes(bannerId);
   const parentChecked =
     isParentChecked ||
-    value.accountIds.includes(accountId) ||
     value.campaignIds.includes(campaignId);
   const effectiveChecked = parentChecked || isChecked;
 
@@ -452,7 +474,7 @@ function LiveBannerNode({ banner, campaignId, accountId, isParentChecked, value,
         adIds: value.adIds.filter((id) => id !== bannerId),
       });
     } else {
-      // Auto-add account when selecting a banner
+      // Auto-add account for backend filtering
       const newAccountIds = value.accountIds.includes(accountId)
         ? value.accountIds
         : [...value.accountIds, accountId];
