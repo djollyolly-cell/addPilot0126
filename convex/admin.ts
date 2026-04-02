@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { action, internalQuery, mutation, query } from "./_generated/server";
+import { internal } from "./_generated/api";
 
 const ADMIN_EMAILS = ["13632013@vk.com"];
 
@@ -175,5 +176,68 @@ export const updateUserTier = mutation({
     });
 
     return { success: true, previousTier: oldTier, newTier: args.tier };
+  },
+});
+
+// Get list of Telegram-connected users for broadcast
+export const getTelegramUsers = query({
+  args: { sessionToken: v.string() },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+    const users = await ctx.db.query("users").collect();
+    return users
+      .filter((u) => u.telegramChatId)
+      .map((u) => ({
+        _id: u._id,
+        name: u.name || u.email,
+        telegramChatId: u.telegramChatId!,
+        telegramFirstName: u.telegramFirstName,
+        telegramUsername: u.telegramUsername,
+      }));
+  },
+});
+
+// Send broadcast message to Telegram users
+export const broadcastTelegram = action({
+  args: {
+    sessionToken: v.string(),
+    message: v.string(),
+    chatIds: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    // Verify admin
+    const admin = await ctx.runQuery(internal.admin.verifyAdmin, {
+      sessionToken: args.sessionToken,
+    });
+    if (!admin) throw new Error("Forbidden: admin access required");
+
+    let sent = 0;
+    let failed = 0;
+    for (const chatId of args.chatIds) {
+      try {
+        await ctx.runAction(internal.telegram.sendMessage, {
+          chatId,
+          text: args.message,
+        });
+        sent++;
+      } catch (err) {
+        console.error(`[broadcast] Failed to send to ${chatId}:`, err);
+        failed++;
+      }
+    }
+    return { sent, failed, total: args.chatIds.length };
+  },
+});
+
+// Internal query for admin verification (used by actions)
+export const verifyAdmin = internalQuery({
+  args: { sessionToken: v.string() },
+  handler: async (ctx, args) => {
+    try {
+      await assertAdmin(ctx, args.sessionToken);
+      return true;
+    } catch {
+      return false;
+    }
   },
 });
