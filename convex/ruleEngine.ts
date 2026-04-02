@@ -141,12 +141,14 @@ export function minutesUntilEndOfDay(now: Date = new Date()): number {
 export const listActiveRules = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const rules = await ctx.db
       .query("rules")
       .withIndex("by_userId_active", (q) =>
         q.eq("userId", args.userId).eq("isActive", true)
       )
       .collect();
+    // uz_budget_manage handled separately by checkUzBudgetRules
+    return rules.filter((r) => r.type !== "uz_budget_manage");
   },
 });
 
@@ -670,6 +672,8 @@ export const getAnalyticsByType = query({
       stopped: 0,
       notified: 0,
       stopped_and_notified: 0,
+      budget_increased: 0,
+      budget_reset: 0,
     };
 
     for (const log of logs) {
@@ -683,6 +687,16 @@ export const getAnalyticsByType = query({
         type: "stopped_and_notified",
         label: "Стоп + увед.",
         count: counts.stopped_and_notified,
+      },
+      {
+        type: "budget_increased",
+        label: "Бюджет увеличен",
+        count: counts.budget_increased,
+      },
+      {
+        type: "budget_reset",
+        label: "Бюджет сброшен",
+        count: counts.budget_reset,
       },
     ];
   },
@@ -1474,14 +1488,17 @@ export const getActiveUzRules = internalQuery({
   },
 });
 
-/** Get total spent today for a campaign (sum of all ads in that group) */
+/** Get total spent today for a campaign (sum of all ads in that group).
+ *  Uses Moscow time (UTC+3) for date, matching VK/myTarget API convention. */
 export const getCampaignSpentToday = internalQuery({
   args: {
     accountId: v.id("adAccounts"),
     campaignId: v.string(),
   },
   handler: async (ctx, args) => {
-    const today = new Date().toISOString().slice(0, 10);
+    // VK API uses Moscow time (UTC+3) for daily stats
+    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    const today = msk.toISOString().slice(0, 10);
     const metrics = await ctx.db
       .query("metricsDaily")
       .withIndex("by_accountId_date", (q) =>
@@ -1518,15 +1535,18 @@ export const hasRecentBudgetIncrease = internalQuery({
   },
 });
 
-/** Check if this is the first budget increase today for a campaign */
+/** Check if this is the first budget increase today for a campaign.
+ *  Uses Moscow time (UTC+3) to match VK daily cycle. */
 export const isFirstBudgetIncreaseToday = internalQuery({
   args: {
     ruleId: v.id("rules"),
     campaignId: v.string(),
   },
   handler: async (ctx, args) => {
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
+    // Moscow midnight (UTC+3) in UTC ms
+    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    const mskMidnight = new Date(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate());
+    const dayStartUtc = mskMidnight.getTime() - 3 * 60 * 60 * 1000;
     const logs = await ctx.db
       .query("actionLogs")
       .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
@@ -1534,7 +1554,7 @@ export const isFirstBudgetIncreaseToday = internalQuery({
         q.and(
           q.eq(q.field("actionType"), "budget_increased"),
           q.eq(q.field("adId"), args.campaignId),
-          q.gte(q.field("createdAt"), todayStart.getTime()),
+          q.gte(q.field("createdAt"), dayStartUtc),
           q.eq(q.field("status"), "success")
         )
       )
