@@ -1132,7 +1132,8 @@ export const getActiveAccountsForUser = internalQuery({
 
 /**
  * Fetch УЗ campaigns (package_id=960) from VK API for rule form UI.
- * Returns only "Универсальная запись" groups with live data.
+ * Uses ad_groups.json which reliably returns package_id.
+ * campaigns.json may not return package_id even when requested.
  */
 export const fetchUzCampaigns = action({
   args: { accountId: v.id("adAccounts") },
@@ -1147,16 +1148,28 @@ export const fetchUzCampaigns = action({
       { accountId: args.accountId }
     );
 
-    const campaigns: MtCampaign[] = await ctx.runAction(
-      internal.vkApi.getCampaignsForAccount,
-      { accessToken, packageId: 960 }
+    // ad_groups.json reliably returns package_id (campaigns.json may not)
+    const data = await callMtApi<{
+      items: Array<{
+        id: number;
+        name: string;
+        status: string;
+        package_id: number;
+        budget_limit_day?: string;
+      }>;
+    }>(
+      "ad_groups.json",
+      accessToken,
+      { fields: "id,name,status,package_id,budget_limit_day", limit: "500" }
     );
 
-    return campaigns.map((c) => ({
-      id: String(c.id),
-      name: c.name,
-      status: c.status,
-      budgetLimitDay: Number(c.budget_limit_day || "0") / 100,
+    const groups = (data.items || []).filter((g) => g.package_id === UZ_PACKAGE_ID);
+
+    return groups.map((g) => ({
+      id: String(g.id),
+      name: g.name,
+      status: g.status,
+      budgetLimitDay: Number(g.budget_limit_day || "0") / 100,
     }));
   },
 });
