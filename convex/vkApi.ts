@@ -1140,36 +1140,37 @@ export const debugUzData = action({
       { accountId: args.accountId }
     );
 
-    // Fetch from both endpoints
-    const [campaignsRes, adGroupsRes] = await Promise.all([
-      callMtApi<{ items: Array<{ id: number; name: string; status: string; package_id?: number; budget_limit_day?: string }>; count: number }>(
-        "campaigns.json", accessToken,
-        { fields: "id,name,status,package_id,budget_limit_day", limit: "50" }
-      ),
-      callMtApi<{ items: Array<{ id: number; name: string; status: string; ad_plan_id: number; package_id: number; budget_limit_day?: string }> }>(
-        "ad_groups.json", accessToken,
-        { fields: "id,name,status,ad_plan_id,package_id,budget_limit_day", limit: "50" }
-      ),
-    ]);
+    // Fetch packages, campaigns, and ad_groups
+    const packagesRes = await callMtApi<{ items: Array<{ id: number; name: string }> }>(
+      "packages.json", accessToken,
+      { fields: "id,name", limit: "200" }
+    );
+    const campaignsRes = await callMtApi<{ items: Array<{ id: number; name: string; status: string; package_id?: number; budget_limit_day?: string }>; count: number }>(
+      "campaigns.json", accessToken,
+      { fields: "id,name,status,package_id,budget_limit_day", limit: "50" }
+    );
+    const adGroupsRes = await callMtApi<{ items: Array<{ id: number; name: string; status: string; ad_plan_id: number; package_id: number; budget_limit_day?: string }> }>(
+      "ad_groups.json", accessToken,
+      { fields: "id,name,status,ad_plan_id,package_id,budget_limit_day", limit: "50" }
+    );
+
+    // Build package name map
+    const pkgMap: Record<number, string> = {};
+    for (const p of packagesRes.items || []) pkgMap[p.id] = p.name;
+
+    // Unique package_ids used in this account with names
+    const usedPkgIds = [...new Set((adGroupsRes.items || []).map((g) => g.package_id))];
+    const packageNames = usedPkgIds.map((id) => ({ id, name: pkgMap[id] || "unknown" }));
 
     return {
-      campaigns: {
-        count: campaignsRes.count,
-        items: (campaignsRes.items || []).map((c) => ({
-          id: c.id, name: c.name, status: c.status,
-          package_id: c.package_id, budget_limit_day: c.budget_limit_day,
-        })),
-      },
-      ad_groups: {
-        items: (adGroupsRes.items || []).map((g) => ({
-          id: g.id, name: g.name, status: g.status,
-          ad_plan_id: g.ad_plan_id, package_id: g.package_id,
-          budget_limit_day: g.budget_limit_day,
-        })),
-      },
-      uz_package_id: UZ_PACKAGE_ID,
+      packages_total: (packagesRes.items || []).length,
+      package_names: packageNames,
+      campaigns_count: campaignsRes.count,
+      ad_groups_count: (adGroupsRes.items || []).length,
       campaigns_with_960: (campaignsRes.items || []).filter((c) => c.package_id === 960).length,
       ad_groups_with_960: (adGroupsRes.items || []).filter((g) => g.package_id === 960).length,
+      // Check if any package name contains "универсальн"
+      uz_like_packages: (packagesRes.items || []).filter((p) => p.name.toLowerCase().includes("универсальн")).map((p) => ({ id: p.id, name: p.name })),
     };
   },
 });
