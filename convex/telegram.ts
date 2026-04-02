@@ -1963,3 +1963,90 @@ export const sendBudgetNotification = internalAction({
     });
   },
 });
+
+// ═══════════════════════════════════════════════════════════
+// TEMP: Debug — send digest manually (remove after testing)
+// ═══════════════════════════════════════════════════════════
+
+export const debugSendDigest = internalAction({
+  args: {
+    type: v.union(v.literal("weekly"), v.literal("monthly")),
+  },
+  handler: async (ctx, args): Promise<{ sent: boolean; accounts?: number; messages?: number; reason?: string }> => {
+    const userId = "kx7djrrpr67bry6zxehzx0e65x8141ct" as Id<"users">;
+    const chatId = "325307765";
+    const now = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    let dates: string[];
+    let prevDates: string[];
+    let periodStr: string;
+    let prevPeriodStr: string;
+
+    if (args.type === "weekly") {
+      // Last 7 days
+      dates = [];
+      for (let i = 7; i >= 1; i--) {
+        dates.push(new Date(now - i * dayMs).toISOString().slice(0, 10));
+      }
+      prevDates = [];
+      for (let i = 14; i >= 8; i--) {
+        prevDates.push(new Date(now - i * dayMs).toISOString().slice(0, 10));
+      }
+      const startDate = new Date(now - 7 * dayMs);
+      const endDate = new Date(now - 1 * dayMs);
+      periodStr = `${fmtDD(startDate)}.${fmtMM(startDate)} — ${fmtDD(endDate)}.${fmtMM(endDate)}.${endDate.getFullYear()}`;
+      const prevStart = new Date(now - 14 * dayMs);
+      const prevEnd = new Date(now - 8 * dayMs);
+      prevPeriodStr = `${fmtDD(prevStart)}.${fmtMM(prevStart)} — ${fmtDD(prevEnd)}.${fmtMM(prevEnd)}`;
+    } else {
+      // Previous month (March 2026)
+      const nowDate = new Date(now);
+      const curMonth = nowDate.getMonth() + 1; // 1-based
+      const curYear = nowDate.getFullYear();
+      const prevMonth = curMonth === 1 ? 12 : curMonth - 1;
+      const prevYear = curMonth === 1 ? curYear - 1 : curYear;
+      const daysInPrevMonth = new Date(prevYear, prevMonth, 0).getDate();
+      dates = [];
+      for (let d = 1; d <= daysInPrevMonth; d++) {
+        dates.push(`${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+      }
+      // Month before that (for comparison)
+      const prevPrevMonth = prevMonth === 1 ? 12 : prevMonth - 1;
+      const prevPrevYear = prevMonth === 1 ? prevYear - 1 : prevYear;
+      const daysInPrevPrevMonth = new Date(prevPrevYear, prevPrevMonth, 0).getDate();
+      prevDates = [];
+      for (let d = 1; d <= daysInPrevPrevMonth; d++) {
+        prevDates.push(`${prevPrevYear}-${String(prevPrevMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+      }
+      periodStr = `${MONTH_NAMES_RU[prevMonth - 1]} ${prevYear}`;
+      prevPeriodStr = `${MONTH_NAMES_GENITIVE_RU[prevPrevMonth - 1]} ${prevPrevYear}`;
+    }
+
+    const data = await ctx.runAction(internal.telegram.collectDigestData, {
+      userId,
+      dates,
+      prevDates,
+    }) as DigestData;
+
+    if (data.accounts.length === 0) {
+      await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+        chatId,
+        text: `⚠️ Нет данных для ${args.type === "weekly" ? "недельного" : "месячного"} дайджеста за период ${periodStr}`,
+      });
+      return { sent: false, reason: "no data" };
+    }
+
+    const message = formatDigestMessage(args.type, data, periodStr, prevPeriodStr);
+    const messages = splitTelegramMessage(message);
+
+    for (const msg of messages) {
+      await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+        chatId,
+        text: msg,
+      });
+    }
+
+    return { sent: true, accounts: data.accounts.length, messages: messages.length };
+  },
+});
