@@ -48,11 +48,14 @@ export const resetBudgets = internalAction({
         // Cron runs every 30 min → catch window 00:00-00:29
         if (hour !== 0 || minute >= 30) continue;
 
-        // Check if already reset today
-        const todayStr = `${userTime.getFullYear()}-${String(userTime.getMonth() + 1).padStart(2, "0")}-${String(userTime.getDate()).padStart(2, "0")}`;
+        // Check if already reset today (compute UTC boundaries of user's local day)
+        const tzOffset = userTime.getTime() - now.getTime(); // ms offset from UTC
+        const userMidnight = new Date(userTime.getFullYear(), userTime.getMonth(), userTime.getDate());
+        const dayStartUtc = userMidnight.getTime() - tzOffset;
+        const dayEndUtc = dayStartUtc + 24 * 60 * 60 * 1000;
         const alreadyReset = await ctx.runQuery(
           internal.uzBudgetCron.hasResetToday,
-          { ruleId: rule._id, dateStr: todayStr }
+          { ruleId: rule._id, dayStartUtc, dayEndUtc }
         );
         if (alreadyReset) continue;
 
@@ -134,19 +137,18 @@ export const getUserTimezone = internalQuery({
 export const hasResetToday = internalQuery({
   args: {
     ruleId: v.id("rules"),
-    dateStr: v.string(),
+    dayStartUtc: v.number(),
+    dayEndUtc: v.number(),
   },
   handler: async (ctx, args) => {
-    const dayStart = new Date(args.dateStr).getTime();
-    const dayEnd = dayStart + 24 * 60 * 60 * 1000;
     const log = await ctx.db
       .query("actionLogs")
       .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
       .filter((q) =>
         q.and(
           q.eq(q.field("actionType"), "budget_reset"),
-          q.gte(q.field("createdAt"), dayStart),
-          q.lt(q.field("createdAt"), dayEnd)
+          q.gte(q.field("createdAt"), args.dayStartUtc),
+          q.lt(q.field("createdAt"), args.dayEndUtc)
         )
       )
       .first();

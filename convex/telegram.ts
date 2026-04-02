@@ -1947,16 +1947,16 @@ export const sendBudgetNotification = internalAction({
     let message = "";
     switch (args.type) {
       case "increase":
-        message = `📊 *Бюджет увеличен*\nГруппа: ${args.campaignName}\nБюджет: ${args.oldBudget}₽ → ${args.newBudget}₽ (+${args.step}₽)`;
+        message = `📊 <b>Бюджет увеличен</b>\nГруппа: ${args.campaignName}\nБюджет: ${args.oldBudget}₽ → ${args.newBudget}₽ (+${args.step}₽)`;
         break;
       case "first_increase":
-        message = `📊 *Первое увеличение бюджета за день*\nГруппа: ${args.campaignName}\nБюджет: ${args.oldBudget}₽ → ${args.newBudget}₽`;
+        message = `📊 <b>Первое увеличение бюджета за день</b>\nГруппа: ${args.campaignName}\nБюджет: ${args.oldBudget}₽ → ${args.newBudget}₽`;
         break;
       case "max_reached":
-        message = `⚠️ *Достигнут максимальный бюджет*\nГруппа: ${args.campaignName}\nТекущий бюджет: ${args.currentBudget}₽ / ${args.maxBudget}₽`;
+        message = `⚠️ <b>Достигнут максимальный бюджет</b>\nГруппа: ${args.campaignName}\nТекущий бюджет: ${args.currentBudget}₽ / ${args.maxBudget}₽`;
         break;
       case "reset":
-        message = `🔄 *Бюджет сброшен*\nГруппа: ${args.campaignName}\nБюджет: ${args.newBudget}₽`;
+        message = `🔄 <b>Бюджет сброшен</b>\nГруппа: ${args.campaignName}\nБюджет: ${args.newBudget}₽`;
         break;
     }
 

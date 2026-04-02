@@ -1687,6 +1687,12 @@ export const checkUzBudgetRules = internalAction({
                 newLimitRubles: newLimit,
               });
 
+              // Check if first increase today BEFORE logging (so the query doesn't find our own log)
+              const isFirstToday = await ctx.runQuery(
+                internal.ruleEngine.isFirstBudgetIncreaseToday,
+                { ruleId: rule._id, campaignId: String(campaign.id) }
+              );
+
               // Resume campaign after budget increase
               await ctx.runAction(internal.vkApi.resumeCampaign, {
                 accessToken,
@@ -1705,12 +1711,6 @@ export const checkUzBudgetRules = internalAction({
                 newBudget: newLimit,
                 step: budgetStep,
               });
-
-              // Send notification
-              const isFirstToday = await ctx.runQuery(
-                internal.ruleEngine.isFirstBudgetIncreaseToday,
-                { ruleId: rule._id, campaignId: String(campaign.id) }
-              );
 
               if (rule.actions.notifyOnEveryIncrease ||
                   (rule.actions.notifyOnKeyEvents && isFirstToday)) {
