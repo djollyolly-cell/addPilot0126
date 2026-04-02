@@ -635,37 +635,40 @@ export const getValidTokenForAccount = internalAction({
       throw new Error("Токен VK Ads не найден. Подключите кабинет заново.");
     }
 
-    // If account has its own clientId — use per-account flow
-    if (account.clientId && account.clientSecret) {
-      const now = Date.now();
-      const BUFFER_MS = 5 * 60 * 1000;
-
-      if (account.tokenExpiresAt && account.tokenExpiresAt > now + BUFFER_MS) {
-        return account.accessToken;
-      }
-
-      // Token expired — try refresh
-      if (!account.refreshToken) {
-        throw new Error("Токен VK Ads истёк. Подключите кабинет заново.");
-      }
-
-      try {
-        const refreshed = await ctx.runAction(internal.auth.refreshTokenForAccount, {
-          accountId: args.accountId,
-          refreshToken: account.refreshToken,
-          clientId: account.clientId,
-          clientSecret: account.clientSecret,
-        });
-        return refreshed.accessToken;
-      } catch {
-        throw new Error("Не удалось обновить токен VK Ads. Подключите кабинет заново.");
-      }
+    // Agency/manual API keys: no clientId/clientSecret, no expiry — return as-is
+    if (!account.clientId && !account.clientSecret) {
+      return account.accessToken;
     }
 
-    // Fallback: old accounts without per-account credentials — use user-level token
-    return ctx.runAction(internal.auth.getValidVkAdsToken, {
-      userId: account.userId,
-    });
+    // Per-account OAuth flow (has clientId + clientSecret)
+    const now = Date.now();
+    const BUFFER_MS = 5 * 60 * 1000;
+
+    if (account.tokenExpiresAt && account.tokenExpiresAt > now + BUFFER_MS) {
+      return account.accessToken;
+    }
+
+    // Token without expiry doesn't expire
+    if (!account.tokenExpiresAt) {
+      return account.accessToken;
+    }
+
+    // Token expired — try refresh
+    if (!account.refreshToken) {
+      throw new Error("Токен VK Ads истёк. Подключите кабинет заново.");
+    }
+
+    try {
+      const refreshed = await ctx.runAction(internal.auth.refreshTokenForAccount, {
+        accountId: args.accountId,
+        refreshToken: account.refreshToken,
+        clientId: account.clientId!,
+        clientSecret: account.clientSecret!,
+      });
+      return refreshed.accessToken;
+    } catch {
+      throw new Error("Не удалось обновить токен VK Ads. Подключите кабинет заново.");
+    }
   },
 });
 
