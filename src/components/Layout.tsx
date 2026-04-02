@@ -40,7 +40,7 @@ const bottomNavItems = [
   { name: 'Настройки', href: '/settings', icon: Settings },
 ];
 
-const ADMIN_EMAILS = ['13632013@vk.com'];
+const ADMIN_EMAILS = ['13632013@vk.com', '786709647@vk.com'];
 
 export function Layout() {
   const { user, logout } = useAuth();
