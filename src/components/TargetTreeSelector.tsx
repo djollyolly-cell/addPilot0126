@@ -147,12 +147,12 @@ function UzAccountNode({ account, value, onChange }: {
           {loading ? (
             <div className="flex items-center justify-center py-2">
               <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
-              <span className="text-xs text-muted-foreground ml-2">Загрузка УЗ-групп из VK...</span>
+              <span className="text-xs text-muted-foreground ml-2">Загрузка кампаний из VK...</span>
             </div>
           ) : error ? (
             <p className="text-xs text-destructive py-1 pl-6">{error}</p>
           ) : campaigns && campaigns.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-1 pl-6">Нет групп «Универсальная запись»</p>
+            <p className="text-xs text-muted-foreground py-1 pl-6">Нет активных кампаний</p>
           ) : campaigns ? (
             campaigns.map((c) => {
               const isChecked = isAccountChecked || value.campaignIds.includes(c.id);

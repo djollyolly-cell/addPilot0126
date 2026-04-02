@@ -1176,8 +1176,8 @@ export const debugUzData = action({
 });
 
 /**
- * Fetch УЗ campaigns (package_id=960) from VK API for rule form UI.
- * Uses campaigns.json (same as getCampaignsForAccount used by rule engine).
+ * Fetch all campaigns from VK API for UZ budget rule form UI.
+ * Returns all campaigns (no package_id filter — user selects which to manage).
  */
 export const fetchUzCampaigns = action({
   args: { accountId: v.id("adAccounts") },
@@ -1192,17 +1192,26 @@ export const fetchUzCampaigns = action({
       { accountId: args.accountId }
     );
 
-    // Use campaigns.json — same endpoint as getCampaignsForAccount (proven to work)
-    const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
-      "campaigns.json",
-      accessToken,
-      { fields: "id,name,status,package_id,budget_limit_day", limit: "250" }
-    );
+    // Fetch all campaigns with pagination
+    const allItems: MtCampaign[] = [];
+    let offset = 0;
+    const LIMIT = 250;
+    while (true) {
+      const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
+        "campaigns.json",
+        accessToken,
+        { fields: "id,name,status,budget_limit_day", limit: String(LIMIT), offset: String(offset) }
+      );
+      const items = data.items || [];
+      allItems.push(...items);
+      if (items.length < LIMIT) break;
+      offset += LIMIT;
+    }
 
-    const allItems = data.items || [];
-    const groups = allItems.filter((c) => c.package_id === UZ_PACKAGE_ID);
+    // Filter out deleted campaigns
+    const active = allItems.filter((c) => c.status !== "deleted");
 
-    return groups.map((c) => ({
+    return active.map((c) => ({
       id: String(c.id),
       name: c.name,
       status: c.status,
