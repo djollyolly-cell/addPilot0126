@@ -654,7 +654,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
               )}
             </Button>
             <p className="text-xs text-center text-muted-foreground">
-              Тестовая карта: 4242 4242 4242 4242
+              Безопасная оплата. Данные карты не хранятся.
             </p>
           </CardFooter>
         </form>

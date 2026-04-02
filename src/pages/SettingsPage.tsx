@@ -144,6 +144,10 @@ export function SettingsPage() {
 
 function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['user']> }) {
   const navigate = useNavigate();
+  const paymentHistory = useQuery(
+    api.billing.getPaymentHistory,
+    user.userId ? { userId: user.userId as Id<"users"> } : "skip"
+  );
 
   return (
     <div data-testid="profile-tab" className="space-y-6">
@@ -291,7 +295,7 @@ function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['us
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {user.subscriptionTier === 'freemium' ? (
+            {!paymentHistory || paymentHistory.length === 0 ? (
               <div data-testid="no-payments" className="flex flex-col items-center justify-center py-8 text-muted-foreground">
                 <CreditCard className="w-10 h-10 mb-2 opacity-50" />
                 <p className="text-sm font-medium">Нет платежей</p>
@@ -303,25 +307,39 @@ function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['us
                   <thead>
                     <tr className="border-b text-left text-muted-foreground">
                       <th className="pb-2 font-medium">Дата</th>
+                      <th className="pb-2 font-medium">Тариф</th>
                       <th className="pb-2 font-medium">Сумма</th>
                       <th className="pb-2 font-medium">Статус</th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr className="border-b">
-                      <td className="py-2">
-                        {new Date().toLocaleDateString('ru-RU')}
-                      </td>
-                      <td className="py-2">
-                        {user.subscriptionTier === 'pro' ? '2 990 ₽' : '990 ₽'}
-                      </td>
-                      <td className="py-2">
-                        <span className="inline-flex items-center gap-1 text-green-600 text-xs">
-                          <CheckCircle2 className="w-3 h-3" />
-                          Оплачено
-                        </span>
-                      </td>
-                    </tr>
+                    {paymentHistory.map((p) => (
+                      <tr key={p.id} className="border-b">
+                        <td className="py-2">
+                          {new Date(p.completedAt || p.createdAt).toLocaleDateString('ru-RU')}
+                        </td>
+                        <td className="py-2">
+                          <Badge variant="secondary" className="text-xs">
+                            {p.tier === 'pro' ? 'Pro' : 'Start'}
+                          </Badge>
+                        </td>
+                        <td className="py-2">
+                          {p.amount.toLocaleString('ru-RU')} {p.currency === 'BYN' ? 'BYN' : '₽'}
+                        </td>
+                        <td className="py-2">
+                          {p.status === 'completed' ? (
+                            <span className="inline-flex items-center gap-1 text-green-600 text-xs">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Оплачено
+                            </span>
+                          ) : p.status === 'failed' ? (
+                            <span className="text-destructive text-xs">Ошибка</span>
+                          ) : (
+                            <span className="text-muted-foreground text-xs">Ожидание</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
