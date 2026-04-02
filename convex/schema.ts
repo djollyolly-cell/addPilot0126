@@ -8,6 +8,11 @@ export default defineSchema({
     name: v.optional(v.string()),
     avatarUrl: v.optional(v.string()),
     telegramChatId: v.optional(v.string()),
+    telegramUserId: v.optional(v.number()),
+    telegramFirstName: v.optional(v.string()),
+    telegramLastName: v.optional(v.string()),
+    telegramUsername: v.optional(v.string()),
+    telegramPhone: v.optional(v.string()),
     subscriptionTier: v.optional(v.union(
       v.literal("freemium"),
       v.literal("start"),
@@ -312,6 +317,8 @@ export default defineSchema({
       v.literal("failed"),
       v.literal("refunded")
     ),
+    promoCode: v.optional(v.string()),
+    bonusDays: v.optional(v.number()),
     bepaidUid: v.optional(v.string()),
     errorMessage: v.optional(v.string()),
     createdAt: v.number(),
@@ -320,6 +327,19 @@ export default defineSchema({
     .index("by_userId", ["userId"])
     .index("by_orderId", ["orderId"])
     .index("by_token", ["token"]),
+  // Promo codes
+  promoCodes: defineTable({
+    code: v.string(),             // Unique code (uppercase)
+    description: v.string(),      // Admin note
+    bonusDays: v.number(),        // Extra days added to subscription
+    maxUses: v.optional(v.number()), // Max total uses (null = unlimited)
+    usedCount: v.number(),        // How many times used
+    isActive: v.boolean(),
+    expiresAt: v.optional(v.number()), // Expiry timestamp (null = never)
+    createdAt: v.number(),
+  })
+    .index("by_code", ["code"]),
+
   // AI-generated banner creatives
   creatives: defineTable({
     userId: v.id("users"),

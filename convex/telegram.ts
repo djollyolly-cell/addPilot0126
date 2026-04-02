@@ -25,6 +25,7 @@ export interface TelegramUpdate {
       id: number;
       is_bot: boolean;
       first_name: string;
+      last_name?: string;
       username?: string;
     };
     chat: {
@@ -32,6 +33,12 @@ export interface TelegramUpdate {
       type: string;
     };
     text?: string;
+    contact?: {
+      phone_number: string;
+      first_name: string;
+      last_name?: string;
+      user_id?: number;
+    };
     date: number;
   };
   callback_query?: {
@@ -40,6 +47,7 @@ export interface TelegramUpdate {
       id: number;
       is_bot: boolean;
       first_name: string;
+      last_name?: string;
       username?: string;
     };
     message?: {
@@ -657,11 +665,32 @@ export const handleWebhook = internalAction({
       return { ok: true };
     }
 
+    // ── Handle contact sharing (phone number) ──
+    if (update.message?.contact) {
+      const chatId = String(update.message.chat.id);
+      const contact = update.message.contact;
+      // Only save if user shared their own contact (not someone else's)
+      if (contact.user_id === update.message.from.id) {
+        await ctx.runMutation(internal.telegram.saveTelegramPhone, {
+          chatId,
+          phone: contact.phone_number,
+        });
+        // Remove the keyboard and confirm
+        await ctx.runAction(internal.telegram.sendMessageWithKeyboard, {
+          chatId,
+          text: "📱 Спасибо! Номер сохранён.",
+          replyMarkup: { remove_keyboard: true },
+        });
+      }
+      return { ok: true };
+    }
+
     // ── Handle text messages ──
     if (!update.message?.text) return { ok: true };
 
     const chatId = String(update.message.chat.id);
     const text = update.message.text;
+    const from = update.message.from;
 
     // Handle /start command
     if (text.startsWith("/start")) {
@@ -675,10 +704,14 @@ export const handleWebhook = internalAction({
         );
 
         if (link) {
-          // Save chatId to user
+          // Save chatId + Telegram profile data to user
           await ctx.runMutation(internal.telegram.saveChatId, {
             userId: link.userId,
             chatId,
+            telegramUserId: from.id,
+            telegramFirstName: from.first_name,
+            telegramLastName: from.last_name,
+            telegramUsername: from.username,
           });
 
           // Delete used token
@@ -686,10 +719,15 @@ export const handleWebhook = internalAction({
             linkId: link.linkId,
           });
 
-          // Send confirmation
-          await ctx.runAction(internal.telegram.sendMessage, {
+          // Send confirmation + request phone via contact button
+          await ctx.runAction(internal.telegram.sendMessageWithKeyboard, {
             chatId,
-            text: "✅ <b>Подключено!</b>\n\nAddPilot будет отправлять уведомления в этот чат.",
+            text: "✅ <b>Подключено!</b>\n\nAddPilot будет отправлять уведомления в этот чат.\n\n📱 Поделитесь номером телефона, чтобы мы могли связаться с вами при необходимости (необязательно):",
+            replyMarkup: {
+              keyboard: [[{ text: "📱 Поделиться номером", request_contact: true }]],
+              resize_keyboard: true,
+              one_time_keyboard: true,
+            },
           });
 
           return { ok: true, linked: true };
@@ -709,17 +747,46 @@ export const handleWebhook = internalAction({
   },
 });
 
-/** Internal: save chatId to user (direct DB patch) */
+/** Internal: save chatId and Telegram profile data to user */
 export const saveChatId = internalMutation({
   args: {
     userId: v.id("users"),
     chatId: v.string(),
+    telegramUserId: v.optional(v.number()),
+    telegramFirstName: v.optional(v.string()),
+    telegramLastName: v.optional(v.string()),
+    telegramUsername: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.userId, {
+    const patch: Record<string, unknown> = {
       telegramChatId: args.chatId,
       updatedAt: Date.now(),
-    });
+    };
+    if (args.telegramUserId !== undefined) patch.telegramUserId = args.telegramUserId;
+    if (args.telegramFirstName !== undefined) patch.telegramFirstName = args.telegramFirstName;
+    if (args.telegramLastName !== undefined) patch.telegramLastName = args.telegramLastName;
+    if (args.telegramUsername !== undefined) patch.telegramUsername = args.telegramUsername;
+    await ctx.db.patch(args.userId, patch);
+  },
+});
+
+/** Internal: save phone number from Telegram contact sharing */
+export const saveTelegramPhone = internalMutation({
+  args: {
+    chatId: v.string(),
+    phone: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db
+      .query("users")
+      .filter((q) => q.eq(q.field("telegramChatId"), args.chatId))
+      .first();
+    if (user) {
+      await ctx.db.patch(user._id, {
+        telegramPhone: args.phone,
+        updatedAt: Date.now(),
+      });
+    }
   },
 });
 
@@ -732,6 +799,11 @@ export const getConnectionStatus = query({
     return {
       connected: !!user.telegramChatId,
       chatId: user.telegramChatId,
+      telegramUserId: user.telegramUserId,
+      telegramFirstName: user.telegramFirstName,
+      telegramLastName: user.telegramLastName,
+      telegramUsername: user.telegramUsername,
+      telegramPhone: user.telegramPhone,
     };
   },
 });
