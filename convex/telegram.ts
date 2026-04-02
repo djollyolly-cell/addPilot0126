@@ -1494,7 +1494,7 @@ export const collectDigestData = internalAction({
 
     for (const accMetrics of accountMetrics) {
       // Try to get VK API token for package classification
-      let campaignTypeMap = new Map<string, "lead" | "subscription">();
+      const campaignTypeMap = new Map<string, "lead" | "subscription">();
 
       try {
         const accessToken = await ctx.runAction(

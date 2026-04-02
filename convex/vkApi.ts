@@ -1179,7 +1179,7 @@ export const debugUzData = action({
 
     // Paginate ALL campaigns to find targets
     const targetIds = [133593859, 133593860, 133593425];
-    let allCampaigns: Array<Record<string, unknown>> = [];
+    const allCampaigns: Array<Record<string, unknown>> = [];
     let offset = 0;
     while (true) {
       const res = await callMtApi<{ items: Array<Record<string, unknown>>; count: number }>(
@@ -1205,7 +1205,7 @@ export const debugUzData = action({
     let parentPlans = (adPlansRes.items || []).filter((p) => parentPlanIds.includes(p.id as number));
     // If not found, paginate
     if (parentPlans.length === 0) {
-      let allPlans: Array<Record<string, unknown>> = [];
+      const allPlans: Array<Record<string, unknown>> = [];
       let planOffset = 0;
       while (true) {
         const res = await callMtApi<{ items: Array<Record<string, unknown>> }>(
@@ -1236,7 +1236,7 @@ export const debugUzData = action({
     }
 
     // Also fetch issues for target campaigns
-    let campaignIssues: Array<Record<string, unknown>> = [];
+    const campaignIssues: Array<Record<string, unknown>> = [];
     for (const cid of targetCampaignIds.slice(0, 3)) {
       try {
         const issueRes = await callMtApi<Record<string, unknown>>(
