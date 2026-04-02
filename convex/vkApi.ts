@@ -1171,15 +1171,27 @@ export const debugUzData = action({
     const usedPkgIds = [...new Set((adGroupsRes.items || []).map((g) => g.package_id))];
     const packageNames = usedPkgIds.map((id) => ({ id, name: pkgMap[id] || "unknown" }));
 
+    // Find target campaigns by name pattern (latest ones)
+    const targetNames = ["Копия Группа 2026-03-31", "Копия_1 Копия Группа 2026-03-31", "Группа 2026-03-31"];
+    const rawTargets = (campaignsRes.items || []).filter((c) =>
+      targetNames.some((n) => c.name.includes(n)) || c.id === 133593859 || c.id === 133593860
+    );
+
     return {
-      packages_total: (packagesRes.items || []).length,
-      package_names: packageNames,
       campaigns_count: campaignsRes.count,
-      ad_groups_count: (adGroupsRes.items || []).length,
-      campaigns_with_960: (campaignsRes.items || []).filter((c) => c.package_id === 960).length,
-      ad_groups_with_960: (adGroupsRes.items || []).filter((g) => g.package_id === 960).length,
-      // Check if any package name contains "универсальн"
-      uz_like_packages: (packagesRes.items || []).filter((p) => p.name.toLowerCase().includes("универсальн")).map((p) => ({ id: p.id, name: p.name })),
+      // RAW data from API — no conversion
+      raw_target_campaigns: rawTargets.map((c) => ({
+        id: c.id,
+        name: c.name,
+        status: c.status,
+        budget_limit_day_RAW: c.budget_limit_day,
+        budget_limit_day_type: typeof c.budget_limit_day,
+      })),
+      // Sample of first 5 campaigns with raw budget
+      raw_sample: (campaignsRes.items || []).slice(0, 5).map((c) => ({
+        id: c.id, name: c.name, status: c.status,
+        budget_limit_day_RAW: c.budget_limit_day,
+      })),
     };
   },
 });
