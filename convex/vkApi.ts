@@ -1169,12 +1169,28 @@ export const debugUzData = action({
     // Get parent ad_plan IDs
     const parentPlanIds = [...new Set(targets.map((c) => c.ad_plan_id as number))];
 
-    // Fetch parent ad_plans
+    // Fetch parent ad_plans by ID
     const adPlansRes = await callMtApi<{ items: Array<Record<string, unknown>> }>(
       "ad_plans.json", accessToken,
-      { fields: "id,name,status,budget_limit,budget_limit_day,delivery" }
+      { fields: "id,name,status,budget_limit,budget_limit_day,delivery", _id: parentPlanIds.join(",") }
     );
-    const parentPlans = (adPlansRes.items || []).filter((p) => parentPlanIds.includes(p.id as number));
+    let parentPlans = (adPlansRes.items || []).filter((p) => parentPlanIds.includes(p.id as number));
+    // If not found, paginate
+    if (parentPlans.length === 0) {
+      let allPlans: Array<Record<string, unknown>> = [];
+      let planOffset = 0;
+      while (true) {
+        const res = await callMtApi<{ items: Array<Record<string, unknown>> }>(
+          "ad_plans.json", accessToken,
+          { fields: "id,name,status,budget_limit,budget_limit_day,delivery", limit: "50", offset: String(planOffset) }
+        );
+        const items = res.items || [];
+        allPlans.push(...items);
+        if (items.length < 50) break;
+        planOffset += 50;
+      }
+      parentPlans = allPlans.filter((p) => parentPlanIds.includes(p.id as number));
+    }
 
     return {
       total_campaigns: allCampaigns.length,
