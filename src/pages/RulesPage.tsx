@@ -600,6 +600,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
             userId={userId}
             value={targets}
             onChange={setTargets}
+            ruleType={type}
           />
           {targets.accountIds.length > 0 && (
             <p className="text-xs text-muted-foreground mt-1">

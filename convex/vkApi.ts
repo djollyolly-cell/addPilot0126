@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { action, internalAction, query } from "./_generated/server";
+import { action, internalAction, internalQuery } from "./_generated/server";
+import { internal } from "./_generated/api";
 
 // ─── OLD VK API (api.vk.com/method/ads.*) ─────────────────────────
 // Kept for backwards compatibility; may work with tokens that have `ads` scope
@@ -1063,21 +1064,45 @@ export const resumeCampaign = internalAction({
   },
 });
 
-/**
- * Get campaigns with package_id=960 (УЗ format) for rule form UI.
- */
-export const getUzCampaigns = query({
+/** Get active accounts for a user (used by fetchUzCampaigns) */
+export const getActiveAccountsForUser = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
-    const accounts = await ctx.db
+    return await ctx.db
       .query("adAccounts")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .filter((q) => q.eq(q.field("status"), "active"))
       .collect();
+  },
+});
 
-    const allCampaigns = await ctx.db.query("campaigns").collect();
-    return allCampaigns.filter((c: any) =>
-      accounts.some((a) => a._id === c.accountId)
+/**
+ * Fetch УЗ campaigns (package_id=960) from VK API for rule form UI.
+ * Returns only "Универсальная запись" groups with live data.
+ */
+export const fetchUzCampaigns = action({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args): Promise<Array<{
+    id: string;
+    name: string;
+    status: string;
+    budgetLimitDay: number;
+  }>> => {
+    const accessToken: string = await ctx.runAction(
+      internal.auth.getValidTokenForAccount,
+      { accountId: args.accountId }
     );
+
+    const campaigns: MtCampaign[] = await ctx.runAction(
+      internal.vkApi.getCampaignsForAccount,
+      { accessToken, packageId: 960 }
+    );
+
+    return campaigns.map((c) => ({
+      id: String(c.id),
+      name: c.name,
+      status: c.status,
+      budgetLimitDay: Number(c.budget_limit_day || "0") / 100,
+    }));
   },
 });

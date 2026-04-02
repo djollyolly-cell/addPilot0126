@@ -1,5 +1,5 @@
-import { useState, useCallback } from 'react';
-import { useQuery } from 'convex/react';
+import { useState, useCallback, useEffect } from 'react';
+import { useQuery, useAction } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
 import { ChevronDown, ChevronRight, Loader2, Monitor, Megaphone, ImageIcon } from 'lucide-react';
@@ -15,9 +15,10 @@ interface TargetTreeSelectorProps {
   userId: string;
   value: TargetSelection;
   onChange: (selection: TargetSelection) => void;
+  ruleType?: string;
 }
 
-export function TargetTreeSelector({ userId, value, onChange }: TargetTreeSelectorProps) {
+export function TargetTreeSelector({ userId, value, onChange, ruleType }: TargetTreeSelectorProps) {
   const accounts = useQuery(
     api.adAccounts.list,
     { userId: userId as Id<"users"> }
@@ -39,6 +40,22 @@ export function TargetTreeSelector({ userId, value, onChange }: TargetTreeSelect
     );
   }
 
+  // For uz_budget_manage — show only УЗ campaigns (package_id=960) from VK API
+  if (ruleType === 'uz_budget_manage') {
+    return (
+      <div data-testid="target-tree" className="border rounded-lg p-3 space-y-1 max-h-72 overflow-y-auto">
+        {accounts.map((account) => (
+          <UzAccountNode
+            key={account._id}
+            account={account}
+            value={value}
+            onChange={onChange}
+          />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div data-testid="target-tree" className="border rounded-lg p-3 space-y-1 max-h-72 overflow-y-auto">
       {accounts.map((account) => (
@@ -49,6 +66,124 @@ export function TargetTreeSelector({ userId, value, onChange }: TargetTreeSelect
           onChange={onChange}
         />
       ))}
+    </div>
+  );
+}
+
+// ─── УЗ Account node (VK API, package_id=960 only) ──
+
+interface UzCampaign {
+  id: string;
+  name: string;
+  status: string;
+  budgetLimitDay: number;
+}
+
+function UzAccountNode({ account, value, onChange }: {
+  account: { _id: string; name: string };
+  value: TargetSelection;
+  onChange: (selection: TargetSelection) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [campaigns, setCampaigns] = useState<UzCampaign[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fetchUz = useAction(api.vkApi.fetchUzCampaigns);
+
+  const isAccountChecked = value.accountIds.includes(account._id);
+
+  useEffect(() => {
+    if (!expanded || campaigns !== null) return;
+    setLoading(true);
+    setError(null);
+    fetchUz({ accountId: account._id as Id<"adAccounts"> })
+      .then((result) => setCampaigns(result))
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+      .finally(() => setLoading(false));
+  }, [expanded, campaigns, fetchUz, account._id]);
+
+  const handleAccountToggle = useCallback(() => {
+    if (isAccountChecked) {
+      const campaignIdsToRemove = new Set((campaigns || []).map((c) => c.id));
+      onChange({
+        accountIds: value.accountIds.filter((id) => id !== account._id),
+        campaignIds: value.campaignIds.filter((id) => !campaignIdsToRemove.has(id)),
+        adIds: [],
+      });
+    } else {
+      onChange({ ...value, accountIds: [...value.accountIds, account._id] });
+    }
+  }, [isAccountChecked, account._id, campaigns, value, onChange]);
+
+  const handleCampaignToggle = useCallback((campaignId: string) => {
+    const isChecked = value.campaignIds.includes(campaignId);
+    if (isChecked) {
+      onChange({ ...value, campaignIds: value.campaignIds.filter((id) => id !== campaignId) });
+    } else {
+      onChange({ ...value, campaignIds: [...value.campaignIds, campaignId] });
+    }
+  }, [value, onChange]);
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 py-1.5 px-1 rounded hover:bg-muted/50">
+        <button type="button" onClick={() => setExpanded(!expanded)} className="shrink-0 p-0.5">
+          {expanded
+            ? <ChevronDown className="w-4 h-4 text-muted-foreground" />
+            : <ChevronRight className="w-4 h-4 text-muted-foreground" />}
+        </button>
+        <input
+          type="checkbox"
+          checked={isAccountChecked}
+          onChange={handleAccountToggle}
+          className="rounded shrink-0"
+        />
+        <Monitor className="w-4 h-4 text-primary shrink-0" />
+        <span className="text-sm truncate">{account.name}</span>
+      </div>
+
+      {expanded && (
+        <div className="pl-6">
+          {loading ? (
+            <div className="flex items-center justify-center py-2">
+              <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              <span className="text-xs text-muted-foreground ml-2">Загрузка УЗ-групп из VK...</span>
+            </div>
+          ) : error ? (
+            <p className="text-xs text-destructive py-1 pl-6">{error}</p>
+          ) : campaigns && campaigns.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-1 pl-6">Нет групп «Универсальная запись»</p>
+          ) : campaigns ? (
+            campaigns.map((c) => {
+              const isChecked = isAccountChecked || value.campaignIds.includes(c.id);
+              return (
+                <div key={c.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted/50">
+                  <input
+                    type="checkbox"
+                    checked={isChecked}
+                    onChange={() => handleCampaignToggle(c.id)}
+                    disabled={isAccountChecked}
+                    className={cn('rounded shrink-0 ml-5', isAccountChecked && 'opacity-50')}
+                  />
+                  <Megaphone className="w-3.5 h-3.5 text-primary shrink-0" />
+                  <span className="text-xs truncate">{c.name}</span>
+                  {c.budgetLimitDay > 0 && (
+                    <span className="text-[10px] text-muted-foreground shrink-0">
+                      {c.budgetLimitDay}₽/день
+                    </span>
+                  )}
+                  <span className={cn(
+                    'text-[10px] shrink-0',
+                    c.status === 'active' ? 'text-green-600' : 'text-muted-foreground'
+                  )}>
+                    {c.status === 'active' ? 'Активна' : c.status}
+                  </span>
+                </div>
+              );
+            })
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }
