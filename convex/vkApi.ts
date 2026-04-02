@@ -1103,11 +1103,27 @@ export const setCampaignBudget = internalAction({
   },
   handler: async (_, args) => {
     // API accepts rubles directly (108 = 108₽)
-    return postMtApi<MtCampaign>(
-      `campaigns/${args.campaignId}.json`,
-      args.accessToken,
-      { budget_limit_day: String(Math.round(args.newLimitRubles)) }
-    );
+    // Use raw fetch because VK API may return empty body on successful update
+    const url = `${MT_API_BASE}/api/v2/campaigns/${args.campaignId}.json`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${args.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ budget_limit_day: String(Math.round(args.newLimitRubles)) }),
+    });
+    if (response.status === 401) throw new Error("TOKEN_EXPIRED");
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`VK Ads API Error ${response.status}: ${text}`);
+    }
+    // Parse JSON only if body is not empty
+    const text = await response.text();
+    if (text.trim()) {
+      return JSON.parse(text) as MtCampaign;
+    }
+    return { id: args.campaignId } as unknown as MtCampaign;
   },
 });
 
@@ -1120,11 +1136,23 @@ export const resumeCampaign = internalAction({
     campaignId: v.number(),
   },
   handler: async (_, args) => {
-    return postMtApi<MtCampaign>(
-      `campaigns/${args.campaignId}.json`,
-      args.accessToken,
-      { status: "active" }
-    );
+    const url = `${MT_API_BASE}/api/v2/campaigns/${args.campaignId}.json`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${args.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ status: "active" }),
+    });
+    if (response.status === 401) throw new Error("TOKEN_EXPIRED");
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`VK Ads API Error ${response.status}: ${text}`);
+    }
+    const text = await response.text();
+    if (text.trim()) return JSON.parse(text) as MtCampaign;
+    return { id: args.campaignId } as unknown as MtCampaign;
   },
 });
 
