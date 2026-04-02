@@ -1748,76 +1748,35 @@ export const sendDailyDigest = internalAction({
 
     if (recipients.length === 0) return { sent: 0 };
 
-    // Yesterday's date for metrics
-    const now = Date.now();
-    const dayMs = 24 * 60 * 60 * 1000;
-    const since = now - dayMs;
-    const until = now;
-
-    // Yesterday's date strings
-    const yesterday = new Date(since);
+    // Yesterday's date
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const dateISO = yesterday.toISOString().slice(0, 10);
     const dateStr = `${String(yesterday.getDate()).padStart(2, "0")}.${String(yesterday.getMonth() + 1).padStart(2, "0")}.${yesterday.getFullYear()}`;
-    const dateISO = yesterday.toISOString().slice(0, 10); // "YYYY-MM-DD"
 
     let sentCount = 0;
 
     for (const recipient of recipients) {
-      // Fetch metrics for this user's accounts
-      const metricsSummary = await ctx.runQuery(
-        internal.telegram.getDigestMetricsSummary,
-        { userId: recipient.userId, date: dateISO }
-      );
-
-      const logs = await ctx.runQuery(
-        internal.telegram.getDigestActionLogs,
-        { userId: recipient.userId, since, until }
-      );
-
-      const events: DigestActionLogSummary[] = logs.map((log: Doc<"actionLogs">) => ({
-        adName: log.adName,
-        adId: log.adId,
-        accountId: log.accountId,
-        actionType: log.actionType,
-        reason: log.reason,
-        savedAmount: log.savedAmount,
-        metricsSnapshot: log.metricsSnapshot,
-      }));
-
-      // Update events with end-of-day metrics from metricsDaily
-      for (const event of events) {
-        const freshMetrics = await ctx.runQuery(
-          internal.telegram.getAdDailyMetrics,
-          { adId: event.adId, date: dateISO }
-        );
-        if (freshMetrics) {
-          event.metricsSnapshot = {
-            spent: freshMetrics.spent,
-            leads: freshMetrics.leads,
-            cpl: freshMetrics.leads > 0
-              ? Math.round((freshMetrics.spent / freshMetrics.leads) * 100) / 100
-              : undefined,
-            ctr: freshMetrics.impressions > 0
-              ? Math.round((freshMetrics.clicks / freshMetrics.impressions) * 10000) / 100
-              : undefined,
-          };
-          // Update reason with end-of-day spend for new_lead events
-          if (event.reason.includes("Новый лид!")) {
-            event.reason = `Новый лид! Всего лидов: ${freshMetrics.leads}, расход: ${freshMetrics.spent.toFixed(2)}₽`;
-          }
-        }
-      }
-
-      const message = formatDailyDigest(events, dateStr, metricsSummary);
-
       try {
-        await ctx.runAction(internal.telegram.sendMessageWithRetry, {
-          chatId: recipient.chatId,
-          text: message,
+        const data = await ctx.runAction(internal.telegram.collectDigestData, {
+          userId: recipient.userId,
+          dates: [dateISO],
         });
+
+        if (data.accounts.length === 0) continue;
+
+        const message = formatDigestMessage("daily", data, dateStr);
+        const messages = splitTelegramMessage(message);
+
+        for (const msg of messages) {
+          await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+            chatId: recipient.chatId,
+            text: msg,
+          });
+        }
         sentCount++;
       } catch (err) {
         console.error(
-          `[telegram] Failed to send digest to ${recipient.userId}:`,
+          `[telegram] Failed to send daily digest to ${recipient.userId}:`,
           err instanceof Error ? err.message : err
         );
       }
@@ -1959,18 +1918,17 @@ export const sendWeeklyDigest = internalAction({
 
     const now = Date.now();
     const nowDate = new Date(now);
+    const dayMs = 24 * 60 * 60 * 1000;
     let sentCount = 0;
 
     for (const recipient of recipients) {
-      // Get user's timezone
       const settings: Doc<"userSettings"> | null = await ctx.runQuery(
         internal.userSettings.getInternal,
         { userId: recipient.userId }
       );
       const tz = settings?.timezone || "Europe/Moscow";
 
-      // Check if it's Monday 08:30-08:59 in user's timezone
-      // Use formatToParts for reliable parsing across runtimes
+      // Check if Monday 08:30-08:59 in user's timezone
       const formatter = new Intl.DateTimeFormat("en-US", {
         timeZone: tz,
         weekday: "short",
@@ -1980,92 +1938,50 @@ export const sendWeeklyDigest = internalAction({
       });
       const timeParts = formatter.formatToParts(nowDate);
       const dayOfWeek = timeParts.find((p) => p.type === "weekday")?.value;
-      const hour = parseInt(
-        timeParts.find((p) => p.type === "hour")?.value || "-1",
-        10
-      );
-      const minute = parseInt(
-        timeParts.find((p) => p.type === "minute")?.value || "-1",
-        10
-      );
+      const hour = parseInt(timeParts.find((p) => p.type === "hour")?.value || "-1", 10);
+      const minute = parseInt(timeParts.find((p) => p.type === "minute")?.value || "-1", 10);
 
-      // Only send on Monday at 08:30-08:59 (cron runs every 30 min)
       if (dayOfWeek !== "Mon" || hour !== 8 || minute < 30) continue;
 
-      // Build 7-day date range (Mon-Sun of previous week)
-      // Find last Monday in user's timezone
+      // Current week: 7 days ago through yesterday
       const dates: string[] = [];
       for (let i = 7; i >= 1; i--) {
-        const d = new Date(now - i * 24 * 60 * 60 * 1000);
-        dates.push(d.toISOString().slice(0, 10));
+        dates.push(new Date(now - i * dayMs).toISOString().slice(0, 10));
       }
 
-      const since = now - 7 * 24 * 60 * 60 * 1000;
-      const until = now;
-
-      // Period string for header: "08.03 — 14.03.2026"
-      const startDate = new Date(since);
-      const endDate = new Date(until - 24 * 60 * 60 * 1000); // yesterday
-      const periodStr = `${String(startDate.getDate()).padStart(2, "0")}.${String(startDate.getMonth() + 1).padStart(2, "0")} — ${String(endDate.getDate()).padStart(2, "0")}.${String(endDate.getMonth() + 1).padStart(2, "0")}.${endDate.getFullYear()}`;
-
-      // Fetch weekly metrics
-      const metricsSummary = await ctx.runQuery(
-        internal.telegram.getWeeklyMetricsSummary,
-        { userId: recipient.userId, dates }
-      );
-
-      // Fetch action logs for the week
-      const logs = await ctx.runQuery(
-        internal.telegram.getDigestActionLogs,
-        { userId: recipient.userId, since, until }
-      );
-
-      const events: DigestActionLogSummary[] = logs.map((log: Doc<"actionLogs">) => ({
-        adName: log.adName,
-        adId: log.adId,
-        accountId: log.accountId,
-        actionType: log.actionType,
-        reason: log.reason,
-        savedAmount: log.savedAmount,
-        metricsSnapshot: log.metricsSnapshot,
-      }));
-
-      // Update events with end-of-day metrics (same fix as daily digest)
-      for (const event of events) {
-        // Find the date of the event from actionLog createdAt
-        const logEntry = logs.find((l: Doc<"actionLogs">) => l.adId === event.adId && l.reason === event.reason);
-        const eventDate = logEntry
-          ? new Date(logEntry.createdAt).toISOString().slice(0, 10)
-          : dates[dates.length - 1];
-
-        const freshMetrics = await ctx.runQuery(
-          internal.telegram.getAdDailyMetrics,
-          { adId: event.adId, date: eventDate }
-        );
-        if (freshMetrics) {
-          event.metricsSnapshot = {
-            spent: freshMetrics.spent,
-            leads: freshMetrics.leads,
-            cpl: freshMetrics.leads > 0
-              ? Math.round((freshMetrics.spent / freshMetrics.leads) * 100) / 100
-              : undefined,
-            ctr: freshMetrics.impressions > 0
-              ? Math.round((freshMetrics.clicks / freshMetrics.impressions) * 10000) / 100
-              : undefined,
-          };
-          if (event.reason.includes("Новый лид!")) {
-            event.reason = `Новый лид! Всего лидов: ${freshMetrics.leads}, расход: ${freshMetrics.spent.toFixed(2)}₽`;
-          }
-        }
+      // Previous week: 14 days ago through 8 days ago
+      const prevDates: string[] = [];
+      for (let i = 14; i >= 8; i--) {
+        prevDates.push(new Date(now - i * dayMs).toISOString().slice(0, 10));
       }
 
-      const message = formatWeeklyDigest(events, periodStr, metricsSummary);
+      // Period strings
+      const startDate = new Date(now - 7 * dayMs);
+      const endDate = new Date(now - 1 * dayMs);
+      const periodStr = `${fmtDD(startDate)}.${fmtMM(startDate)} — ${fmtDD(endDate)}.${fmtMM(endDate)}.${endDate.getFullYear()}`;
+
+      const prevStart = new Date(now - 14 * dayMs);
+      const prevEnd = new Date(now - 8 * dayMs);
+      const prevPeriodStr = `${fmtDD(prevStart)}.${fmtMM(prevStart)} — ${fmtDD(prevEnd)}.${fmtMM(prevEnd)}`;
 
       try {
-        await ctx.runAction(internal.telegram.sendMessageWithRetry, {
-          chatId: recipient.chatId,
-          text: message,
+        const data = await ctx.runAction(internal.telegram.collectDigestData, {
+          userId: recipient.userId,
+          dates,
+          prevDates,
         });
+
+        if (data.accounts.length === 0) continue;
+
+        const message = formatDigestMessage("weekly", data, periodStr, prevPeriodStr);
+        const messages = splitTelegramMessage(message);
+
+        for (const msg of messages) {
+          await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+            chatId: recipient.chatId,
+            text: msg,
+          });
+        }
         sentCount++;
       } catch (err) {
         console.error(
@@ -2078,6 +1994,9 @@ export const sendWeeklyDigest = internalAction({
     return { sent: sentCount };
   },
 });
+
+function fmtDD(d: Date): string { return String(d.getDate()).padStart(2, "0"); }
+function fmtMM(d: Date): string { return String(d.getMonth() + 1).padStart(2, "0"); }
 
 // ═══════════════════════════════════════════════════════════
 // Sprint — Monthly Digest
@@ -2200,9 +2119,14 @@ export const getMonthlyMetricsSummary = internalQuery({
   },
 });
 
+const MONTH_NAMES_GENITIVE_RU = [
+  "январём", "февралём", "мартом", "апрелем", "маем", "июнем",
+  "июлем", "августом", "сентябрём", "октябрём", "ноябрём", "декабрём",
+];
+
 /**
- * Send monthly digest to users whose local time is 1st of the month at 09:00-09:29.
- * Called by cron every 30 minutes — checks each user's timezone.
+ * Send monthly digest to users whose local time is 1st of the month at 09:00-09:59.
+ * Called by cron every hour — checks each user's timezone.
  */
 export const sendMonthlyDigest = internalAction({
   args: {},
@@ -2219,17 +2143,14 @@ export const sendMonthlyDigest = internalAction({
     let sentCount = 0;
 
     for (const recipient of recipients) {
-      // Get user's timezone
       const settings: Doc<"userSettings"> | null = await ctx.runQuery(
         internal.userSettings.getInternal,
         { userId: recipient.userId }
       );
       const tz = settings?.timezone || "Europe/Moscow";
 
-      // Use formatToParts for reliable parsing across runtimes
       const formatter = new Intl.DateTimeFormat("en-US", {
         timeZone: tz,
-        weekday: "short",
         day: "numeric",
         month: "numeric",
         year: "numeric",
@@ -2238,79 +2159,56 @@ export const sendMonthlyDigest = internalAction({
         hour12: false,
       });
       const parts = formatter.formatToParts(nowDate);
-      const day = parseInt(
-        parts.find((p) => p.type === "day")?.value || "0",
-        10
-      );
-      const hour = parseInt(
-        parts.find((p) => p.type === "hour")?.value || "-1",
-        10
-      );
+      const day = parseInt(parts.find((p) => p.type === "day")?.value || "0", 10);
+      const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "-1", 10);
 
-      // Only send on the 1st of the month at 09:00-09:59 (cron runs every hour)
       if (day !== 1 || hour !== 9) continue;
 
-      // Compute previous month's date range
-      const localMonth = parseInt(
-        parts.find((p) => p.type === "month")?.value || "1",
-        10
-      );
-      const localYear = parseInt(
-        parts.find((p) => p.type === "year")?.value || "2026",
-        10
-      );
+      const localMonth = parseInt(parts.find((p) => p.type === "month")?.value || "1", 10);
+      const localYear = parseInt(parts.find((p) => p.type === "year")?.value || "2026", 10);
 
       // Previous month
       const prevMonth = localMonth === 1 ? 12 : localMonth - 1;
       const prevYear = localMonth === 1 ? localYear - 1 : localYear;
-
-      // Days in previous month
       const daysInPrevMonth = new Date(prevYear, prevMonth, 0).getDate();
 
-      // Build date strings for every day of previous month
+      // Build date arrays for previous month
       const dates: string[] = [];
       for (let d = 1; d <= daysInPrevMonth; d++) {
-        const dateStr = `${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-        dates.push(dateStr);
+        dates.push(`${prevYear}-${String(prevMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
+      }
+
+      // Month before that (for comparison)
+      const prevPrevMonth = prevMonth === 1 ? 12 : prevMonth - 1;
+      const prevPrevYear = prevMonth === 1 ? prevYear - 1 : prevYear;
+      const daysInPrevPrevMonth = new Date(prevPrevYear, prevPrevMonth, 0).getDate();
+
+      const prevDates: string[] = [];
+      for (let d = 1; d <= daysInPrevPrevMonth; d++) {
+        prevDates.push(`${prevPrevYear}-${String(prevPrevMonth).padStart(2, "0")}-${String(d).padStart(2, "0")}`);
       }
 
       const monthName = `${MONTH_NAMES_RU[prevMonth - 1]} ${prevYear}`;
-
-      // Time range for action logs
-      const sinceDate = new Date(Date.UTC(prevYear, prevMonth - 1, 1, 0, 0, 0));
-      const untilDate = new Date(Date.UTC(localYear, localMonth - 1, 1, 0, 0, 0));
-      const since = sinceDate.getTime();
-      const until = untilDate.getTime();
-
-      // Fetch monthly metrics
-      const metricsSummary = await ctx.runQuery(
-        internal.telegram.getMonthlyMetricsSummary,
-        { userId: recipient.userId, dates }
-      );
-
-      // Fetch action logs for the month
-      const logs = await ctx.runQuery(
-        internal.telegram.getDigestActionLogs,
-        { userId: recipient.userId, since, until }
-      );
-
-      const events: DigestActionLogSummary[] = logs.map((log: Doc<"actionLogs">) => ({
-        adName: log.adName,
-        adId: log.adId,
-        accountId: log.accountId,
-        actionType: log.actionType,
-        reason: log.reason,
-        savedAmount: log.savedAmount,
-        metricsSnapshot: log.metricsSnapshot,
-      }));
-
-      const message = formatMonthlyDigest(events, monthName, metricsSummary);
+      const prevMonthName = `${MONTH_NAMES_GENITIVE_RU[prevPrevMonth - 1]} ${prevPrevYear}`;
 
       try {
-        await ctx.runAction(internal.telegram.sendMessageWithRetry, {
-          chatId: recipient.chatId,
-          text: message,
+        const data = await ctx.runAction(internal.telegram.collectDigestData, {
+          userId: recipient.userId,
+          dates,
+          prevDates,
         });
+
+        if (data.accounts.length === 0) continue;
+
+        const message = formatDigestMessage("monthly", data, monthName, prevMonthName);
+        const messages = splitTelegramMessage(message);
+
+        for (const msg of messages) {
+          await ctx.runAction(internal.telegram.sendMessageWithRetry, {
+            chatId: recipient.chatId,
+            text: msg,
+          });
+        }
         sentCount++;
       } catch (err) {
         console.error(
