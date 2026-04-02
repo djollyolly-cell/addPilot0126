@@ -56,10 +56,11 @@ export function TargetTreeSelector({ userId, value, onChange, ruleType }: Target
     );
   }
 
+  // All other rules — use VK API live data (campaigns + banners)
   return (
     <div data-testid="target-tree" className="border rounded-lg p-3 space-y-1 max-h-72 overflow-y-auto">
       {accounts.map((account) => (
-        <AccountNode
+        <LiveAccountNode
           key={account._id}
           account={account}
           value={value}
@@ -172,12 +173,7 @@ function UzAccountNode({ account, value, onChange }: {
                       {c.budgetLimitDay}₽/день
                     </span>
                   )}
-                  <span className={cn(
-                    'text-[10px] shrink-0',
-                    c.status === 'active' ? 'text-green-600' : 'text-amber-500'
-                  )}>
-                    {c.status === 'active' ? 'Активна' : c.status === 'blocked' ? 'Приостановлена' : c.status}
-                  </span>
+                  <StatusBadge status={c.status} />
                 </div>
               );
             })
@@ -188,40 +184,81 @@ function UzAccountNode({ account, value, onChange }: {
   );
 }
 
-// ─── Account-level node ──────────────────────────────
+// ─── Status badge ───────────────────────────────────
 
-interface AccountNodeProps {
+function StatusBadge({ status }: { status: string }) {
+  const label = status === 'active' ? 'Активна'
+    : status === 'blocked' ? 'Приостановлена'
+    : status;
+  const color = status === 'active' ? 'text-green-600'
+    : status === 'blocked' ? 'text-amber-500'
+    : 'text-muted-foreground';
+  return <span className={cn('text-[10px] shrink-0', color)}>{label}</span>;
+}
+
+// ─── Live Account node (VK API, all rules except uz_budget_manage) ──
+
+interface LiveCampaign {
+  id: number;
+  name: string;
+  status: string;
+  objective: string;
+  dailyLimit: number | null;
+  allLimit: number | null;
+  banners: LiveBanner[];
+}
+
+interface LiveBanner {
+  id: number;
+  name: string;
+  status: string;
+  moderationStatus: string;
+}
+
+function LiveAccountNode({ account, value, onChange }: {
   account: { _id: string; name: string };
   value: TargetSelection;
   onChange: (selection: TargetSelection) => void;
-}
-
-function AccountNode({ account, value, onChange }: AccountNodeProps) {
+}) {
   const [expanded, setExpanded] = useState(false);
-  const isChecked = value.accountIds.includes(account._id);
+  const [campaigns, setCampaigns] = useState<LiveCampaign[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fetchLive = useAction(api.adAccounts.fetchLiveCampaigns);
 
-  const campaigns = useQuery(
-    api.adAccounts.listCampaigns,
-    expanded ? { accountId: account._id as Id<"adAccounts"> } : 'skip'
-  );
+  const isAccountChecked = value.accountIds.includes(account._id);
+
+  useEffect(() => {
+    if (!expanded || campaigns !== null) return;
+    setLoading(true);
+    setError(null);
+    fetchLive({ accountId: account._id as Id<"adAccounts"> })
+      .then((result) => {
+        // Filter: only active and blocked campaigns
+        const filtered = result.campaigns.filter(
+          (c) => c.status === 'active' || c.status === 'blocked'
+        );
+        setCampaigns(filtered);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+      .finally(() => setLoading(false));
+  }, [expanded, campaigns, fetchLive, account._id]);
 
   const handleAccountToggle = useCallback(() => {
-    if (isChecked) {
-      // Uncheck account — remove it and all its campaigns/ads
-      const campaignIdsToRemove = new Set((campaigns || []).map((c) => c._id as string));
+    if (isAccountChecked) {
+      const campaignIdsToRemove = new Set((campaigns || []).map((c) => String(c.id)));
+      const bannerIdsToRemove = new Set(
+        (campaigns || []).flatMap((c) => c.banners.map((b) => String(b.id)))
+      );
       onChange({
         accountIds: value.accountIds.filter((id) => id !== account._id),
         campaignIds: value.campaignIds.filter((id) => !campaignIdsToRemove.has(id)),
-        adIds: [], // Clear ad-level selections for simplicity when unchecking parent
+        adIds: value.adIds.filter((id) => !bannerIdsToRemove.has(id)),
       });
     } else {
-      // Check account
-      onChange({
-        ...value,
-        accountIds: [...value.accountIds, account._id],
-      });
+      onChange({ ...value, accountIds: [...value.accountIds, account._id] });
     }
-  }, [isChecked, account._id, campaigns, value, onChange]);
+  }, [isAccountChecked, account._id, campaigns, value, onChange]);
 
   return (
     <div>
@@ -240,7 +277,7 @@ function AccountNode({ account, value, onChange }: AccountNodeProps) {
         </button>
         <input
           type="checkbox"
-          checked={isChecked}
+          checked={isAccountChecked}
           onChange={handleAccountToggle}
           className="rounded shrink-0"
           data-testid={`check-account-${account._id}`}
@@ -251,67 +288,67 @@ function AccountNode({ account, value, onChange }: AccountNodeProps) {
 
       {expanded && (
         <div className="pl-6">
-          {campaigns === undefined ? (
+          {loading ? (
             <div className="flex items-center justify-center py-2">
               <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+              <span className="text-xs text-muted-foreground ml-2">Загрузка из VK...</span>
             </div>
-          ) : campaigns.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-1 pl-6">Нет кампаний</p>
-          ) : (
+          ) : error ? (
+            <p className="text-xs text-destructive py-1 pl-6">{error}</p>
+          ) : campaigns && campaigns.length === 0 ? (
+            <p className="text-xs text-muted-foreground py-1 pl-6">Нет активных кампаний</p>
+          ) : campaigns ? (
             campaigns.map((campaign) => (
-              <CampaignNode
-                key={campaign._id}
+              <LiveCampaignNode
+                key={campaign.id}
                 campaign={campaign}
                 accountId={account._id}
+                isAccountChecked={isAccountChecked}
                 value={value}
                 onChange={onChange}
               />
             ))
-          )}
+          ) : null}
         </div>
       )}
     </div>
   );
 }
 
-// ─── Campaign-level node ─────────────────────────────
+// ─── Live Campaign node ─────────────────────────────
 
-interface CampaignNodeProps {
-  campaign: { _id: string; name: string; status: string };
+function LiveCampaignNode({ campaign, accountId, isAccountChecked, value, onChange }: {
+  campaign: LiveCampaign;
   accountId: string;
+  isAccountChecked: boolean;
   value: TargetSelection;
   onChange: (selection: TargetSelection) => void;
-}
-
-function CampaignNode({ campaign, accountId, value, onChange }: CampaignNodeProps) {
+}) {
   const [expanded, setExpanded] = useState(false);
-  const isChecked = value.campaignIds.includes(campaign._id);
-  const parentChecked = value.accountIds.includes(accountId);
+  const campaignId = String(campaign.id);
+  const isChecked = value.campaignIds.includes(campaignId);
+  const effectiveChecked = isAccountChecked || isChecked;
 
-  const ads = useQuery(
-    api.adAccounts.listAds,
-    expanded ? { campaignId: campaign._id as Id<"campaigns"> } : 'skip'
+  // Filter banners: only active/blocked
+  const activeBanners = campaign.banners.filter(
+    (b) => b.status === 'active' || b.status === 'blocked'
   );
 
   const handleCampaignToggle = useCallback(() => {
     if (isChecked) {
-      // Uncheck campaign — also remove its ads
-      const adIdsToRemove = new Set((ads || []).map((a) => a._id as string));
+      const bannerIdsToRemove = new Set(activeBanners.map((b) => String(b.id)));
       onChange({
         ...value,
-        campaignIds: value.campaignIds.filter((id) => id !== campaign._id),
-        adIds: value.adIds.filter((id) => !adIdsToRemove.has(id)),
+        campaignIds: value.campaignIds.filter((id) => id !== campaignId),
+        adIds: value.adIds.filter((id) => !bannerIdsToRemove.has(id)),
       });
     } else {
       onChange({
         ...value,
-        campaignIds: [...value.campaignIds, campaign._id],
+        campaignIds: [...value.campaignIds, campaignId],
       });
     }
-  }, [isChecked, campaign._id, ads, value, onChange]);
-
-  // If parent (account) is checked, campaign is implicitly included
-  const effectiveChecked = parentChecked || isChecked;
+  }, [isChecked, campaignId, activeBanners, value, onChange]);
 
   return (
     <div>
@@ -331,34 +368,31 @@ function CampaignNode({ campaign, accountId, value, onChange }: CampaignNodeProp
           type="checkbox"
           checked={effectiveChecked}
           onChange={handleCampaignToggle}
-          disabled={parentChecked}
-          className={cn('rounded shrink-0', parentChecked && 'opacity-50')}
+          disabled={isAccountChecked}
+          className={cn('rounded shrink-0', isAccountChecked && 'opacity-50')}
         />
         <Megaphone className="w-3.5 h-3.5 text-primary shrink-0" />
         <span className="text-xs truncate">{campaign.name}</span>
-        <span className={cn(
-          'text-[10px] shrink-0',
-          campaign.status === 'active' ? 'text-green-600' : 'text-muted-foreground'
-        )}>
-          {campaign.status === 'active' ? 'Активна' : campaign.status}
-        </span>
+        {campaign.dailyLimit && campaign.dailyLimit > 0 && (
+          <span className="text-[10px] text-muted-foreground shrink-0">
+            {campaign.dailyLimit}₽/день
+          </span>
+        )}
+        <StatusBadge status={campaign.status} />
       </div>
 
       {expanded && (
         <div className="pl-6">
-          {ads === undefined ? (
-            <div className="flex items-center justify-center py-1">
-              <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
-            </div>
-          ) : ads.length === 0 ? (
-            <p className="text-[10px] text-muted-foreground py-1 pl-6">Нет объявлений</p>
+          {activeBanners.length === 0 ? (
+            <p className="text-[10px] text-muted-foreground py-1 pl-6">Нет активных объявлений</p>
           ) : (
-            ads.map((ad) => (
-              <AdNode
-                key={ad._id}
-                ad={ad}
-                campaignId={campaign._id}
+            activeBanners.map((banner) => (
+              <LiveBannerNode
+                key={banner.id}
+                banner={banner}
+                campaignId={campaignId}
                 accountId={accountId}
+                isParentChecked={effectiveChecked}
                 value={value}
                 onChange={onChange}
               />
@@ -370,49 +404,50 @@ function CampaignNode({ campaign, accountId, value, onChange }: CampaignNodeProp
   );
 }
 
-// ─── Ad-level node ───────────────────────────────────
+// ─── Live Banner (ad) node ──────────────────────────
 
-interface AdNodeProps {
-  ad: { _id: string; name: string; status: string };
+function LiveBannerNode({ banner, campaignId, accountId, isParentChecked, value, onChange }: {
+  banner: LiveBanner;
   campaignId: string;
   accountId: string;
+  isParentChecked: boolean;
   value: TargetSelection;
   onChange: (selection: TargetSelection) => void;
-}
-
-function AdNode({ ad, campaignId, accountId, value, onChange }: AdNodeProps) {
-  const isChecked = value.adIds.includes(ad._id);
+}) {
+  const bannerId = String(banner.id);
+  const isChecked = value.adIds.includes(bannerId);
   const parentChecked =
+    isParentChecked ||
     value.accountIds.includes(accountId) ||
     value.campaignIds.includes(campaignId);
+  const effectiveChecked = parentChecked || isChecked;
 
-  const handleAdToggle = useCallback(() => {
+  const handleToggle = useCallback(() => {
     if (isChecked) {
       onChange({
         ...value,
-        adIds: value.adIds.filter((id) => id !== ad._id),
+        adIds: value.adIds.filter((id) => id !== bannerId),
       });
     } else {
       onChange({
         ...value,
-        adIds: [...value.adIds, ad._id],
+        adIds: [...value.adIds, bannerId],
       });
     }
-  }, [isChecked, ad._id, value, onChange]);
-
-  const effectiveChecked = parentChecked || isChecked;
+  }, [isChecked, bannerId, value, onChange]);
 
   return (
     <div className="flex items-center gap-2 py-0.5 px-1 rounded hover:bg-muted/30">
       <input
         type="checkbox"
         checked={effectiveChecked}
-        onChange={handleAdToggle}
+        onChange={handleToggle}
         disabled={parentChecked}
         className={cn('rounded shrink-0 ml-5', parentChecked && 'opacity-50')}
       />
       <ImageIcon className="w-3 h-3 text-muted-foreground shrink-0" />
-      <span className="text-[11px] truncate">{ad.name}</span>
+      <span className="text-[11px] truncate">{banner.name}</span>
+      <StatusBadge status={banner.status} />
     </div>
   );
 }
