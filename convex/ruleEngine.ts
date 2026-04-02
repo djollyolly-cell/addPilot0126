@@ -1655,7 +1655,7 @@ export const checkUzBudgetRules = internalAction({
           );
 
           for (const campaign of targetCampaigns) {
-            const dailyLimitRubles = Number(campaign.budget_limit_day || "0") / 100;
+            const dailyLimitRubles = Number(campaign.budget_limit_day || "0");
 
             // Check if paused due to budget: status == "blocked"
             if (campaign.status !== "blocked") continue;

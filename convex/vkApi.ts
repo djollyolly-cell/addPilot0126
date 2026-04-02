@@ -1093,7 +1093,7 @@ export const getCampaignsForAccount = internalAction({
 
 /**
  * Set daily budget on a campaign (group).
- * @param newLimitRubles — budget in rubles (converted to kopecks for API)
+ * @param newLimitRubles — budget in rubles (API accepts rubles directly)
  */
 export const setCampaignBudget = internalAction({
   args: {
@@ -1102,11 +1102,11 @@ export const setCampaignBudget = internalAction({
     newLimitRubles: v.number(),
   },
   handler: async (_, args) => {
-    const newLimitKopecks = Math.round(args.newLimitRubles * 100);
+    // API accepts rubles directly (108 = 108₽)
     return postMtApi<MtCampaign>(
       `campaigns/${args.campaignId}.json`,
       args.accessToken,
-      { budget_limit_day: String(newLimitKopecks) }
+      { budget_limit_day: String(Math.round(args.newLimitRubles)) }
     );
   },
 });
@@ -1236,7 +1236,7 @@ export const fetchUzCampaigns = action({
       id: String(c.id),
       name: c.name,
       status: c.status,
-      budgetLimitDay: Number(c.budget_limit_day || "0") / 100,
+      budgetLimitDay: Number(c.budget_limit_day || "0"),
     }));
   },
 });
