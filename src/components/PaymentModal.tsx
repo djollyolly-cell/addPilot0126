@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useAction, useMutation, useQuery } from 'convex/react';
+import { useAction, useQuery } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
 import { Button } from '@/components/ui/button';
@@ -46,16 +46,11 @@ interface NBRBRateResponse {
   Cur_OfficialRate: number;
 }
 
-export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModalProps) {
+export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }: PaymentModalProps) {
   const { user } = useAuth();
   const [step, setStep] = useState<PaymentStep>('select-country');
   const [currency, setCurrency] = useState<Currency | null>(null);
-  const [cardNumber, setCardNumber] = useState('');
-  const [expiry, setExpiry] = useState('');
-  const [cvc, setCvc] = useState('');
-  const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
   const [bepaidLoading, setBepaidLoading] = useState(false);
   const [exchangeRate, setExchangeRate] = useState<{ rate: number; scale: number } | null>(null);
   const [rateLoading, setRateLoading] = useState(true);
@@ -63,7 +58,6 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
   const [promoApplied, setPromoApplied] = useState<{ bonusDays: number; description: string } | null>(null);
   const [promoError, setPromoError] = useState<string | null>(null);
 
-  const processPayment = useMutation(api.billing.processPayment);
   const createBepaidCheckout = useAction(api.billing.createBepaidCheckout);
   const promoValidation = useQuery(
     api.billing.validatePromoCode,
@@ -112,20 +106,6 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
   const price = currency === 'BYN' ? priceBYN : priceRUB;
   const currencySymbol = currency === 'BYN' ? 'BYN' : '₽';
 
-  const formatCardNumber = (value: string) => {
-    const cleaned = value.replace(/\D/g, '');
-    const groups = cleaned.match(/.{1,4}/g);
-    return groups ? groups.join(' ').substring(0, 19) : '';
-  };
-
-  const formatExpiry = (value: string) => {
-    const cleaned = value.replace(/\D/g, '');
-    if (cleaned.length >= 2) {
-      return `${cleaned.substring(0, 2)}/${cleaned.substring(2, 4)}`;
-    }
-    return cleaned;
-  };
-
   const handleApplyPromo = () => {
     if (!promoCode.trim()) return;
     setPromoError(null);
@@ -144,6 +124,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
   };
 
   const handleSelectCountry = (selectedCurrency: Currency) => {
+    // Both countries go through bePaid (BYN)
     setCurrency(selectedCurrency);
     setStep('payment');
     setError(null);
@@ -185,55 +166,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
     }
   };
 
-  // Handle Russian card payment (mock for now, can integrate YooKassa later)
-  const handleRussianPayment = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!user?.userId) return;
-
-    setIsProcessing(true);
-    setError(null);
-
-    try {
-      const cleanCardNumber = cardNumber.replace(/\s/g, '');
-
-      const result = await processPayment({
-        userId: user.userId as Id<"users">,
-        tier,
-        cardNumber: cleanCardNumber,
-        promoCode: promoApplied ? promoCode.trim().toUpperCase() : undefined,
-      });
-
-      if (result.success) {
-        setSuccess(true);
-        setTimeout(() => {
-          onSuccess();
-        }, 2000);
-      } else {
-        setError(result.error || 'Ошибка оплаты');
-      }
-    } catch {
-      setError('Произошла ошибка при обработке платежа');
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  // Success screen
-  if (success) {
-    return (
-      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-        <Card className="w-full max-w-md" data-testid="payment-success">
-          <CardContent className="pt-6 text-center">
-            <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
-            <h2 className="text-2xl font-bold mb-2">Оплата прошла успешно!</h2>
-            <p className="text-muted-foreground">
-              Ваш тариф {tierInfo.name} активирован
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
+  // Russian payments also go through bePaid (BYN conversion via NBRB rate)
 
   // Step 1: Country/Currency selection
   if (step === 'select-country') {
@@ -491,7 +424,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
     );
   }
 
-  // Russia (RUB) - card form
+  // Russia (RUB) — also goes through bePaid with BYN conversion
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <Card className="w-full max-w-md" data-testid="payment-form">
@@ -518,146 +451,121 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess }: PaymentModa
             Оплата тарифа {tierInfo.name}
           </CardTitle>
           <CardDescription className="pl-8">
-            {price} {currencySymbol}/месяц • 🇷🇺 Россия
+            {priceRUB} ₽/месяц • 🇷🇺 Россия
           </CardDescription>
         </CardHeader>
 
-        <form onSubmit={handleRussianPayment}>
-          <CardContent className="space-y-4">
-            {error && (
-              <div className="flex items-center gap-2 p-3 bg-destructive/10 text-destructive rounded-lg" data-testid="payment-error">
-                <AlertCircle className="h-4 w-4" />
-                <span className="text-sm">{error}</span>
-              </div>
-            )}
+        <CardContent className="space-y-4">
+          {error && (
+            <div className="flex items-center gap-2 p-3 bg-destructive/10 text-destructive rounded-lg" data-testid="payment-error">
+              <AlertCircle className="h-4 w-4" />
+              <span className="text-sm">{error}</span>
+            </div>
+          )}
 
-            <div className="space-y-2">
-              <Label htmlFor="card-number">Номер карты</Label>
+          <div className="p-4 bg-muted rounded-lg space-y-2">
+            <p className="font-medium">Что включено:</p>
+            <ul className="text-sm text-muted-foreground space-y-1">
+              {tierInfo.features.map((feature, i) => (
+                <li key={i}>• {feature}</li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="p-3 bg-blue-500/10 text-blue-700 dark:text-blue-400 rounded-lg text-sm">
+            <p>Оплата проходит через платёжную систему bePaid.</p>
+            <p className="mt-1">Сумма к оплате: <strong>{priceBYN} BYN</strong> (≈ {priceRUB} ₽ по курсу НБРБ)</p>
+          </div>
+
+          {/* Промокод */}
+          <div className="space-y-2">
+            <Label className="flex items-center gap-1.5 text-sm">
+              <Tag className="h-3.5 w-3.5" />
+              Промокод
+            </Label>
+            <div className="flex gap-2">
               <Input
-                id="card-number"
-                data-testid="card-number"
-                placeholder="0000 0000 0000 0000"
-                value={cardNumber}
-                onChange={(e) => setCardNumber(formatCardNumber(e.target.value))}
-                maxLength={19}
-                required
+                placeholder="Введите промокод"
+                value={promoCode}
+                onChange={(e) => {
+                  setPromoCode(e.target.value.toUpperCase());
+                  setPromoApplied(null);
+                  setPromoError(null);
+                }}
+                disabled={!!promoApplied}
+                data-testid="promo-input"
               />
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="expiry">Срок действия</Label>
-                <Input
-                  id="expiry"
-                  data-testid="card-expiry"
-                  placeholder="MM/YY"
-                  value={expiry}
-                  onChange={(e) => setExpiry(formatExpiry(e.target.value))}
-                  maxLength={5}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="cvc">CVC</Label>
-                <Input
-                  id="cvc"
-                  data-testid="card-cvc"
-                  placeholder="123"
-                  value={cvc}
-                  onChange={(e) => setCvc(e.target.value.replace(/\D/g, '').substring(0, 3))}
-                  maxLength={3}
-                  type="password"
-                  required
-                />
-              </div>
-            </div>
-
-            {/* Промокод */}
-            <div className="space-y-2">
-              <Label className="flex items-center gap-1.5 text-sm">
-                <Tag className="h-3.5 w-3.5" />
-                Промокод
-              </Label>
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Введите промокод"
-                  value={promoCode}
-                  onChange={(e) => {
-                    setPromoCode(e.target.value.toUpperCase());
+              {promoApplied ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => {
+                    setPromoCode('');
                     setPromoApplied(null);
                     setPromoError(null);
                   }}
-                  disabled={!!promoApplied}
-                  data-testid="promo-input"
-                />
-                {promoApplied ? (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={() => {
-                      setPromoCode('');
-                      setPromoApplied(null);
-                      setPromoError(null);
-                    }}
-                  >
-                    <X className="h-4 w-4" />
-                  </Button>
-                ) : (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0"
-                    onClick={handleApplyPromo}
-                    disabled={promoCode.trim().length < 3 || promoValidation === undefined}
-                    data-testid="promo-apply"
-                  >
-                    {promoValidation === undefined && promoCode.trim().length >= 3
-                      ? <Loader2 className="h-4 w-4 animate-spin" />
-                      : 'Применить'}
-                  </Button>
-                )}
-              </div>
-              {promoApplied && (
-                <div className="flex items-center gap-2 p-2 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
-                  <CheckCircle className="h-4 w-4 shrink-0" />
-                  <span>+{promoApplied.bonusDays} дней бонус: {promoApplied.description}</span>
-                </div>
-              )}
-              {promoError && (
-                <p className="text-sm text-destructive">{promoError}</p>
-              )}
-            </div>
-
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Lock className="h-3 w-3" />
-              <span>Безопасная оплата. Данные защищены.</span>
-            </div>
-          </CardContent>
-
-          <CardFooter className="flex flex-col gap-3">
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={isProcessing || !cardNumber || !expiry || !cvc}
-              data-testid="submit-payment"
-            >
-              {isProcessing ? (
-                <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Обработка...
-                </>
+                >
+                  <X className="h-4 w-4" />
+                </Button>
               ) : (
-                `Оплатить ${price} ${currencySymbol}${promoApplied ? ` + ${promoApplied.bonusDays} дней` : ''}`
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={handleApplyPromo}
+                  disabled={promoCode.trim().length < 3 || promoValidation === undefined}
+                  data-testid="promo-apply"
+                >
+                  {promoValidation === undefined && promoCode.trim().length >= 3
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : 'Применить'}
+                </Button>
               )}
-            </Button>
-            <p className="text-xs text-center text-muted-foreground">
-              Безопасная оплата. Данные карты не хранятся.
-            </p>
-          </CardFooter>
-        </form>
+            </div>
+            {promoApplied && (
+              <div className="flex items-center gap-2 p-2 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
+                <CheckCircle className="h-4 w-4 shrink-0" />
+                <span>+{promoApplied.bonusDays} дней бонус: {promoApplied.description}</span>
+              </div>
+            )}
+            {promoError && (
+              <p className="text-sm text-destructive">{promoError}</p>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Lock className="h-3 w-3" />
+            <span>Безопасная оплата через bePaid</span>
+          </div>
+        </CardContent>
+
+        <CardFooter className="flex flex-col gap-3">
+          <Button
+            className="w-full"
+            disabled={bepaidLoading}
+            onClick={handleBepaidCheckout}
+            data-testid="submit-payment"
+          >
+            {bepaidLoading ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Загрузка...
+              </>
+            ) : (
+              <>
+                <ExternalLink className="h-4 w-4 mr-2" />
+                Перейти к оплате {priceBYN} BYN
+                {promoApplied && ` + ${promoApplied.bonusDays} дней`}
+              </>
+            )}
+          </Button>
+          <p className="text-xs text-center text-muted-foreground">
+            Вы будете перенаправлены на защищённую страницу оплаты bePaid
+          </p>
+        </CardFooter>
       </Card>
     </div>
   );
