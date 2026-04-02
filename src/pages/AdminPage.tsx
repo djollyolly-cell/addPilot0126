@@ -24,7 +24,7 @@ import {
 import { Label } from '../components/ui/label';
 import { Id } from '../../convex/_generated/dataModel';
 
-const ADMIN_EMAILS = ['13632013@vk.com'];
+const ADMIN_EMAILS = ['13632013@vk.com', '786709647@vk.com'];
 
 const SESSION_KEY = 'adpilot_session';
 
