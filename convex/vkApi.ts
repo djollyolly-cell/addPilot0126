@@ -811,6 +811,60 @@ export const probeVkCampaignEndpoints = action({
   },
 });
 
+/** Fetch campaign type map: ad_plan_id → "lead" | "subscription" via packages + ad_groups */
+export const getCampaignTypeMap = internalAction({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (_, args): Promise<Array<{ campaignId: string; type: string }>> => {
+    const SUBSCRIPTION_KEYWORDS = ["подписк", "subscribe", "community", "join"];
+
+    function isSubscription(name: string): boolean {
+      const lower = name.toLowerCase();
+      return SUBSCRIPTION_KEYWORDS.some(kw => lower.includes(kw));
+    }
+
+    try {
+      const [packagesRes, adGroupsRes] = await Promise.all([
+        callMtApi<{ items: { id: number; name: string }[] }>(
+          "packages.json", args.accessToken,
+          { fields: "id,name", limit: "200" }
+        ),
+        callMtApi<{ items: { id: number; ad_plan_id: number; package_id: number }[] }>(
+          "ad_groups.json", args.accessToken,
+          { fields: "id,ad_plan_id,package_id", limit: "500" }
+        ),
+      ]);
+
+      const packageNameMap = new Map<number, string>();
+      for (const pkg of packagesRes.items || []) {
+        packageNameMap.set(pkg.id, pkg.name);
+      }
+
+      // Build ad_plan_id → package_id (first group wins)
+      const planPackageMap = new Map<number, number>();
+      for (const group of adGroupsRes.items || []) {
+        if (!planPackageMap.has(group.ad_plan_id)) {
+          planPackageMap.set(group.ad_plan_id, group.package_id);
+        }
+      }
+
+      const result: Array<{ campaignId: string; type: string }> = [];
+      for (const [planId, packageId] of planPackageMap) {
+        const packageName = packageNameMap.get(packageId) || "";
+        result.push({
+          campaignId: String(planId),
+          type: isSubscription(packageName) ? "subscription" : "lead",
+        });
+      }
+
+      return result;
+    } catch {
+      return [];
+    }
+  },
+});
+
 // TEMP: Diagnostic — show package_id → name mapping for ad_groups
 export const diagnosPackages = action({
   args: {

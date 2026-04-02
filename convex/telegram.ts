@@ -1425,6 +1425,209 @@ export const getDigestRecipients = internalQuery({
   },
 });
 
+/** Collect digest data for a user: metrics + rule events, per account, with lead/subscription split */
+export const collectDigestData = internalAction({
+  args: {
+    userId: v.id("users"),
+    dates: v.array(v.string()),
+    prevDates: v.optional(v.array(v.string())),
+  },
+  handler: async (ctx, args): Promise<DigestData> => {
+    // Time range for action logs
+    const sinceDate = new Date(args.dates[0] + "T00:00:00Z");
+    const untilDate = new Date(args.dates[args.dates.length - 1] + "T23:59:59Z");
+    const since = sinceDate.getTime();
+    const until = untilDate.getTime() + 1000;
+
+    // Fetch metrics and rule events in parallel
+    const [accountMetrics, accountRuleEvents] = await Promise.all([
+      ctx.runQuery(internal.telegram.getMetricsByAccount, {
+        userId: args.userId,
+        dates: args.dates,
+      }),
+      ctx.runQuery(internal.telegram.getActionLogsByAccount, {
+        userId: args.userId,
+        since,
+        until,
+      }),
+    ]);
+
+    // Fetch previous period metrics if requested
+    let prevAccountMetrics: typeof accountMetrics | null = null;
+    if (args.prevDates && args.prevDates.length > 0) {
+      prevAccountMetrics = await ctx.runQuery(internal.telegram.getMetricsByAccount, {
+        userId: args.userId,
+        dates: args.prevDates,
+      });
+    }
+
+    // For each account, fetch package mapping from VK API to classify leads vs subscriptions
+    const accounts: DigestAccountData[] = [];
+
+    for (const accMetrics of accountMetrics) {
+      // Try to get VK API token for package classification
+      let campaignTypeMap = new Map<string, "lead" | "subscription">();
+
+      try {
+        const accessToken = await ctx.runAction(
+          internal.auth.getValidTokenForAccount,
+          { accountId: accMetrics.accountId as Id<"adAccounts"> }
+        );
+
+        // Fetch campaign type map via VK API
+        const typeMapArray = await ctx.runAction(
+          internal.vkApi.getCampaignTypeMap,
+          { accessToken }
+        );
+
+        for (const entry of typeMapArray) {
+          campaignTypeMap.set(entry.campaignId, entry.type as "lead" | "subscription");
+        }
+      } catch {
+        // Token expired or no access — all campaigns default to "lead"
+      }
+
+      // Split metrics by campaign type
+      const campaignsData = accMetrics.campaigns;
+
+      let leadSpent = 0, leadLeads = 0;
+      let subSpent = 0, subLeads = 0;
+      let totalImpressions = 0, totalClicks = 0, totalSpent = 0;
+
+      for (const c of campaignsData) {
+        totalImpressions += c.impressions;
+        totalClicks += c.clicks;
+        totalSpent += c.spent;
+
+        const type = campaignTypeMap.get(c.campaignId) || "lead";
+        if (type === "subscription") {
+          subSpent += c.spent;
+          subLeads += c.leads;
+        } else {
+          leadSpent += c.spent;
+          leadLeads += c.leads;
+        }
+      }
+
+      // If no campaign-level data, use account totals (all as leads)
+      if (campaignsData.length === 0) {
+        totalImpressions = accMetrics.impressions;
+        totalClicks = accMetrics.clicks;
+        totalSpent = accMetrics.spent;
+        leadLeads = accMetrics.leads;
+        leadSpent = accMetrics.spent;
+      }
+
+      const metrics: DigestMetrics = {
+        impressions: totalImpressions,
+        clicks: totalClicks,
+        spent: Math.round(totalSpent * 100) / 100,
+        leads: leadLeads,
+        subscriptions: subLeads,
+        cpl: leadLeads > 0 ? Math.round(leadSpent / leadLeads) : 0,
+        costPerSub: subLeads > 0 ? Math.round(subSpent / subLeads) : 0,
+      };
+
+      // Previous period metrics
+      let prevMetrics: DigestMetrics | undefined;
+      if (prevAccountMetrics) {
+        const prevAcc = prevAccountMetrics.find((a) => a.accountId === accMetrics.accountId);
+        if (prevAcc) {
+          const prevCampaigns = prevAcc.campaigns;
+          let prevLeadSpent = 0, prevLeadLeads = 0;
+          let prevSubSpent = 0, prevSubLeads = 0;
+          let prevTotalImpressions = 0, prevTotalClicks = 0, prevTotalSpent = 0;
+
+          for (const c of prevCampaigns) {
+            prevTotalImpressions += c.impressions;
+            prevTotalClicks += c.clicks;
+            prevTotalSpent += c.spent;
+            const type = campaignTypeMap.get(c.campaignId) || "lead";
+            if (type === "subscription") {
+              prevSubSpent += c.spent;
+              prevSubLeads += c.leads;
+            } else {
+              prevLeadSpent += c.spent;
+              prevLeadLeads += c.leads;
+            }
+          }
+
+          if (prevCampaigns.length === 0) {
+            prevTotalImpressions = prevAcc.impressions;
+            prevTotalClicks = prevAcc.clicks;
+            prevTotalSpent = prevAcc.spent;
+            prevLeadLeads = prevAcc.leads;
+            prevLeadSpent = prevAcc.spent;
+          }
+
+          prevMetrics = {
+            impressions: prevTotalImpressions,
+            clicks: prevTotalClicks,
+            spent: Math.round(prevTotalSpent * 100) / 100,
+            leads: prevLeadLeads,
+            subscriptions: prevSubLeads,
+            cpl: prevLeadLeads > 0 ? Math.round(prevLeadSpent / prevLeadLeads) : 0,
+            costPerSub: prevSubLeads > 0 ? Math.round(prevSubSpent / prevSubLeads) : 0,
+          };
+        }
+      }
+
+      // Rule events for this account
+      const accRules = accountRuleEvents.find((a) => a.accountId === accMetrics.accountId);
+
+      accounts.push({
+        name: accMetrics.accountName,
+        metrics,
+        prevMetrics,
+        ruleEvents: accRules?.ruleEvents || [],
+        savedAmount: accRules?.savedAmount || 0,
+      });
+    }
+
+    // Calculate totals
+    const totals: DigestMetrics = {
+      impressions: accounts.reduce((s, a) => s + a.metrics.impressions, 0),
+      clicks: accounts.reduce((s, a) => s + a.metrics.clicks, 0),
+      spent: Math.round(accounts.reduce((s, a) => s + a.metrics.spent, 0) * 100) / 100,
+      leads: accounts.reduce((s, a) => s + a.metrics.leads, 0),
+      subscriptions: accounts.reduce((s, a) => s + a.metrics.subscriptions, 0),
+      cpl: 0,
+      costPerSub: 0,
+    };
+    const totalLeadSpent = accounts.reduce((s, a) => s + (a.metrics.leads > 0 ? a.metrics.cpl * a.metrics.leads : 0), 0);
+    totals.cpl = totals.leads > 0 ? Math.round(totalLeadSpent / totals.leads) : 0;
+    const totalSubSpent = accounts.reduce((s, a) => s + (a.metrics.subscriptions > 0 ? a.metrics.costPerSub * a.metrics.subscriptions : 0), 0);
+    totals.costPerSub = totals.subscriptions > 0 ? Math.round(totalSubSpent / totals.subscriptions) : 0;
+
+    // Previous totals
+    let prevTotals: DigestMetrics | undefined;
+    if (args.prevDates && args.prevDates.length > 0) {
+      const accsWithPrev = accounts.filter((a) => a.prevMetrics);
+      if (accsWithPrev.length > 0) {
+        prevTotals = {
+          impressions: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.impressions || 0), 0),
+          clicks: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.clicks || 0), 0),
+          spent: Math.round(accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.spent || 0), 0) * 100) / 100,
+          leads: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.leads || 0), 0),
+          subscriptions: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.subscriptions || 0), 0),
+          cpl: 0,
+          costPerSub: 0,
+        };
+        if (prevTotals.leads > 0) {
+          const prevLeadSpent = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.cpl * a.prevMetrics.leads : 0), 0);
+          prevTotals.cpl = Math.round(prevLeadSpent / prevTotals.leads);
+        }
+        if (prevTotals.subscriptions > 0) {
+          const prevSubSpent = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.costPerSub * a.prevMetrics.subscriptions : 0), 0);
+          prevTotals.costPerSub = Math.round(prevSubSpent / prevTotals.subscriptions);
+        }
+      }
+    }
+
+    return { accounts, totals, prevTotals };
+  },
+});
+
 /**
  * Send daily digest to all users with Telegram connected.
  * Called by cron at 09:00 MSK (06:00 UTC).
