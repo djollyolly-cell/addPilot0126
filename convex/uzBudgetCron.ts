@@ -1,4 +1,3 @@
-// @ts-nocheck — module not yet registered in Convex codegen, self-references fail typecheck
 import { v } from "convex/values";
 import { internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";

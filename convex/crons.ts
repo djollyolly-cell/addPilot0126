@@ -80,12 +80,11 @@ crons.interval(
   internal.aiRecommendations.checkAllCampaigns
 );
 
-// UZ budget reset — disabled until uzBudgetCron module is registered in codegen
-// TODO: re-enable after fixing uzBudgetCron registration
-// crons.interval(
-//   "uz-budget-reset",
-//   { minutes: 30 },
-//   internal.uzBudgetCron.resetBudgets
-// );
+// UZ budget reset — every 30 min, checks user timezone for midnight reset
+crons.interval(
+  "uz-budget-reset",
+  { minutes: 30 },
+  internal.uzBudgetCron.resetBudgets
+);
 
 export default crons;
