@@ -12,7 +12,7 @@ import { TargetTreeSelector, TargetSelection } from '../components/TargetTreeSel
 import { ActionRadio, ActionMode, actionModeToFlags } from '../components/ActionRadio';
 import { UpgradeModal } from '../components/UpgradeModal';
 
-type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'new_lead';
+type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'new_lead' | 'uz_budget_manage';
 type TimeWindow = 'daily' | 'since_launch' | '24h';
 
 const TIME_WINDOW_OPTIONS: { value: TimeWindow; label: string; description: string }[] = [
@@ -30,6 +30,7 @@ const RULE_TYPE_LABELS: Record<RuleType, string> = {
   low_impressions: 'Мало показов',
   clicks_no_leads: 'Клики без результата',
   new_lead: 'Новый лид',
+  uz_budget_manage: 'Работа с УЗ',
 };
 
 const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
@@ -41,6 +42,7 @@ const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
   low_impressions: 'Уведомить, если показов меньше порога (не откручивается)',
   clicks_no_leads: 'Остановить, если N+ кликов без единого лида',
   new_lead: 'Уведомить в Telegram при получении нового лида',
+  uz_budget_manage: 'Управление дневным бюджетом группы: автоматическое увеличение при приостановке и сброс в начале суток',
 };
 
 const RULE_TYPE_UNITS: Record<RuleType, string> = {
@@ -52,6 +54,7 @@ const RULE_TYPE_UNITS: Record<RuleType, string> = {
   low_impressions: 'показов',
   clicks_no_leads: 'кликов',
   new_lead: '',
+  uz_budget_manage: '',
 };
 
 /** Convert action flags to ActionMode */
@@ -271,8 +274,11 @@ export function RulesPage() {
                         <div className="flex-1 min-w-0">
                           <p className="font-medium text-sm truncate">{rule.name}</p>
                           <p className="text-xs text-muted-foreground">
-                            {RULE_TYPE_LABELS[rule.type as RuleType]} · {rule.conditions.operator} {rule.conditions.value}
-                            {RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}
+                            {RULE_TYPE_LABELS[rule.type as RuleType]}
+                            {rule.type === 'uz_budget_manage'
+                              ? ` · ${rule.conditions.initialBudget ?? 0}₽ +${rule.conditions.budgetStep ?? 0}₽`
+                              : ` · ${rule.conditions.operator} ${rule.conditions.value}${RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}`
+                            }
                             {rule.type === 'clicks_no_leads' && (
                               <> · {rule.conditions.timeWindow === 'since_launch' ? 'с запуска' : rule.conditions.timeWindow === '24h' ? 'за 24ч' : 'за сегодня'}</>
                             )}
@@ -334,6 +340,10 @@ export function RulesPage() {
                 targetAccountIds: editingRule.targetAccountIds,
                 targetCampaignIds: editingRule.targetCampaignIds,
                 targetAdIds: editingRule.targetAdIds,
+                initialBudget: editingRule.conditions.initialBudget,
+                budgetStep: editingRule.conditions.budgetStep,
+                maxDailyBudget: editingRule.conditions.maxDailyBudget,
+                resetDaily: editingRule.conditions.resetDaily,
               } : undefined}
               onSubmit={async (data) => {
                 setError(null);
@@ -349,12 +359,27 @@ export function RulesPage() {
                       targetAccountIds: data.targetAccountIds,
                       targetCampaignIds: data.targetCampaignIds,
                       targetAdIds: data.targetAdIds,
+                      ...(data.initialBudget !== undefined ? { initialBudget: data.initialBudget } : {}),
+                      ...(data.budgetStep !== undefined ? { budgetStep: data.budgetStep } : {}),
+                      ...(data.maxDailyBudget !== undefined ? { maxDailyBudget: data.maxDailyBudget } : {}),
+                      ...(data.resetDaily !== undefined ? { resetDaily: data.resetDaily } : {}),
                     });
                     setSuccess('Правило обновлено!');
                   } else {
                     await createRule({
                       userId: user.userId as Id<"users">,
-                      ...data,
+                      name: data.name,
+                      type: data.type,
+                      value: data.value,
+                      timeWindow: data.timeWindow,
+                      actions: data.actions,
+                      targetAccountIds: data.targetAccountIds,
+                      targetCampaignIds: data.targetCampaignIds,
+                      targetAdIds: data.targetAdIds,
+                      ...(data.initialBudget !== undefined ? { initialBudget: data.initialBudget } : {}),
+                      ...(data.budgetStep !== undefined ? { budgetStep: data.budgetStep } : {}),
+                      ...(data.maxDailyBudget !== undefined ? { maxDailyBudget: data.maxDailyBudget } : {}),
+                      ...(data.resetDaily !== undefined ? { resetDaily: data.resetDaily } : {}),
                     });
                     setSuccess('Правило создано!');
                   }
@@ -408,10 +433,15 @@ interface ExistingRuleData {
   type: RuleType;
   value: number;
   timeWindow?: TimeWindow;
-  actions: { stopAd: boolean; notify: boolean };
+  actions: { stopAd: boolean; notify: boolean; notifyOnEveryIncrease?: boolean; notifyOnKeyEvents?: boolean };
   targetAccountIds: Id<"adAccounts">[];
   targetCampaignIds?: string[];
   targetAdIds?: string[];
+  // uz_budget_manage
+  initialBudget?: number;
+  budgetStep?: number;
+  maxDailyBudget?: number;
+  resetDaily?: boolean;
 }
 
 interface RuleFormProps {
@@ -423,10 +453,14 @@ interface RuleFormProps {
     type: RuleType;
     value: number;
     timeWindow?: TimeWindow;
-    actions: { stopAd: boolean; notify: boolean };
+    actions: { stopAd: boolean; notify: boolean; notifyOnEveryIncrease?: boolean; notifyOnKeyEvents?: boolean };
     targetAccountIds: Id<"adAccounts">[];
     targetCampaignIds?: string[];
     targetAdIds?: string[];
+    initialBudget?: number;
+    budgetStep?: number;
+    maxDailyBudget?: number;
+    resetDaily?: boolean;
   }) => Promise<void>;
   onCancel: () => void;
 }
@@ -446,6 +480,14 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
     campaignIds: existingRule?.targetCampaignIds ?? [],
     adIds: existingRule?.targetAdIds ?? [],
   });
+  // uz_budget_manage specific state
+  const [initialBudget, setInitialBudget] = useState(existingRule?.initialBudget ? String(existingRule.initialBudget) : '100');
+  const [budgetStep, setBudgetStep] = useState(existingRule?.budgetStep ? String(existingRule.budgetStep) : '1');
+  const [maxDailyBudget, setMaxDailyBudget] = useState(existingRule?.maxDailyBudget ? String(existingRule.maxDailyBudget) : '');
+  const [resetDaily, setResetDaily] = useState(existingRule?.resetDaily ?? true);
+  const [notifyOnEveryIncrease, setNotifyOnEveryIncrease] = useState(existingRule?.actions.notifyOnEveryIncrease ?? false);
+  const [notifyOnKeyEvents, setNotifyOnKeyEvents] = useState(existingRule?.actions.notifyOnKeyEvents ?? true);
+
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
@@ -464,7 +506,15 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
       setFormError('Введите название правила');
       return;
     }
-    if (type !== 'new_lead' && (!value || numericValue <= 0)) {
+    if (type === 'uz_budget_manage') {
+      const ib = Number(initialBudget);
+      const bs = Number(budgetStep);
+      const mdb = maxDailyBudget ? Number(maxDailyBudget) : undefined;
+      if (!ib || ib <= 0) { setFormError('Начальный бюджет должен быть больше 0'); return; }
+      if (!bs || bs <= 0) { setFormError('Шаг увеличения должен быть больше 0'); return; }
+      if (mdb !== undefined && mdb > 0 && mdb <= ib) { setFormError('Максимальный бюджет должен быть больше начального'); return; }
+      if (targets.campaignIds.length === 0) { setFormError('Выберите хотя бы одну группу'); return; }
+    } else if (type !== 'new_lead' && (!value || numericValue <= 0)) {
       setFormError('Значение должно быть больше 0');
       return;
     }
@@ -484,12 +534,20 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
       await onSubmit({
         name: name.trim(),
         type,
-        value: type === 'new_lead' ? 1 : numericValue,
+        value: type === 'new_lead' || type === 'uz_budget_manage' ? 1 : numericValue,
         timeWindow: type === 'clicks_no_leads' ? timeWindow : undefined,
-        actions: flags,
+        actions: type === 'uz_budget_manage'
+          ? { ...flags, notifyOnEveryIncrease, notifyOnKeyEvents }
+          : flags,
         targetAccountIds: targets.accountIds as Id<"adAccounts">[],
         targetCampaignIds: targets.campaignIds.length > 0 ? targets.campaignIds : undefined,
         targetAdIds: targets.adIds.length > 0 ? targets.adIds : undefined,
+        ...(type === 'uz_budget_manage' ? {
+          initialBudget: Number(initialBudget),
+          budgetStep: Number(budgetStep),
+          maxDailyBudget: maxDailyBudget ? Number(maxDailyBudget) : undefined,
+          resetDaily,
+        } : {}),
       });
     } catch {
       // Error handled by parent
@@ -581,8 +639,92 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
             ))}
           </div>
 
-          {/* Value (hidden for new_lead — no threshold needed) */}
-          {type !== 'new_lead' && (
+          {/* Budget fields for uz_budget_manage */}
+          {type === 'uz_budget_manage' && (
+            <div className="space-y-3 p-3 rounded-lg border border-border bg-muted/30">
+              <div>
+                <label className="block text-sm font-medium mb-1">Начальный бюджет (₽)</label>
+                <input
+                  type="number"
+                  value={initialBudget}
+                  onChange={(e) => setInitialBudget(e.target.value)}
+                  placeholder="100"
+                  min="1"
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  data-testid="uz-initial-budget"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Шаг увеличения (₽)</label>
+                <input
+                  type="number"
+                  value={budgetStep}
+                  onChange={(e) => setBudgetStep(e.target.value)}
+                  placeholder="1"
+                  min="1"
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  data-testid="uz-budget-step"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Максимальный бюджет (₽)</label>
+                <input
+                  type="number"
+                  value={maxDailyBudget}
+                  onChange={(e) => setMaxDailyBudget(e.target.value)}
+                  placeholder="Без ограничений"
+                  min="0"
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                  data-testid="uz-max-budget"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Оставьте пустым для работы без ограничений</p>
+              </div>
+              <div className="flex items-center justify-between">
+                <div>
+                  <label className="text-sm font-medium">Сбрасывать бюджет ежедневно</label>
+                  <p className="text-xs text-muted-foreground">В начале суток вернуть начальный бюджет</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setResetDaily(!resetDaily)}
+                  className={cn(
+                    'relative inline-flex h-6 w-11 shrink-0 rounded-full border-2 border-transparent transition-colors',
+                    resetDaily ? 'bg-primary' : 'bg-muted'
+                  )}
+                  data-testid="uz-reset-daily"
+                >
+                  <span className={cn(
+                    'pointer-events-none inline-block h-5 w-5 rounded-full bg-background shadow-lg transition-transform',
+                    resetDaily ? 'translate-x-5' : 'translate-x-0'
+                  )} />
+                </button>
+              </div>
+              <div className="space-y-2 pt-2 border-t border-border">
+                <label className="block text-sm font-medium">Уведомления</label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={notifyOnEveryIncrease}
+                    onChange={(e) => setNotifyOnEveryIncrease(e.target.checked)}
+                    className="rounded"
+                  />
+                  При каждом увеличении
+                </label>
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={notifyOnKeyEvents}
+                    onChange={(e) => setNotifyOnKeyEvents(e.target.checked)}
+                    className="rounded"
+                  />
+                  Только ключевые события
+                </label>
+              </div>
+            </div>
+          )}
+
+          {/* Value (hidden for new_lead and uz_budget_manage — no threshold needed) */}
+          {type !== 'new_lead' && type !== 'uz_budget_manage' && (
             <div>
               <label className="block text-sm font-medium mb-1">
                 Порог ({RULE_TYPE_UNITS[type]})
@@ -641,15 +783,17 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
           </div>
         )}
 
-        {/* Action radio */}
-        <div className="space-y-2">
-          <label className="block text-sm font-medium">Действие при срабатывании</label>
-          <ActionRadio
-            value={actionMode}
-            onChange={setActionMode}
-            isFreemium={isFreemium}
-          />
-        </div>
+        {/* Action radio (hidden for uz_budget_manage — it manages budgets, not stops ads) */}
+        {type !== 'uz_budget_manage' && (
+          <div className="space-y-2">
+            <label className="block text-sm font-medium">Действие при срабатывании</label>
+            <ActionRadio
+              value={actionMode}
+              onChange={setActionMode}
+              isFreemium={isFreemium}
+            />
+          </div>
+        )}
 
         {/* Submit */}
         <button

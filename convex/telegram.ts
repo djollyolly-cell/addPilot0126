@@ -1917,3 +1917,52 @@ export const getWebhookInfo = action({
     return result;
   },
 });
+
+// ═══════════════════════════════════════════════════════════
+// UZ Budget Management Notifications
+// ═══════════════════════════════════════════════════════════
+
+export const sendBudgetNotification = internalAction({
+  args: {
+    userId: v.id("users"),
+    type: v.union(
+      v.literal("increase"),
+      v.literal("first_increase"),
+      v.literal("max_reached"),
+      v.literal("reset")
+    ),
+    campaignName: v.string(),
+    oldBudget: v.optional(v.number()),
+    newBudget: v.optional(v.number()),
+    step: v.optional(v.number()),
+    currentBudget: v.optional(v.number()),
+    maxBudget: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const chatId = await ctx.runQuery(internal.telegram.getUserChatId, {
+      userId: args.userId,
+    });
+    if (!chatId) return;
+
+    let message = "";
+    switch (args.type) {
+      case "increase":
+        message = `📊 *Бюджет увеличен*\nГруппа: ${args.campaignName}\nБюджет: ${args.oldBudget}₽ → ${args.newBudget}₽ (+${args.step}₽)`;
+        break;
+      case "first_increase":
+        message = `📊 *Первое увеличение бюджета за день*\nГруппа: ${args.campaignName}\nБюджет: ${args.oldBudget}₽ → ${args.newBudget}₽`;
+        break;
+      case "max_reached":
+        message = `⚠️ *Достигнут максимальный бюджет*\nГруппа: ${args.campaignName}\nТекущий бюджет: ${args.currentBudget}₽ / ${args.maxBudget}₽`;
+        break;
+      case "reset":
+        message = `🔄 *Бюджет сброшен*\nГруппа: ${args.campaignName}\nБюджет: ${args.newBudget}₽`;
+        break;
+    }
+
+    await ctx.runAction(internal.telegram.sendMessage, {
+      chatId,
+      text: message,
+    });
+  },
+});

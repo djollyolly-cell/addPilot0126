@@ -21,13 +21,15 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-type ActionType = 'stopped' | 'notified' | 'stopped_and_notified';
+type ActionType = 'stopped' | 'notified' | 'stopped_and_notified' | 'budget_increased' | 'budget_reset';
 type StatusType = 'success' | 'failed' | 'reverted';
 
 const ACTION_LABELS: Record<ActionType, string> = {
   stopped: 'Остановлено',
   notified: 'Уведомление',
   stopped_and_notified: 'Остановлено + уведомление',
+  budget_increased: 'Бюджет увеличен',
+  budget_reset: 'Бюджет сброшен',
 };
 
 const STATUS_LABELS: Record<StatusType, string> = {
@@ -44,6 +46,10 @@ function ActionIcon({ type }: { type: ActionType }) {
       return <Bell className="w-4 h-4 text-blue-500" />;
     case 'stopped_and_notified':
       return <Zap className="w-4 h-4 text-orange-500" />;
+    case 'budget_increased':
+      return <Zap className="w-4 h-4 text-green-500" />;
+    case 'budget_reset':
+      return <Bell className="w-4 h-4 text-muted-foreground" />;
   }
 }
 
@@ -176,6 +182,8 @@ export function LogsPage() {
                 <option value="stopped">Остановлено</option>
                 <option value="notified">Уведомление</option>
                 <option value="stopped_and_notified">Остановлено + уведомление</option>
+                <option value="budget_increased">Бюджет увеличен</option>
+                <option value="budget_reset">Бюджет сброшен</option>
               </select>
             </div>
 

@@ -14,6 +14,7 @@ const RULE_TYPE_DEFAULTS: Record<
   low_impressions: { metric: "impressions", operator: "<" },
   clicks_no_leads: { metric: "clicks_no_leads", operator: ">=" },
   new_lead: { metric: "leads", operator: ">" },
+  uz_budget_manage: { metric: "budget_manage", operator: ">" },
 };
 
 // Validation
@@ -21,8 +22,8 @@ function validateRuleValue(
   type: string,
   value: number
 ): string | null {
-  // new_lead doesn't need a threshold value
-  if (type === "new_lead") return null;
+  // new_lead and uz_budget_manage don't use the generic threshold value
+  if (type === "new_lead" || type === "uz_budget_manage") return null;
   if (value <= 0) {
     return "Значение должно быть больше 0";
   }
@@ -68,7 +69,8 @@ export const create = mutation({
       v.literal("budget_limit"),
       v.literal("low_impressions"),
       v.literal("clicks_no_leads"),
-      v.literal("new_lead")
+      v.literal("new_lead"),
+      v.literal("uz_budget_manage")
     ),
     value: v.number(),
     operator: v.optional(v.string()),
@@ -81,10 +83,17 @@ export const create = mutation({
       notify: v.boolean(),
       notifyChannel: v.optional(v.string()),
       customMessage: v.optional(v.string()),
+      notifyOnEveryIncrease: v.optional(v.boolean()),
+      notifyOnKeyEvents: v.optional(v.boolean()),
     }),
     targetAccountIds: v.array(v.id("adAccounts")),
     targetCampaignIds: v.optional(v.array(v.string())),
     targetAdIds: v.optional(v.array(v.string())),
+    // uz_budget_manage specific fields
+    initialBudget: v.optional(v.number()),
+    budgetStep: v.optional(v.number()),
+    maxDailyBudget: v.optional(v.number()),
+    resetDaily: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     // Validate name
@@ -101,6 +110,24 @@ export const create = mutation({
     const valueError = validateRuleValue(args.type, args.value);
     if (valueError) {
       throw new Error(valueError);
+    }
+
+    // Validate uz_budget_manage specific fields
+    if (args.type === "uz_budget_manage") {
+      if (!args.initialBudget || args.initialBudget <= 0) {
+        throw new Error("Начальный бюджет должен быть больше 0");
+      }
+      if (!args.budgetStep || args.budgetStep <= 0) {
+        throw new Error("Шаг увеличения бюджета должен быть больше 0");
+      }
+      if (args.maxDailyBudget !== undefined && args.maxDailyBudget !== null && args.maxDailyBudget > 0) {
+        if (args.maxDailyBudget <= args.initialBudget) {
+          throw new Error("Максимальный бюджет должен быть больше начального");
+        }
+      }
+      if (!args.targetCampaignIds || args.targetCampaignIds.length === 0) {
+        throw new Error("Выберите хотя бы одну группу с форматом УЗ");
+      }
     }
 
     // Check tier limits
@@ -154,20 +181,33 @@ export const create = mutation({
     };
 
     const now = Date.now();
+
+    // Build conditions based on rule type
+    const conditions = {
+      metric: defaults.metric,
+      operator: args.operator || defaults.operator,
+      value: args.value,
+      minSamples: args.minSamples,
+      timeWindow: args.timeWindow,
+      // uz_budget_manage specific
+      ...(args.type === "uz_budget_manage" ? {
+        initialBudget: args.initialBudget,
+        budgetStep: args.budgetStep,
+        maxDailyBudget: args.maxDailyBudget,
+        resetDaily: args.resetDaily ?? true,
+      } : {}),
+    };
+
     const ruleId = await ctx.db.insert("rules", {
       userId: args.userId,
       name: args.name.trim(),
       type: args.type,
-      conditions: {
-        metric: defaults.metric,
-        operator: args.operator || defaults.operator,
-        value: args.value,
-        minSamples: args.minSamples,
-        timeWindow: args.timeWindow,
-      },
+      conditions,
       actions: {
         ...args.actions,
         stopAd,
+        notifyOnEveryIncrease: args.actions.notifyOnEveryIncrease,
+        notifyOnKeyEvents: args.actions.notifyOnKeyEvents,
       },
       targetAccountIds: args.targetAccountIds,
       targetCampaignIds: args.targetCampaignIds,
@@ -200,11 +240,18 @@ export const update = mutation({
         notify: v.boolean(),
         notifyChannel: v.optional(v.string()),
         customMessage: v.optional(v.string()),
+        notifyOnEveryIncrease: v.optional(v.boolean()),
+        notifyOnKeyEvents: v.optional(v.boolean()),
       })
     ),
     targetAccountIds: v.optional(v.array(v.id("adAccounts"))),
     targetCampaignIds: v.optional(v.array(v.string())),
     targetAdIds: v.optional(v.array(v.string())),
+    // uz_budget_manage specific fields
+    initialBudget: v.optional(v.number()),
+    budgetStep: v.optional(v.number()),
+    maxDailyBudget: v.optional(v.number()),
+    resetDaily: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const rule = await ctx.db.get(args.ruleId);
@@ -262,6 +309,26 @@ export const update = mutation({
             ? args.timeWindow
             : rule.conditions.timeWindow,
       };
+    }
+
+    // Update budget fields for uz_budget_manage
+    if (rule.type === "uz_budget_manage") {
+      const currentConditions = (patch.conditions as Record<string, unknown>) || { ...rule.conditions };
+      if (args.initialBudget !== undefined) {
+        if (args.initialBudget <= 0) throw new Error("Начальный бюджет должен быть больше 0");
+        currentConditions.initialBudget = args.initialBudget;
+      }
+      if (args.budgetStep !== undefined) {
+        if (args.budgetStep <= 0) throw new Error("Шаг увеличения бюджета должен быть больше 0");
+        currentConditions.budgetStep = args.budgetStep;
+      }
+      if (args.maxDailyBudget !== undefined) {
+        currentConditions.maxDailyBudget = args.maxDailyBudget;
+      }
+      if (args.resetDaily !== undefined) {
+        currentConditions.resetDaily = args.resetDaily;
+      }
+      patch.conditions = currentConditions;
     }
 
     if (args.actions !== undefined) {

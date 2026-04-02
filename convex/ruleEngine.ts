@@ -103,6 +103,10 @@ export function evaluateCondition(
       return metrics.leads > 0;
     }
 
+    // uz_budget_manage: never triggers via standard evaluate — handled separately
+    case "uz_budget_manage":
+      return false;
+
     default:
       return false;
   }
@@ -563,7 +567,9 @@ export const getRecentEvents = query({
       v.union(
         v.literal("stopped"),
         v.literal("notified"),
-        v.literal("stopped_and_notified")
+        v.literal("stopped_and_notified"),
+        v.literal("budget_increased"),
+        v.literal("budget_reset")
       )
     ),
     accountId: v.optional(v.id("adAccounts")),
@@ -866,7 +872,9 @@ export const getLogs = query({
       v.union(
         v.literal("stopped"),
         v.literal("notified"),
-        v.literal("stopped_and_notified")
+        v.literal("stopped_and_notified"),
+        v.literal("budget_increased"),
+        v.literal("budget_reset")
       )
     ),
     accountId: v.optional(v.id("adAccounts")),
@@ -1447,6 +1455,309 @@ export const checkAllRules = internalAction({
 
     if (totalTriggered > 0) {
       console.log(`[ruleEngine] ${totalTriggered} rules triggered`);
+    }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
+// uz_budget_manage — Budget management for УЗ groups
+// ═══════════════════════════════════════════════════════════
+
+/** Get all active uz_budget_manage rules */
+export const getActiveUzRules = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const allRules = await ctx.db.query("rules").collect();
+    return allRules.filter(
+      (r) => r.type === "uz_budget_manage" && r.isActive
+    );
+  },
+});
+
+/** Get total spent today for a campaign (sum of all ads in that group) */
+export const getCampaignSpentToday = internalQuery({
+  args: {
+    accountId: v.id("adAccounts"),
+    campaignId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const today = new Date().toISOString().slice(0, 10);
+    const metrics = await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_accountId_date", (q) =>
+        q.eq("accountId", args.accountId).eq("date", today)
+      )
+      .collect();
+    const campaignMetrics = metrics.filter((m) => m.campaignId === args.campaignId);
+    return campaignMetrics.reduce((sum, m) => sum + (m.spent || 0), 0);
+  },
+});
+
+/** Check if budget was recently increased (dedup within 5 min) */
+export const hasRecentBudgetIncrease = internalQuery({
+  args: {
+    ruleId: v.id("rules"),
+    campaignId: v.string(),
+    withinMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const since = Date.now() - args.withinMs;
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("actionType"), "budget_increased"),
+          q.eq(q.field("adId"), args.campaignId),
+          q.gte(q.field("createdAt"), since),
+          q.eq(q.field("status"), "success")
+        )
+      )
+      .first();
+    return logs !== null;
+  },
+});
+
+/** Check if this is the first budget increase today for a campaign */
+export const isFirstBudgetIncreaseToday = internalQuery({
+  args: {
+    ruleId: v.id("rules"),
+    campaignId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("actionType"), "budget_increased"),
+          q.eq(q.field("adId"), args.campaignId),
+          q.gte(q.field("createdAt"), todayStart.getTime()),
+          q.eq(q.field("status"), "success")
+        )
+      )
+      .first();
+    return logs === null;
+  },
+});
+
+/** Log a budget action (increase or reset) */
+export const logBudgetAction = internalMutation({
+  args: {
+    userId: v.id("users"),
+    ruleId: v.id("rules"),
+    accountId: v.id("adAccounts"),
+    campaignId: v.string(),
+    campaignName: v.string(),
+    actionType: v.union(v.literal("budget_increased"), v.literal("budget_reset")),
+    oldBudget: v.number(),
+    newBudget: v.number(),
+    step: v.number(),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("actionLogs", {
+      userId: args.userId,
+      ruleId: args.ruleId,
+      accountId: args.accountId,
+      adId: args.campaignId,
+      adName: args.campaignName,
+      campaignName: args.campaignName,
+      actionType: args.actionType,
+      reason: args.actionType === "budget_increased"
+        ? `Бюджет увеличен: ${args.oldBudget}₽ → ${args.newBudget}₽ (+${args.step}₽)`
+        : `Бюджет сброшен до ${args.newBudget}₽`,
+      metricsSnapshot: {
+        spent: args.oldBudget,
+        leads: 0,
+      },
+      savedAmount: args.step,
+      status: args.error ? ("failed" as const) : ("success" as const),
+      errorMessage: args.error,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Check all active uz_budget_manage rules.
+ * Called from syncAll after metrics update.
+ */
+export const checkUzBudgetRules = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const uzRules = await ctx.runQuery(internal.ruleEngine.getActiveUzRules);
+    if (uzRules.length === 0) return;
+
+    let totalActions = 0;
+
+    for (const rule of uzRules) {
+      try {
+        const { initialBudget, budgetStep, maxDailyBudget } = rule.conditions as {
+          initialBudget?: number;
+          budgetStep?: number;
+          maxDailyBudget?: number;
+        };
+        if (!initialBudget || !budgetStep) continue;
+
+        for (const accountId of rule.targetAccountIds) {
+          let accessToken: string;
+          try {
+            accessToken = await ctx.runAction(
+              internal.auth.getValidTokenForAccount,
+              { accountId }
+            );
+          } catch {
+            console.error(`[uz_budget] Cannot get token for account ${accountId}`);
+            continue;
+          }
+
+          // Get campaigns from VK API
+          const campaigns = await ctx.runAction(
+            internal.vkApi.getCampaignsForAccount,
+            { accessToken }
+          );
+
+          // Filter by targetCampaignIds
+          const targetIds = rule.targetCampaignIds || [];
+          const allCampaigns = campaigns as Array<{
+            id: number;
+            name: string;
+            status: string;
+            budget_limit_day: string;
+            package_id?: number;
+          }>;
+          const targetCampaigns = allCampaigns.filter(
+            (c) => targetIds.includes(String(c.id))
+          );
+
+          for (const campaign of targetCampaigns) {
+            const dailyLimitRubles = Number(campaign.budget_limit_day || "0") / 100;
+
+            // Check if paused due to budget: status == "blocked"
+            if (campaign.status !== "blocked") continue;
+
+            // Get spent today to confirm budget exhaustion
+            const spentToday = await ctx.runQuery(
+              internal.ruleEngine.getCampaignSpentToday,
+              { accountId, campaignId: String(campaign.id) }
+            );
+
+            // Confirm budget exhaustion (95% threshold for float precision)
+            if (spentToday < dailyLimitRubles * 0.95) continue;
+
+            // Dedup: skip if budget was increased within last 5 minutes
+            const recentIncrease = await ctx.runQuery(
+              internal.ruleEngine.hasRecentBudgetIncrease,
+              { ruleId: rule._id, campaignId: String(campaign.id), withinMs: 5 * 60 * 1000 }
+            );
+            if (recentIncrease) continue;
+
+            // Check max budget
+            if (maxDailyBudget && dailyLimitRubles >= maxDailyBudget) {
+              if (rule.actions.notifyOnKeyEvents) {
+                try {
+                  await ctx.runAction(internal.telegram.sendBudgetNotification, {
+                    userId: rule.userId,
+                    type: "max_reached" as const,
+                    campaignName: campaign.name,
+                    currentBudget: dailyLimitRubles,
+                    maxBudget: maxDailyBudget,
+                  });
+                } catch (notifErr) {
+                  console.error(`[uz_budget] Failed to send max_reached notification:`, notifErr);
+                }
+              }
+              continue;
+            }
+
+            // Calculate new limit
+            let newLimit = dailyLimitRubles + budgetStep;
+            if (maxDailyBudget) {
+              newLimit = Math.min(newLimit, maxDailyBudget);
+            }
+
+            try {
+              // Increase budget via VK API
+              await ctx.runAction(internal.vkApi.setCampaignBudget, {
+                accessToken,
+                campaignId: campaign.id,
+                newLimitRubles: newLimit,
+              });
+
+              // Resume campaign after budget increase
+              await ctx.runAction(internal.vkApi.resumeCampaign, {
+                accessToken,
+                campaignId: campaign.id,
+              });
+
+              // Log success
+              await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+                userId: rule.userId,
+                ruleId: rule._id,
+                accountId,
+                campaignId: String(campaign.id),
+                campaignName: campaign.name,
+                actionType: "budget_increased" as const,
+                oldBudget: dailyLimitRubles,
+                newBudget: newLimit,
+                step: budgetStep,
+              });
+
+              // Send notification
+              const isFirstToday = await ctx.runQuery(
+                internal.ruleEngine.isFirstBudgetIncreaseToday,
+                { ruleId: rule._id, campaignId: String(campaign.id) }
+              );
+
+              if (rule.actions.notifyOnEveryIncrease ||
+                  (rule.actions.notifyOnKeyEvents && isFirstToday)) {
+                try {
+                  await ctx.runAction(internal.telegram.sendBudgetNotification, {
+                    userId: rule.userId,
+                    type: isFirstToday ? ("first_increase" as const) : ("increase" as const),
+                    campaignName: campaign.name,
+                    oldBudget: dailyLimitRubles,
+                    newBudget: newLimit,
+                    step: budgetStep,
+                  });
+                } catch (notifErr) {
+                  console.error(`[uz_budget] Failed to send budget notification:`, notifErr);
+                }
+              }
+
+              // Increment trigger count
+              await ctx.runMutation(internal.ruleEngine.incrementTriggerCount, {
+                ruleId: rule._id,
+              });
+
+              totalActions++;
+            } catch (err) {
+              console.error(`[uz_budget] Failed to increase budget for campaign ${campaign.id}:`, err);
+              await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+                userId: rule.userId,
+                ruleId: rule._id,
+                accountId,
+                campaignId: String(campaign.id),
+                campaignName: campaign.name,
+                actionType: "budget_increased" as const,
+                oldBudget: dailyLimitRubles,
+                newBudget: newLimit,
+                step: budgetStep,
+                error: err instanceof Error ? err.message : "Unknown error",
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error(`[uz_budget] Error processing rule ${rule._id}:`, err);
+      }
+    }
+
+    if (totalActions > 0) {
+      console.log(`[uz_budget] ${totalActions} budget actions performed`);
     }
   },
 });
