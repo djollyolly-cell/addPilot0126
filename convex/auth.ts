@@ -393,6 +393,7 @@ export const validateSession = query({
       subscriptionTier: user.subscriptionTier,
       subscriptionExpiresAt: user.subscriptionExpiresAt,
       onboardingCompleted: user.onboardingCompleted,
+      isAdmin: user.isAdmin === true,
     };
   },
 });

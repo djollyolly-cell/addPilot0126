@@ -34,6 +34,7 @@ export default defineSchema({
     vkAdsClientSecret: v.optional(v.string()),
     // VK Ads cabinet ID discovered via ads.getAccounts at login
     vkAdsCabinetId: v.optional(v.string()),
+    isAdmin: v.optional(v.boolean()),
     updatedAt: v.optional(v.number()),
   })
     .index("by_vkId", ["vkId"])

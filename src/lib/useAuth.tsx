@@ -12,6 +12,7 @@ interface User {
   subscriptionTier: 'freemium' | 'start' | 'pro';
   subscriptionExpiresAt?: number;
   onboardingCompleted: boolean;
+  isAdmin?: boolean;
 }
 
 interface EmailLoginResult {
@@ -78,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const isLoading = sessionToken !== null && user === undefined;
   const isAuthenticated = user !== null && user !== undefined;
-  const isAdmin = isAuthenticated && user != null && ADMIN_EMAILS.includes(user.email);
+  const isAdmin = isAuthenticated && user != null && (user.isAdmin === true || ADMIN_EMAILS.includes(user.email));
 
   const setSession = (token: string) => {
     localStorage.setItem(SESSION_KEY, token);

@@ -2,9 +2,12 @@ import { v } from "convex/values";
 import { action, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 
+// Bootstrap admins: used as fallback so existing admins can still access
+// even before their DB isAdmin flag is set
 const ADMIN_EMAILS = ["13632013@vk.com", "786709647@vk.com"];
 
 // Helper: validate session and check admin access
+// Checks user.isAdmin first, falls back to ADMIN_EMAILS for bootstrap
 async function assertAdmin(ctx: any, sessionToken: string) {
   const session = await ctx.db
     .query("sessions")
@@ -16,7 +19,12 @@ async function assertAdmin(ctx: any, sessionToken: string) {
   }
 
   const user = await ctx.db.get(session.userId);
-  if (!user || !ADMIN_EMAILS.includes(user.email)) {
+  if (!user) {
+    throw new Error("Forbidden: admin access required");
+  }
+
+  // Check DB flag first, then fallback to hardcoded list for bootstrap
+  if (user.isAdmin !== true && !ADMIN_EMAILS.includes(user.email)) {
     throw new Error("Forbidden: admin access required");
   }
 
@@ -63,6 +71,7 @@ export const listUsers = query({
           _id: user._id,
           email: user.email,
           name: user.name,
+          isAdmin: user.isAdmin === true,
           subscriptionTier: user.subscriptionTier,
           subscriptionExpiresAt: user.subscriptionExpiresAt,
           telegramChatId: user.telegramChatId,
@@ -77,6 +86,28 @@ export const listUsers = query({
     );
 
     return result;
+  },
+});
+
+// Toggle admin role for a user
+export const toggleAdmin = mutation({
+  args: {
+    sessionToken: v.string(),
+    userId: v.id("users"),
+    isAdmin: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("User not found");
+
+    await ctx.db.patch(args.userId, {
+      isAdmin: args.isAdmin,
+      updatedAt: Date.now(),
+    });
+
+    return { success: true, isAdmin: args.isAdmin };
   },
 });
 

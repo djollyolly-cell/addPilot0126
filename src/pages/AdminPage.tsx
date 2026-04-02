@@ -42,7 +42,7 @@ const TIER_BADGE_VARIANT: Record<string, 'secondary' | 'warning' | 'success'> = 
 
 export function AdminPage() {
   const { user } = useAuth();
-  const isAdmin = user && ADMIN_EMAILS.includes(user.email);
+  const isAdmin = user && (user.isAdmin === true || ADMIN_EMAILS.includes(user.email));
 
   if (!isAdmin) {
     return (
@@ -69,12 +69,14 @@ function AdminDashboard() {
   const users = useQuery(api.admin.listUsers, { sessionToken });
   const updateTier = useMutation(api.admin.updateUserTier);
   const updateExpiry = useMutation(api.admin.updateUserExpiry);
+  const toggleAdmin = useMutation(api.admin.toggleAdmin);
 
   const [search, setSearch] = useState('');
   const [tierFilter, setTierFilter] = useState<string>('all');
   const [changingTier, setChangingTier] = useState<string | null>(null);
   const [editingExpiry, setEditingExpiry] = useState<string | null>(null);
   const [expiryInput, setExpiryInput] = useState('');
+  const [togglingAdmin, setTogglingAdmin] = useState<string | null>(null);
 
   const filteredUsers = users
     ?.filter((u) => {
@@ -99,6 +101,21 @@ function AdminDashboard() {
       console.error('Failed to update tier:', err);
     } finally {
       setChangingTier(null);
+    }
+  };
+
+  const handleToggleAdmin = async (userId: string, currentIsAdmin: boolean) => {
+    setTogglingAdmin(userId);
+    try {
+      await toggleAdmin({
+        sessionToken,
+        userId: userId as Id<'users'>,
+        isAdmin: !currentIsAdmin,
+      });
+    } catch (err) {
+      console.error('Failed to toggle admin:', err);
+    } finally {
+      setTogglingAdmin(null);
     }
   };
 
@@ -249,6 +266,7 @@ function AdminDashboard() {
                     <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Кабинеты</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Telegram</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Дата рег.</th>
+                    <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Админ</th>
                     <th className="pb-3 font-medium text-muted-foreground">Действия</th>
                   </tr>
                 </thead>
@@ -265,46 +283,42 @@ function AdminDashboard() {
                         </Badge>
                       </td>
                       <td className="py-3 pr-4">
-                        {u.subscriptionTier !== 'freemium' ? (
-                          editingExpiry === u._id ? (
-                            <div className="flex items-center gap-1">
-                              <input
-                                type="date"
-                                className="text-xs border border-border rounded px-1 py-0.5 bg-background w-[120px]"
-                                value={expiryInput}
-                                onChange={(e) => setExpiryInput(e.target.value)}
-                              />
-                              <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => handleExpirySave(u._id)}>
-                                <CheckCircle className="w-3.5 h-3.5 text-green-600" />
-                              </Button>
-                              <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => setEditingExpiry(null)}>
-                                <AlertCircle className="w-3.5 h-3.5 text-muted-foreground" />
-                              </Button>
-                            </div>
-                          ) : u.subscriptionExpiresAt ? (
-                            <button
-                              className={`text-xs ${u.subscriptionExpiresAt < Date.now() ? 'text-destructive' : 'text-muted-foreground'} hover:underline`}
-                              onClick={() => {
-                                setEditingExpiry(u._id);
-                                setExpiryInput(toDateInput(u.subscriptionExpiresAt!));
-                              }}
-                            >
-                              {formatDate(u.subscriptionExpiresAt)}
-                              {u.subscriptionExpiresAt < Date.now() && ' (истёк)'}
-                            </button>
-                          ) : (
-                            <button
-                              className="text-xs text-primary hover:underline"
-                              onClick={() => {
-                                setEditingExpiry(u._id);
-                                setExpiryInput(toDateInput(Date.now() + 30 * 24 * 60 * 60 * 1000));
-                              }}
-                            >
-                              задать
-                            </button>
-                          )
+                        {editingExpiry === u._id ? (
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="date"
+                              className="text-xs border border-border rounded px-1 py-0.5 bg-background w-[120px]"
+                              value={expiryInput}
+                              onChange={(e) => setExpiryInput(e.target.value)}
+                            />
+                            <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => handleExpirySave(u._id)}>
+                              <CheckCircle className="w-3.5 h-3.5 text-green-600" />
+                            </Button>
+                            <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => setEditingExpiry(null)}>
+                              <AlertCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                            </Button>
+                          </div>
+                        ) : u.subscriptionExpiresAt ? (
+                          <button
+                            className={`text-xs ${u.subscriptionExpiresAt < Date.now() ? 'text-destructive' : 'text-muted-foreground'} hover:underline`}
+                            onClick={() => {
+                              setEditingExpiry(u._id);
+                              setExpiryInput(toDateInput(u.subscriptionExpiresAt!));
+                            }}
+                          >
+                            {formatDate(u.subscriptionExpiresAt)}
+                            {u.subscriptionExpiresAt < Date.now() && ' (истёк)'}
+                          </button>
                         ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
+                          <button
+                            className="text-xs text-primary hover:underline"
+                            onClick={() => {
+                              setEditingExpiry(u._id);
+                              setExpiryInput(toDateInput(Date.now() + 30 * 24 * 60 * 60 * 1000));
+                            }}
+                          >
+                            задать
+                          </button>
                         )}
                       </td>
                       <td className="py-3 pr-4 hidden sm:table-cell">
@@ -327,6 +341,19 @@ function AdminDashboard() {
                       </td>
                       <td className="py-3 pr-4 hidden md:table-cell text-muted-foreground">
                         {formatDate(u.createdAt)}
+                      </td>
+                      <td className="py-3 pr-4 hidden sm:table-cell">
+                        <button
+                          className={`text-xs font-medium px-2 py-1 rounded ${
+                            u.isAdmin
+                              ? 'bg-primary/10 text-primary hover:bg-primary/20'
+                              : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                          } transition-colors`}
+                          disabled={togglingAdmin === u._id}
+                          onClick={() => handleToggleAdmin(u._id, u.isAdmin)}
+                        >
+                          {togglingAdmin === u._id ? '...' : u.isAdmin ? 'Да' : 'Нет'}
+                        </button>
                       </td>
                       <td className="py-3">
                         <select

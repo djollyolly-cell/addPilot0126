@@ -45,7 +45,7 @@ const ADMIN_EMAILS = ['13632013@vk.com', '786709647@vk.com'];
 export function Layout() {
   const { user, logout } = useAuth();
   const location = useLocation();
-  const isAdmin = user && ADMIN_EMAILS.includes(user.email);
+  const isAdmin = user && (user.isAdmin === true || ADMIN_EMAILS.includes(user.email));
 
   const navItems = [
     ...navigation,
