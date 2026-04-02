@@ -172,7 +172,7 @@ function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['us
               {user.subscriptionTier === 'freemium'
                 ? 'Больше кабинетов, правил и возможностей'
                 : user.subscriptionTier === 'start'
-                ? 'До 10 кабинетов, безлимитные правила, API'
+                ? 'Безлимит кабинетов, безлимитные правила, API'
                 : 'Посмотреть все тарифы и опции'}
             </p>
           </div>

@@ -21,9 +21,9 @@ export const TIERS = {
   pro: {
     name: "Pro",
     price: 2490,
-    accountsLimit: 10,
+    accountsLimit: -1, // unlimited
     rulesLimit: -1, // unlimited
-    features: ["10 рекламных кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
+    features: ["Безлимит кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
   },
 } as const;
 
@@ -614,7 +614,8 @@ export const updateLimitsOnDowngrade = internalMutation({
       .sort((a, b) => a.createdAt - b.createdAt);
 
     // Deactivate excess accounts (keep oldest ones active)
-    const accountsToDeactivate = activeAccounts.slice(newLimit);
+    // -1 means unlimited — no accounts to deactivate
+    const accountsToDeactivate = newLimit === -1 ? [] : activeAccounts.slice(newLimit);
     const deactivatedIds: string[] = [];
 
     for (const account of accountsToDeactivate) {
