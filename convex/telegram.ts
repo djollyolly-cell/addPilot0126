@@ -170,8 +170,114 @@ export function formatDelta(current: number, previous: number): string {
   return pct > 0 ? ` (↑${pct}%)` : ` (↓${Math.abs(pct)}%)`;
 }
 
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const abs = Math.abs(n) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return many;
+  if (last > 1 && last < 5) return few;
+  if (last === 1) return one;
+  return many;
+}
+
+/** Unified digest message formatter for daily/weekly/monthly */
+export function formatDigestMessage(
+  type: "daily" | "weekly" | "monthly",
+  data: DigestData,
+  periodStr: string,
+  prevPeriodStr?: string,
+): string {
+  const lines: string[] = [];
+
+  // Header
+  if (type === "daily") {
+    lines.push(`📊 <b>Дайджест за ${periodStr}</b>`);
+  } else if (type === "weekly") {
+    lines.push(`📊 <b>Сводка за неделю (${periodStr})</b>`);
+  } else {
+    lines.push(`📅 <b>Отчёт за ${periodStr}</b>`);
+  }
+
+  // Comparison header for weekly/monthly
+  if (type !== "daily" && data.prevTotals && prevPeriodStr) {
+    if (type === "weekly") {
+      lines.push(`📉 Сравнение с прошлой неделей (${prevPeriodStr})`);
+    } else {
+      lines.push(`📉 Сравнение с ${prevPeriodStr}`);
+    }
+  }
+
+  lines.push("");
+
+  // Per-account blocks
+  for (const account of data.accounts) {
+    lines.push(`📋 <b>${account.name}:</b>`);
+
+    const m = account.metrics;
+    const p = account.prevMetrics;
+    const showDelta = type !== "daily" && !!p;
+
+    lines.push(`📈 Показы: ${m.impressions.toLocaleString("ru-RU")}${showDelta ? formatDelta(m.impressions, p!.impressions) : ""} | 👆 Клики: ${m.clicks.toLocaleString("ru-RU")}${showDelta ? formatDelta(m.clicks, p!.clicks) : ""}`);
+    lines.push(`💰 Расход: ${m.spent.toLocaleString("ru-RU")}₽${showDelta ? formatDelta(m.spent, p!.spent) : ""}`);
+
+    if (m.leads > 0) {
+      lines.push(`🎯 Лиды: ${m.leads} | CPL: ${m.cpl}₽${showDelta && p!.cpl > 0 ? formatDelta(m.cpl, p!.cpl) : ""}`);
+    }
+    if (m.subscriptions > 0) {
+      lines.push(`👥 Подписки: ${m.subscriptions} | Стоимость: ${m.costPerSub}₽${showDelta && p!.costPerSub > 0 ? formatDelta(m.costPerSub, p!.costPerSub) : ""}`);
+    }
+
+    lines.push("");
+
+    // Rule events
+    if (account.ruleEvents.length > 0) {
+      const totalEvents = account.ruleEvents.reduce((s, e) => s + e.count, 0);
+      lines.push(`⚙️ Правила: сработало ${totalEvents} ${pluralRu(totalEvents, "раз", "раза", "раз")}`);
+      for (const event of account.ruleEvents) {
+        lines.push(`• ${event.ruleName} — ${event.count} ${pluralRu(event.count, "раз", "раза", "раз")}`);
+      }
+      if (account.savedAmount > 0) {
+        lines.push(`✅ Сэкономлено: ~${account.savedAmount.toLocaleString("ru-RU")}₽`);
+      }
+    } else {
+      lines.push("✅ Правила не сработали");
+    }
+
+    lines.push("");
+  }
+
+  // Totals
+  const t = data.totals;
+  const pt = data.prevTotals;
+  const showTotalDelta = type !== "daily" && !!pt;
+
+  let totalsLine = `<b>Итого:</b> расход ${t.spent.toLocaleString("ru-RU")}₽${showTotalDelta ? formatDelta(t.spent, pt!.spent) : ""}`;
+  if (t.leads > 0) totalsLine += `, лиды ${t.leads}`;
+  if (t.subscriptions > 0) totalsLine += `, подписки ${t.subscriptions}`;
+
+  lines.push(totalsLine);
+
+  return lines.join("\n");
+}
+
+/** Split long Telegram message into chunks (max 4096 chars) */
+export function splitTelegramMessage(text: string, maxLen = 4096): string[] {
+  if (text.length <= maxLen) return [text];
+  const messages: string[] = [];
+  let current = "";
+  for (const line of text.split("\n")) {
+    if ((current + "\n" + line).length > maxLen && current.length > 0) {
+      messages.push(current);
+      current = line;
+    } else {
+      current = current ? current + "\n" + line : line;
+    }
+  }
+  if (current) messages.push(current);
+  return messages;
+}
+
 /**
- * Format daily digest message.
+ * Format daily digest message (LEGACY — will be removed in cleanup).
  * Always sends — even without rule events, shows metrics summary.
  */
 export function formatDailyDigest(
