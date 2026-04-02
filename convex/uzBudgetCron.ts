@@ -37,21 +37,27 @@ export const resetBudgets = internalAction({
         const settings = await ctx.runQuery(internal.uzBudgetCron.getUserTimezone, {
           userId: rule.userId,
         });
-        const tz = settings?.timezone || "UTC";
+        const tz = settings?.timezone || "Europe/Moscow";
 
         // Check: is it 00:00-00:29 in user's timezone?
+        // Use Intl.DateTimeFormat.formatToParts() — reliable on Convex runtime
         const now = new Date();
-        const userTime = new Date(now.toLocaleString("en-US", { timeZone: tz }));
-        const hour = userTime.getHours();
-        const minute = userTime.getMinutes();
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: tz,
+          hour: "numeric",
+          minute: "numeric",
+          hour12: false,
+        });
+        const parts = formatter.formatToParts(now);
+        const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "-1", 10);
+        const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "-1", 10);
 
         // Cron runs every 30 min → catch window 00:00-00:29
         if (hour !== 0 || minute >= 30) continue;
 
-        // Check if already reset today (compute UTC boundaries of user's local day)
-        const tzOffset = userTime.getTime() - now.getTime(); // ms offset from UTC
-        const userMidnight = new Date(userTime.getFullYear(), userTime.getMonth(), userTime.getDate());
-        const dayStartUtc = userMidnight.getTime() - tzOffset;
+        // Check if already reset today
+        // Since hour=0 and minute is 0-29, user's midnight was ~minute minutes ago
+        const dayStartUtc = now.getTime() - minute * 60 * 1000;
         const dayEndUtc = dayStartUtc + 24 * 60 * 60 * 1000;
         const alreadyReset = await ctx.runQuery(
           internal.uzBudgetCron.hasResetToday,
