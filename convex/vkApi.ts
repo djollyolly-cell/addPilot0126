@@ -1143,7 +1143,7 @@ export const debugUzData = action({
     // Fetch packages, campaigns, and ad_groups
     const packagesRes = await callMtApi<{ items: Array<{ id: number; name: string }> }>(
       "packages.json", accessToken,
-      { fields: "id,name", limit: "200" }
+      { fields: "id,name", limit: "50" }
     );
     const campaignsRes = await callMtApi<{ items: Array<{ id: number; name: string; status: string; package_id?: number; budget_limit_day?: string }>; count: number }>(
       "campaigns.json", accessToken,
