@@ -826,16 +826,12 @@ export const getCampaignTypeMap = internalAction({
     }
 
     try {
-      // Fetch packages (max 50 per request) and ad_groups (max 250) sequentially
-      // to avoid Convex dangling promise issues with parallel fetches
+      // Use campaigns.json which returns campaign id + package_id directly.
+      // campaign.id matches banner.campaign_id stored in metricsDaily.campaignId.
+      // packages.json provides package names for keyword-based classification.
       const packagesRes = await callMtApi<{ items: { id: number; name: string }[] }>(
         "packages.json", args.accessToken,
         { fields: "id,name", limit: "50" }
-      );
-
-      const adGroupsRes = await callMtApi<{ items: { id: number; ad_plan_id: number; package_id: number }[] }>(
-        "ad_groups.json", args.accessToken,
-        { fields: "id,ad_plan_id,package_id", limit: "250" }
       );
 
       const packageNameMap = new Map<number, string>();
@@ -843,21 +839,25 @@ export const getCampaignTypeMap = internalAction({
         packageNameMap.set(pkg.id, pkg.name);
       }
 
-      // Build ad_plan_id → package_id (first group wins)
-      const planPackageMap = new Map<number, number>();
-      for (const group of adGroupsRes.items || []) {
-        if (!planPackageMap.has(group.ad_plan_id)) {
-          planPackageMap.set(group.ad_plan_id, group.package_id);
-        }
-      }
-
+      // Fetch all campaigns with pagination (campaigns.json has no documented limit cap)
       const result: Array<{ campaignId: string; type: string }> = [];
-      for (const [planId, packageId] of planPackageMap) {
-        const packageName = packageNameMap.get(packageId) || "";
-        result.push({
-          campaignId: String(planId),
-          type: isSubscription(packageName) ? "subscription" : "lead",
-        });
+      let offset = 0;
+      const LIMIT = 50;
+      while (true) {
+        const campaignsRes = await callMtApi<{ items: { id: number; package_id: number }[] }>(
+          "campaigns.json", args.accessToken,
+          { fields: "id,package_id", limit: String(LIMIT), offset: String(offset) }
+        );
+        const items = campaignsRes.items || [];
+        for (const c of items) {
+          const packageName = packageNameMap.get(c.package_id) || "";
+          result.push({
+            campaignId: String(c.id),
+            type: isSubscription(packageName) ? "subscription" : "lead",
+          });
+        }
+        if (items.length < LIMIT) break;
+        offset += LIMIT;
       }
 
       return result;
