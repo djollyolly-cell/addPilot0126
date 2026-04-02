@@ -2,7 +2,7 @@ import { v } from "convex/values";
 import { action, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 
-const ADMIN_EMAILS = ["13632013@vk.com"];
+const ADMIN_EMAILS = ["13632013@vk.com", "786709647@vk.com"];
 
 // Helper: validate session and check admin access
 async function assertAdmin(ctx: any, sessionToken: string) {

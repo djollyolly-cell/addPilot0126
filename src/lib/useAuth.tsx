@@ -19,7 +19,7 @@ interface EmailLoginResult {
   error?: string;
 }
 
-const ADMIN_EMAILS = ['13632013@vk.com'];
+const ADMIN_EMAILS = ['13632013@vk.com', '786709647@vk.com'];
 
 interface AuthContextType {
   user: User | null;
