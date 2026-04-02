@@ -79,6 +79,13 @@ interface ReportData {
   dateTo: string;
 }
 
+const campaignStatusFilterOptions = [
+  { value: 'all', label: 'Все' },
+  { value: 'active', label: 'Активные' },
+  { value: 'blocked', label: 'Заблокированные' },
+  { value: 'deleted', label: 'Удалённые' },
+];
+
 // ─── Helpers ────────────────────────────────────────────────────────
 
 function todayStr(): string {
@@ -151,6 +158,9 @@ export function ReportsPage() {
   const [error, setError] = useState<string | null>(null);
   const [report, setReport] = useState<ReportData | null>(null);
 
+  // Campaign status filter
+  const [campaignStatusFilter, setCampaignStatusFilter] = useState('all');
+
   // Expanded state per level
   const [expandedAccounts, setExpandedAccounts] = useState<Set<number>>(new Set());
   const [expandedCampaigns, setExpandedCampaigns] = useState<Set<number>>(new Set());
@@ -190,9 +200,42 @@ export function ReportsPage() {
     });
   };
 
-  // Totals
-  const totals = report
-    ? report.accounts.reduce(
+  // All campaigns (for filter counts)
+  const allCampaigns = report
+    ? report.accounts.flatMap((a) => a.campaigns)
+    : [];
+
+  // Filtered report: filter campaigns per account, recalculate account totals
+  const filteredReport: ReportData | null = report
+    ? {
+        ...report,
+        accounts: report.accounts
+          .map((account) => {
+            const filteredCampaigns = campaignStatusFilter === 'all'
+              ? account.campaigns
+              : account.campaigns.filter((c) => c.status === campaignStatusFilter);
+            return {
+              ...account,
+              campaigns: filteredCampaigns,
+              impressions: filteredCampaigns.reduce((s, c) => s + c.impressions, 0),
+              clicks: filteredCampaigns.reduce((s, c) => s + c.clicks, 0),
+              spent: filteredCampaigns.reduce((s, c) => s + c.spent, 0),
+              leads: filteredCampaigns.reduce((s, c) => s + c.leads, 0),
+              ctr: filteredCampaigns.reduce((s, c) => s + c.impressions, 0) > 0
+                ? (filteredCampaigns.reduce((s, c) => s + c.clicks, 0) / filteredCampaigns.reduce((s, c) => s + c.impressions, 0)) * 100
+                : 0,
+              cpl: filteredCampaigns.reduce((s, c) => s + c.leads, 0) > 0
+                ? filteredCampaigns.reduce((s, c) => s + c.spent, 0) / filteredCampaigns.reduce((s, c) => s + c.leads, 0)
+                : 0,
+            };
+          })
+          .filter((a) => a.campaigns.length > 0),
+      }
+    : null;
+
+  // Filtered totals
+  const filteredTotals = filteredReport
+    ? filteredReport.accounts.reduce(
         (acc, a) => ({
           campaigns: acc.campaigns + a.campaigns.length,
           groups: acc.groups + a.campaigns.reduce((s, c) => s + c.groups.length, 0),
@@ -278,23 +321,23 @@ export function ReportsPage() {
       )}
 
       {/* Summary cards */}
-      {totals && (
+      {filteredTotals && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <SummaryCard label="Кампаний" value={String(totals.campaigns)} />
-          <SummaryCard label="Показы" value={formatNumber(totals.impressions)} />
-          <SummaryCard label="Клики" value={formatNumber(totals.clicks)} />
-          <SummaryCard label="Расход" value={formatCurrency(totals.spent)} />
-          <SummaryCard label="Результаты" value={formatNumber(totals.leads)} />
+          <SummaryCard label="Кампаний" value={String(filteredTotals.campaigns)} />
+          <SummaryCard label="Показы" value={formatNumber(filteredTotals.impressions)} />
+          <SummaryCard label="Клики" value={formatNumber(filteredTotals.clicks)} />
+          <SummaryCard label="Расход" value={formatCurrency(filteredTotals.spent)} />
+          <SummaryCard label="Результаты" value={formatNumber(filteredTotals.leads)} />
         </div>
       )}
 
       {/* Report table */}
-      {report && (
+      {filteredReport && (
         <Card>
           <CardHeader>
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg">
-                Статистика за {report.dateFrom} — {report.dateTo}
+                Статистика за {filteredReport.dateFrom} — {filteredReport.dateTo}
               </CardTitle>
               <div className="flex gap-1">
                 <Button
@@ -325,11 +368,37 @@ export function ReportsPage() {
                 </Button>
               </div>
             </div>
+            {/* Campaign status filter */}
+            <div className="flex items-center gap-1.5 mt-3" data-testid="campaign-status-filter">
+              {campaignStatusFilterOptions.map((opt) => {
+                const count = opt.value === 'all'
+                  ? allCampaigns.length
+                  : allCampaigns.filter((c) => c.status === opt.value).length;
+                if (count === 0 && opt.value !== 'all') return null;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setCampaignStatusFilter(opt.value)}
+                    className={cn(
+                      'text-xs px-2.5 py-1 rounded-full transition-colors',
+                      campaignStatusFilter === opt.value
+                        ? 'bg-primary text-primary-foreground'
+                        : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                    )}
+                  >
+                    {opt.label} ({count})
+                  </button>
+                );
+              })}
+            </div>
           </CardHeader>
           <CardContent>
-            {report.accounts.length === 0 ? (
+            {filteredReport.accounts.length === 0 ? (
               <p className="text-sm text-muted-foreground py-8 text-center">
-                Нет данных за выбранный период
+                {campaignStatusFilter === 'all'
+                  ? 'Нет данных за выбранный период'
+                  : 'Нет кампаний с таким статусом'}
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -347,7 +416,7 @@ export function ReportsPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {report.accounts.map((account) => (
+                    {filteredReport.accounts.map((account) => (
                       <AccountSection
                         key={account.id}
                         account={account}
@@ -360,19 +429,19 @@ export function ReportsPage() {
                       />
                     ))}
                     {/* Totals */}
-                    {totals && (
+                    {filteredTotals && (
                       <tr className="border-t-2 font-semibold">
                         <td className="py-3 pl-4">Итого</td>
                         <td />
-                        <td className="py-3 text-right">{formatNumber(totals.impressions)}</td>
-                        <td className="py-3 text-right">{formatNumber(totals.clicks)}</td>
+                        <td className="py-3 text-right">{formatNumber(filteredTotals.impressions)}</td>
+                        <td className="py-3 text-right">{formatNumber(filteredTotals.clicks)}</td>
                         <td className="py-3 text-right">
-                          {totals.impressions > 0 ? formatPercent((totals.clicks / totals.impressions) * 100) : '—'}
+                          {filteredTotals.impressions > 0 ? formatPercent((filteredTotals.clicks / filteredTotals.impressions) * 100) : '—'}
                         </td>
-                        <td className="py-3 text-right">{formatCurrency(totals.spent)}</td>
-                        <td className="py-3 text-right">{formatNumber(totals.leads)}</td>
+                        <td className="py-3 text-right">{formatCurrency(filteredTotals.spent)}</td>
+                        <td className="py-3 text-right">{formatNumber(filteredTotals.leads)}</td>
                         <td className="py-3 text-right">
-                          {totals.leads > 0 ? formatCurrency(totals.spent / totals.leads) : '—'}
+                          {filteredTotals.leads > 0 ? formatCurrency(filteredTotals.spent / filteredTotals.leads) : '—'}
                         </td>
                       </tr>
                     )}
