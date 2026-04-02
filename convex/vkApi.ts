@@ -1294,10 +1294,10 @@ export const fetchUzCampaigns = action({
       offset += LIMIT;
     }
 
-    // Filter out deleted campaigns
-    const active = allItems.filter((c) => c.status !== "deleted");
+    // Show only active and blocked (budget-exhausted) campaigns — rule manages these
+    const relevant = allItems.filter((c) => c.status === "active" || c.status === "blocked");
 
-    return active.map((c) => ({
+    return relevant.map((c) => ({
       id: String(c.id),
       name: c.name,
       status: c.status,

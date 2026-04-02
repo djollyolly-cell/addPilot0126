@@ -174,9 +174,9 @@ function UzAccountNode({ account, value, onChange }: {
                   )}
                   <span className={cn(
                     'text-[10px] shrink-0',
-                    c.status === 'active' ? 'text-green-600' : 'text-muted-foreground'
+                    c.status === 'active' ? 'text-green-600' : 'text-amber-500'
                   )}>
-                    {c.status === 'active' ? 'Активна' : c.status}
+                    {c.status === 'active' ? 'Активна' : c.status === 'blocked' ? 'Приостановлена' : c.status}
                   </span>
                 </div>
               );

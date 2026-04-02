@@ -593,25 +593,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
           />
         </div>
 
-        {/* Target tree selector — moved up for discoverability */}
-        <div>
-          <label className="block text-sm font-medium mb-2">Применить к кабинету</label>
-          <TargetTreeSelector
-            userId={userId}
-            value={targets}
-            onChange={setTargets}
-            ruleType={type}
-          />
-          {targets.accountIds.length > 0 && (
-            <p className="text-xs text-muted-foreground mt-1">
-              {targets.accountIds.length} кабинет(ов)
-              {targets.campaignIds.length > 0 && `, ${targets.campaignIds.length} кампаний`}
-              {targets.adIds.length > 0 && `, ${targets.adIds.length} объявлений`}
-            </p>
-          )}
-        </div>
-
-        {/* Condition builder */}
+        {/* Condition builder — first pick rule type, then targets */}
         <div data-testid="condition-builder" className="space-y-3">
           <label className="block text-sm font-medium">Условие</label>
 
@@ -783,6 +765,24 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
             </div>
           </div>
         )}
+
+        {/* Target tree selector — after rule type for logical flow */}
+        <div>
+          <label className="block text-sm font-medium mb-2">Применить к кабинету</label>
+          <TargetTreeSelector
+            userId={userId}
+            value={targets}
+            onChange={setTargets}
+            ruleType={type}
+          />
+          {targets.accountIds.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-1">
+              {targets.accountIds.length} кабинет(ов)
+              {targets.campaignIds.length > 0 && `, ${targets.campaignIds.length} кампаний`}
+              {targets.adIds.length > 0 && `, ${targets.adIds.length} объявлений`}
+            </p>
+          )}
+        </div>
 
         {/* Action radio (hidden for uz_budget_manage — it manages budgets, not stops ads) */}
         {type !== 'uz_budget_manage' && (
