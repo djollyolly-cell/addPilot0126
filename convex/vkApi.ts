@@ -1069,16 +1069,25 @@ export const getCampaignsForAccount = internalAction({
     packageId: v.optional(v.number()),
   },
   handler: async (_, args): Promise<MtCampaign[]> => {
-    const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
-      "campaigns.json",
-      args.accessToken,
-      { fields: "id,name,status,package_id,budget_limit_day" }
-    );
-    const campaigns = data.items || [];
-    if (args.packageId !== undefined) {
-      return campaigns.filter((c) => c.package_id === args.packageId);
+    // Paginate through all campaigns (API default limit is ~20)
+    const allCampaigns: MtCampaign[] = [];
+    let offset = 0;
+    const LIMIT = 250;
+    while (true) {
+      const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
+        "campaigns.json",
+        args.accessToken,
+        { fields: "id,name,status,package_id,budget_limit_day", limit: String(LIMIT), offset: String(offset) }
+      );
+      const items = data.items || [];
+      allCampaigns.push(...items);
+      if (items.length < LIMIT) break;
+      offset += LIMIT;
     }
-    return campaigns;
+    if (args.packageId !== undefined) {
+      return allCampaigns.filter((c) => c.package_id === args.packageId);
+    }
+    return allCampaigns;
   },
 });
 
