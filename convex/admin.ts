@@ -50,6 +50,15 @@ export const listUsers = query({
           .withIndex("by_userId", (q) => q.eq("userId", user._id))
           .collect();
 
+        // Last completed payment with promo code
+        const payments = await ctx.db
+          .query("payments")
+          .withIndex("by_userId", (q) => q.eq("userId", user._id))
+          .collect();
+        const lastPayment = payments
+          .filter((p) => p.status === "completed")
+          .sort((a, b) => (b.completedAt || b.createdAt) - (a.completedAt || a.createdAt))[0];
+
         return {
           _id: user._id,
           email: user.email,
@@ -61,6 +70,8 @@ export const listUsers = query({
           accountsCount: accounts.length,
           rulesCount: rules.length,
           logsCount: logs.length,
+          lastPromoCode: lastPayment?.promoCode || null,
+          lastBonusDays: lastPayment?.bonusDays || null,
         };
       })
     );
@@ -176,6 +187,27 @@ export const updateUserTier = mutation({
     });
 
     return { success: true, previousTier: oldTier, newTier: args.tier };
+  },
+});
+
+// Update user subscription expiry date (admin)
+export const updateUserExpiry = mutation({
+  args: {
+    sessionToken: v.string(),
+    userId: v.id("users"),
+    expiresAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("User not found");
+
+    await ctx.db.patch(args.userId, {
+      subscriptionExpiresAt: args.expiresAt,
+      updatedAt: Date.now(),
+    });
+
+    return { success: true };
   },
 });
 

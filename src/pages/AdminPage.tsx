@@ -68,10 +68,13 @@ function AdminDashboard() {
   const stats = useQuery(api.admin.getStats, { sessionToken });
   const users = useQuery(api.admin.listUsers, { sessionToken });
   const updateTier = useMutation(api.admin.updateUserTier);
+  const updateExpiry = useMutation(api.admin.updateUserExpiry);
 
   const [search, setSearch] = useState('');
   const [tierFilter, setTierFilter] = useState<string>('all');
   const [changingTier, setChangingTier] = useState<string | null>(null);
+  const [editingExpiry, setEditingExpiry] = useState<string | null>(null);
+  const [expiryInput, setExpiryInput] = useState('');
 
   const filteredUsers = users
     ?.filter((u) => {
@@ -97,6 +100,23 @@ function AdminDashboard() {
     } finally {
       setChangingTier(null);
     }
+  };
+
+  const handleExpirySave = async (userId: string) => {
+    if (!expiryInput) {
+      // Clear expiry
+      await updateExpiry({ sessionToken, userId: userId as Id<'users'>, expiresAt: undefined });
+    } else {
+      const ts = new Date(expiryInput + 'T23:59:59').getTime();
+      await updateExpiry({ sessionToken, userId: userId as Id<'users'>, expiresAt: ts });
+    }
+    setEditingExpiry(null);
+    setExpiryInput('');
+  };
+
+  const toDateInput = (ts: number) => {
+    const d = new Date(ts);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
   const formatDate = (ts: number) => {
@@ -224,8 +244,9 @@ function AdminDashboard() {
                   <tr className="border-b border-border text-left">
                     <th className="pb-3 font-medium text-muted-foreground">Имя / Email</th>
                     <th className="pb-3 font-medium text-muted-foreground">Тариф</th>
+                    <th className="pb-3 font-medium text-muted-foreground">Доступ до</th>
+                    <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Промо</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Кабинеты</th>
-                    <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Правила</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Telegram</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Дата рег.</th>
                     <th className="pb-3 font-medium text-muted-foreground">Действия</th>
@@ -243,8 +264,50 @@ function AdminDashboard() {
                           {TIER_LABELS[u.subscriptionTier ?? "freemium"]}
                         </Badge>
                       </td>
+                      <td className="py-3 pr-4">
+                        {u.subscriptionTier !== 'freemium' && u.subscriptionExpiresAt ? (
+                          editingExpiry === u._id ? (
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="date"
+                                className="text-xs border border-border rounded px-1 py-0.5 bg-background w-[120px]"
+                                value={expiryInput}
+                                onChange={(e) => setExpiryInput(e.target.value)}
+                              />
+                              <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => handleExpirySave(u._id)}>
+                                <CheckCircle className="w-3.5 h-3.5 text-green-600" />
+                              </Button>
+                              <Button size="sm" variant="ghost" className="h-6 px-1" onClick={() => setEditingExpiry(null)}>
+                                <AlertCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <button
+                              className={`text-xs ${u.subscriptionExpiresAt < Date.now() ? 'text-destructive' : 'text-muted-foreground'} hover:underline`}
+                              onClick={() => {
+                                setEditingExpiry(u._id);
+                                setExpiryInput(toDateInput(u.subscriptionExpiresAt!));
+                              }}
+                            >
+                              {formatDate(u.subscriptionExpiresAt)}
+                              {u.subscriptionExpiresAt < Date.now() && ' (истёк)'}
+                            </button>
+                          )
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="py-3 pr-4 hidden sm:table-cell">
+                        {u.lastPromoCode ? (
+                          <span className="text-xs font-mono">
+                            {u.lastPromoCode}
+                            {u.lastBonusDays ? <span className="text-muted-foreground"> +{u.lastBonusDays}д</span> : null}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                      </td>
                       <td className="py-3 pr-4 hidden sm:table-cell">{u.accountsCount}</td>
-                      <td className="py-3 pr-4 hidden sm:table-cell">{u.rulesCount}</td>
                       <td className="py-3 pr-4 hidden md:table-cell">
                         {u.telegramChatId ? (
                           <Badge variant="success">Да</Badge>
