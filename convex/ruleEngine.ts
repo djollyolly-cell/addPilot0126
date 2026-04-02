@@ -1516,9 +1516,14 @@ export const hasRecentBudgetIncrease = internalQuery({
     ruleId: v.id("rules"),
     campaignId: v.string(),
     withinMs: v.number(),
+    currentSpent: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    const since = Date.now() - args.withinMs;
+    // Find the most recent successful budget increase for this campaign today
+    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    const mskMidnight = new Date(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate());
+    const dayStartUtc = mskMidnight.getTime() - 3 * 60 * 60 * 1000;
+
     const logs = await ctx.db
       .query("actionLogs")
       .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
@@ -1526,12 +1531,31 @@ export const hasRecentBudgetIncrease = internalQuery({
         q.and(
           q.eq(q.field("actionType"), "budget_increased"),
           q.eq(q.field("adId"), args.campaignId),
-          q.gte(q.field("createdAt"), since),
+          q.gte(q.field("createdAt"), dayStartUtc),
           q.eq(q.field("status"), "success")
         )
       )
-      .first();
-    return logs !== null;
+      .collect();
+
+    if (logs.length === 0) return false;
+
+    // Get the most recent log
+    const lastLog = logs.sort((a, b) => b.createdAt - a.createdAt)[0];
+
+    // If currentSpent is provided, only skip if spent hasn't grown since last increase
+    // This prevents repeated triggers when budget was already increased but not yet consumed
+    if (args.currentSpent !== undefined && lastLog.metricsSnapshot) {
+      const spentAtLastIncrease = lastLog.metricsSnapshot.spent ?? 0;
+      // Allow new increase only if campaign spent more since the last increase
+      if (args.currentSpent <= spentAtLastIncrease) {
+        return true; // spent didn't grow — skip
+      }
+      return false; // spent grew — allow new increase
+    }
+
+    // Fallback: use time-based dedup
+    const since = Date.now() - args.withinMs;
+    return lastLog.createdAt >= since;
   },
 });
 
@@ -1671,10 +1695,10 @@ export const checkUzBudgetRules = internalAction({
             // Works for both status:"blocked" and status:"active"+delivery:"not_delivering"
             if (spentToday < dailyLimitRubles * 0.95) continue;
 
-            // Dedup: skip if budget was increased within last 5 minutes
+            // Dedup: skip if budget was already increased and spent hasn't grown since
             const recentIncrease = await ctx.runQuery(
               internal.ruleEngine.hasRecentBudgetIncrease,
-              { ruleId: rule._id, campaignId: String(campaign.id), withinMs: 5 * 60 * 1000 }
+              { ruleId: rule._id, campaignId: String(campaign.id), withinMs: 5 * 60 * 1000, currentSpent: spentToday }
             );
             if (recentIncrease) continue;
 
