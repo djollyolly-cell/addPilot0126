@@ -247,8 +247,8 @@ async function fetchAllData(
   dateFrom: string,
   dateTo: string
 ) {
-  // Fetch ad_plans (VK campaigns), ad_groups (VK groups), banners (VK ads) in parallel
-  const [adPlansData, adGroupsData] = await Promise.all([
+  // Fetch ad_plans (VK campaigns), ad_groups (VK groups), banners (VK ads), packages in parallel
+  const [adPlansData, adGroupsData, packagesData] = await Promise.all([
     callMtApi<{ items: MtAdPlanRaw[]; count: number }>(
       "ad_plans.json", accessToken,
       { fields: "id,name,status,objective,budget_limit,budget_limit_day", limit: "250" }
@@ -257,10 +257,26 @@ async function fetchAllData(
       "ad_groups.json", accessToken,
       { fields: "id,name,status,ad_plan_id,package_id,budget_limit,budget_limit_day", limit: "250" }
     ),
+    callMtApi<{ items: { id: number; name: string }[] }>(
+      "packages.json", accessToken,
+      { fields: "id,name", limit: "200" }
+    ),
   ]);
 
   const adPlans = adPlansData.items || [];
   const adGroups = adGroupsData.items || [];
+
+  // Build package_id → name mapping for objective resolution
+  const packageMap = new Map<number, string>();
+  for (const pkg of packagesData.items || []) {
+    packageMap.set(pkg.id, pkg.name);
+  }
+
+  // Log package mapping for diagnostics
+  const uniquePackageIds = [...new Set(adGroups.map((g) => g.package_id))];
+  console.log("[reports] Package mapping for active groups:",
+    uniquePackageIds.map((id) => `${id}=${packageMap.get(id) || "unknown"}`).join(", ")
+  );
 
   // Fetch banners with pagination
   let banners: MtBannerRaw[] = [];
@@ -319,7 +335,7 @@ async function fetchAllData(
     bannerStatsMap.set(item.id, item.rows || []);
   }
 
-  return { adPlans, adGroups, banners, adPlanStatsMap, adGroupStatsMap, bannerStatsMap, leadCounts };
+  return { adPlans, adGroups, banners, adPlanStatsMap, adGroupStatsMap, bannerStatsMap, leadCounts, packageMap };
 }
 
 // ─── Build 4-level report ────────────────────────────────────────────
@@ -331,7 +347,8 @@ function buildReport(
   adPlanStatsMap: Map<number, MtStatRow[]>,
   adGroupStatsMap: Map<number, MtStatRow[]>,
   bannerStatsMap: Map<number, MtStatRow[]>,
-  leadCounts: Record<string, number>
+  leadCounts: Record<string, number>,
+  packageMap?: Map<number, string>
 ): CampaignReport[] {
   // adGroupId → banners
   const groupBannersMap = new Map<number, MtBannerRaw[]>();
@@ -418,12 +435,21 @@ function buildReport(
     const planLeads = Math.max(planAgg.leads, planLeadsFromGroups);
     const planDerived = computeDerived({ ...planAgg, leads: planLeads });
 
+    // Determine objective label: prefer package name from first group (more specific)
+    // e.g. "Подписка на сообщество" instead of generic "Отправка сообщений"
+    const planGroups = planGroupsMap.get(plan.id) || [];
+    const firstGroupPackageId = planGroups.length > 0 ? planGroups[0].package_id : undefined;
+    const packageName = firstGroupPackageId !== undefined && packageMap
+      ? packageMap.get(firstGroupPackageId)
+      : undefined;
+    const resolvedObjectiveLabel = packageName || getObjectiveLabel(plan.objective || "");
+
     campaignReports.push({
       id: plan.id,
       name: plan.name,
       status: plan.status,
       objective: plan.objective || "",
-      objectiveLabel: getObjectiveLabel(plan.objective || ""),
+      objectiveLabel: resolvedObjectiveLabel,
       groups: groupReports,
       impressions: planAgg.impressions,
       clicks: planAgg.clicks,
@@ -467,7 +493,7 @@ async function buildAccountReport(
   const campaignReports = buildReport(
     data.adPlans, data.adGroups, data.banners,
     data.adPlanStatsMap, data.adGroupStatsMap, data.bannerStatsMap,
-    data.leadCounts
+    data.leadCounts, data.packageMap
   );
 
   const impressions = campaignReports.reduce((s, c) => s + c.impressions, 0);
