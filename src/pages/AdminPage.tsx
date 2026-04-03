@@ -345,7 +345,7 @@ function AdminDashboard() {
                       <td className="py-3 pr-4 hidden md:table-cell">
                         {u.totalPaid > 0 ? (
                           <span className="text-xs font-medium text-green-600">
-                            {(u.totalPaid / 100).toFixed(2)} BYN
+                            {u.totalPaid.toFixed(2)} BYN
                           </span>
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
