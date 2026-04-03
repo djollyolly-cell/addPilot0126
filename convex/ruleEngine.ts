@@ -351,6 +351,7 @@ export const createActionLog = internalMutation({
       leads: v.number(),
       impressions: v.optional(v.number()),
       clicks: v.optional(v.number()),
+      newBudget: v.optional(v.number()),
     }),
     savedAmount: v.number(),
     status: v.union(
@@ -390,6 +391,7 @@ export const createActionLogPublic = mutation({
       leads: v.number(),
       impressions: v.optional(v.number()),
       clicks: v.optional(v.number()),
+      newBudget: v.optional(v.number()),
     }),
     savedAmount: v.number(),
     status: v.union(
@@ -1542,11 +1544,18 @@ export const hasRecentBudgetIncrease = internalQuery({
     // Get the most recent log
     const lastLog = logs.sort((a, b) => b.createdAt - a.createdAt)[0];
 
-    // If currentSpent is provided, only skip if spent hasn't grown since last increase
-    // This prevents repeated triggers when budget was already increased but not yet consumed
     if (args.currentSpent !== undefined && lastLog.metricsSnapshot) {
       const spentAtLastIncrease = lastLog.metricsSnapshot.spent ?? 0;
-      // Allow new increase only if campaign spent more since the last increase
+      const newBudgetAtLastIncrease = lastLog.metricsSnapshot.newBudget;
+
+      // If we know the budget that was set at last increase, check if campaign
+      // has spent through it (≥90%). This handles the case where budget was
+      // increased but campaign spent up to the new limit and paused again.
+      if (newBudgetAtLastIncrease && args.currentSpent >= newBudgetAtLastIncrease * 0.90) {
+        return false; // campaign consumed the new budget — allow next increase
+      }
+
+      // Otherwise, only skip if spent hasn't grown since last increase
       if (args.currentSpent <= spentAtLastIncrease) {
         return true; // spent didn't grow — skip
       }
@@ -1587,6 +1596,31 @@ export const isFirstBudgetIncreaseToday = internalQuery({
   },
 });
 
+/** Check if uncovered-paused notification was already sent today for this campaign */
+export const hasUncoveredNotificationToday = internalQuery({
+  args: {
+    ruleId: v.id("rules"),
+    campaignId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    const mskMidnight = new Date(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate());
+    const dayStartUtc = mskMidnight.getTime() - 3 * 60 * 60 * 1000;
+    const log = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("adId"), args.campaignId),
+          q.gte(q.field("createdAt"), dayStartUtc),
+          q.eq(q.field("errorMessage"), "uncovered_paused_notification")
+        )
+      )
+      .first();
+    return log !== null;
+  },
+});
+
 /** Log a budget action (increase or reset) */
 export const logBudgetAction = internalMutation({
   args: {
@@ -1617,6 +1651,7 @@ export const logBudgetAction = internalMutation({
       metricsSnapshot: {
         spent: args.spentToday ?? 0,
         leads: 0,
+        newBudget: args.newBudget,
       },
       savedAmount: 0,
       status: args.error ? ("failed" as const) : ("success" as const),
@@ -1801,6 +1836,51 @@ export const checkUzBudgetRules = internalAction({
                 spentToday,
                 error: err instanceof Error ? err.message : "Unknown error",
               });
+            }
+          }
+
+          // Detect paused campaigns NOT in the rule (uncovered)
+          if (rule.actions.notifyOnKeyEvents && targetIds.length > 0) {
+            const uncoveredPaused = allCampaigns.filter((c) => {
+              if (targetIds.includes(String(c.id))) return false;
+              if (c.status === "deleted") return false;
+              if (c.delivery !== "not_delivering") return false;
+              const limit = Number(c.budget_limit_day || "0");
+              return limit > 0;
+            });
+
+            for (const uc of uncoveredPaused) {
+              // Dedup: notify once per day per campaign
+              const alreadyNotified = await ctx.runQuery(
+                internal.ruleEngine.hasUncoveredNotificationToday,
+                { ruleId: rule._id, campaignId: String(uc.id) }
+              );
+              if (alreadyNotified) continue;
+
+              try {
+                await ctx.runAction(internal.telegram.sendBudgetNotification, {
+                  userId: rule.userId,
+                  type: "uncovered_paused" as const,
+                  campaignName: uc.name,
+                  currentBudget: Number(uc.budget_limit_day),
+                });
+                // Log to prevent repeat notifications today
+                await ctx.runMutation(internal.ruleEngine.createActionLog, {
+                  userId: rule.userId,
+                  ruleId: rule._id,
+                  accountId,
+                  adId: String(uc.id),
+                  adName: uc.name,
+                  actionType: "notified" as const,
+                  reason: `Группа приостановлена по дневному бюджету (${Number(uc.budget_limit_day)}₽), но не в правиле`,
+                  metricsSnapshot: { spent: 0, leads: 0 },
+                  savedAmount: 0,
+                  status: "success" as const,
+                  errorMessage: "uncovered_paused_notification",
+                });
+              } catch (notifErr) {
+                console.error(`[uz_budget] Failed to send uncovered notification:`, notifErr);
+              }
             }
           }
         }

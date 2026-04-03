@@ -191,6 +191,7 @@ export default defineSchema({
       leads: v.number(),
       impressions: v.optional(v.number()),
       clicks: v.optional(v.number()),
+      newBudget: v.optional(v.number()),
     }),
     savedAmount: v.number(),
     status: v.union(

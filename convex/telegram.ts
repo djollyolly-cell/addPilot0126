@@ -1604,7 +1604,7 @@ export const collectDigestData = internalAction({
       let leadSpent = 0, leadResults = 0;
       let msgSpent = 0, msgResults = 0;
       let subSpent = 0, subResults = 0;
-      let viewSpent = 0, viewResults = 0;
+      let viewResults = 0;
 
       for (const [planId, d] of byPlan) {
         if (!d.sp && !d.results) continue;
@@ -1621,7 +1621,7 @@ export const collectDigestData = internalAction({
         if (d.type === "lead") { leadSpent += d.sp; leadResults += d.results; }
         else if (d.type === "message") { msgSpent += d.sp; msgResults += d.results; }
         else if (d.type === "subscription") { subSpent += d.sp; subResults += d.results; }
-        else if (d.type === "awareness") { viewSpent += d.sp; viewResults += d.results; }
+        else if (d.type === "awareness") { viewResults += d.results; }
       }
 
       // Sort campaigns by spent descending
@@ -2100,7 +2100,8 @@ export const sendBudgetNotification = internalAction({
       v.literal("increase"),
       v.literal("first_increase"),
       v.literal("max_reached"),
-      v.literal("reset")
+      v.literal("reset"),
+      v.literal("uncovered_paused")
     ),
     campaignName: v.string(),
     oldBudget: v.optional(v.number()),
@@ -2128,6 +2129,9 @@ export const sendBudgetNotification = internalAction({
         break;
       case "reset":
         message = `🔄 <b>Бюджет сброшен</b>\nГруппа: ${args.campaignName}\nБюджет: ${args.newBudget}₽`;
+        break;
+      case "uncovered_paused":
+        message = `⚠️ <b>Группа «${args.campaignName}»</b> приостановлена по дневному бюджету (${args.currentBudget}₽), но не добавлена в правило увеличения бюджета.\n\nДобавьте её в правило, чтобы бюджет увеличивался автоматически.`;
         break;
     }
 
