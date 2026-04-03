@@ -187,8 +187,8 @@ function AdminDashboard() {
     return new Intl.NumberFormat('ru-RU', {
       style: 'currency',
       currency: 'BYN',
-      minimumFractionDigits: 0,
-    }).format(amount / 100);
+      minimumFractionDigits: 2,
+    }).format(amount);
   };
 
   return (
