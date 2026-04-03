@@ -1554,7 +1554,15 @@ export const hasRecentBudgetIncrease = internalQuery({
           return false; // campaign consumed the new budget — allow next increase
         }
         if (args.currentSpent <= spentAtLastIncrease) {
-          return true; // spent didn't grow — skip
+          // Spent didn't grow since last increase.
+          // Escape hatch: if >15 min passed and campaign is still stuck,
+          // allow retry (VK may have delayed auto-resume or resume failed).
+          const STUCK_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
+          const timeSinceIncrease = Date.now() - lastLog.createdAt;
+          if (timeSinceIncrease > STUCK_COOLDOWN_MS) {
+            return false; // allow retry — campaign may be stuck
+          }
+          return true; // too recent — skip
         }
         return false; // spent grew — allow new increase
       }
@@ -1723,8 +1731,8 @@ export const checkUzBudgetRules = internalAction({
             const dailyLimitRubles = Number(campaign.budget_limit_day || "0");
             if (dailyLimitRubles <= 0) continue; // No budget set — skip
 
-            // Skip deleted campaigns
-            if (campaign.status === "deleted") continue;
+            // Skip deleted/blocked campaigns (blocked = VK moderation, not budget)
+            if (campaign.status === "deleted" || campaign.status === "blocked") continue;
 
             // Get spent today
             const spentToday = await ctx.runQuery(
@@ -1784,14 +1792,18 @@ export const checkUzBudgetRules = internalAction({
                 { ruleId: rule._id, campaignId: String(campaign.id) }
               );
 
-              // Resume campaign after budget increase (separate try/catch — budget already set)
-              try {
-                await ctx.runAction(internal.vkApi.resumeCampaign, {
-                  accessToken,
-                  campaignId: campaign.id,
-                });
-              } catch (resumeErr) {
-                console.error(`[uz_budget] Budget set OK but resume failed for campaign ${campaign.id}:`, resumeErr);
+              // Resume campaign only if status is NOT "active" (e.g. "paused" by user).
+              // For budget-exhausted campaigns (status="active", delivery="not_delivering"),
+              // VK auto-resumes delivery when budget increases — no explicit resume needed.
+              if (campaign.status !== "active") {
+                try {
+                  await ctx.runAction(internal.vkApi.resumeCampaign, {
+                    accessToken,
+                    campaignId: campaign.id,
+                  });
+                } catch (resumeErr) {
+                  console.error(`[uz_budget] Budget set OK but resume failed for campaign ${campaign.id}:`, resumeErr);
+                }
               }
 
               // Log success (budget was increased regardless of resume result)
