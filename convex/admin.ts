@@ -92,6 +92,24 @@ export const listUsers = query({
   },
 });
 
+// TEMP: Bootstrap admin flags for hardcoded admin emails (remove after use)
+export const bootstrapAdmins = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const emails = ["13632013@vk.com", "786709647@vk.com"];
+    for (const email of emails) {
+      const user = await ctx.db
+        .query("users")
+        .withIndex("by_email", (q) => q.eq("email", email))
+        .first();
+      if (user) {
+        await ctx.db.patch(user._id, { isAdmin: true, updatedAt: Date.now() });
+      }
+    }
+    return { done: true };
+  },
+});
+
 // Toggle admin role for a user
 export const toggleAdmin = mutation({
   args: {
