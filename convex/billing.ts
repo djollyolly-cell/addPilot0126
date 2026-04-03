@@ -146,6 +146,8 @@ export const createBepaidCheckout = action({
     promoCode: v.optional(v.string()),
     returnUrl: v.string(),
     amountBYN: v.number(), // Price in BYN (calculated on frontend with NBRB rate)
+    isUpgrade: v.optional(v.boolean()),
+    creditAmount: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<BepaidCheckoutResult> => {
     const shopId = process.env.BEPAID_SHOP_ID;
@@ -227,6 +229,8 @@ export const createBepaidCheckout = action({
         amount: args.amountBYN,
         currency: "BYN",
         promoCode: args.promoCode,
+        isUpgrade: args.isUpgrade,
+        creditAmount: args.creditAmount,
       });
 
       return {
@@ -254,6 +258,8 @@ export const savePendingPayment = internalMutation({
     amount: v.number(),
     currency: v.string(),
     promoCode: v.optional(v.string()),
+    isUpgrade: v.optional(v.boolean()),
+    creditAmount: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     await ctx.db.insert("payments", {
@@ -264,6 +270,8 @@ export const savePendingPayment = internalMutation({
       amount: args.amount,
       currency: args.currency,
       promoCode: args.promoCode?.trim().toUpperCase(),
+      isUpgrade: args.isUpgrade,
+      creditAmount: args.creditAmount,
       status: "pending",
       createdAt: Date.now(),
     });
