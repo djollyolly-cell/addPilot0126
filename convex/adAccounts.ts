@@ -237,6 +237,17 @@ export const connect = mutation({
       createdAt: Date.now(),
     });
 
+    // First ad account connected — grant 3-day trial subscription
+    if (accounts.length === 0) {
+      const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
+      const currentExpiry = user.subscriptionExpiresAt ?? Date.now();
+      const baseTime = currentExpiry > Date.now() ? currentExpiry : Date.now();
+      await ctx.db.patch(args.userId, {
+        subscriptionExpiresAt: baseTime + THREE_DAYS_MS,
+        updatedAt: Date.now(),
+      });
+    }
+
     return accountId;
   },
 });
@@ -1061,13 +1072,36 @@ export const getSyncErrors = query({
   },
 });
 
-/** Get VK API status for user */
+/** Get VK API status for user — checks account-level tokens (used for sync) */
 export const getVkApiStatus = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
     if (!user) return { connected: false, expired: false };
 
+    // Check account-level tokens (these are what sync actually uses)
+    const accounts = await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    if (accounts.length > 0) {
+      const activeAccounts = accounts.filter((a) => a.status === "active");
+      const hasErrors = accounts.some((a) => a.status === "error");
+      const lastSync = accounts.reduce(
+        (max, a) => Math.max(max, a.lastSyncAt ?? 0),
+        0
+      );
+
+      return {
+        connected: true,
+        expired: activeAccounts.length === 0 && hasErrors,
+        tokenExpiresAt: user.vkAdsTokenExpiresAt,
+        lastSyncAt: lastSync || undefined,
+      };
+    }
+
+    // Fallback: no accounts — check user-level token
     const hasToken = !!user.vkAdsAccessToken;
     const expired = user.vkAdsTokenExpiresAt
       ? user.vkAdsTokenExpiresAt < Date.now()

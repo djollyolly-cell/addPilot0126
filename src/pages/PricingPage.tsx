@@ -202,8 +202,8 @@ export function PricingPage() {
       </div>
 
       <div className="mt-12 text-center text-sm text-muted-foreground">
-        <p>Все тарифы включают 7-дневный пробный период. Отмена в любой момент.</p>
-        <p className="mt-2">Вопросы? Напишите нам в Telegram: @adpilot_support</p>
+        <p>Все тарифы включают 3-дневный пробный период. Отмена в любой момент.</p>
+        <p className="mt-2">Вопросы? Напишите нам в Telegram: @Addpilot_bot</p>
       </div>
 
       {showPaymentModal && selectedTier && selectedTier !== 'freemium' && (
