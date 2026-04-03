@@ -325,6 +325,8 @@ export default defineSchema({
     errorMessage: v.optional(v.string()),
     createdAt: v.number(),
     completedAt: v.optional(v.number()),
+    isUpgrade: v.optional(v.boolean()),
+    creditAmount: v.optional(v.number()),
   })
     .index("by_userId", ["userId"])
     .index("by_orderId", ["orderId"])
