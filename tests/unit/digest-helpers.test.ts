@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { isSubscriptionPackage, formatDelta, formatDigestMessage, splitTelegramMessage } from "../../convex/telegram";
+import { isSubscriptionPackage, classifyCampaignPackage, formatDelta, formatDigestMessage, splitTelegramMessage } from "../../convex/telegram";
 import type { DigestData } from "../../convex/telegram";
 
 function formatNum(n: number): string {
@@ -23,6 +23,34 @@ describe("isSubscriptionPackage", () => {
     expect(isSubscriptionPackage("Трафик")).toBe(false);
     expect(isSubscriptionPackage("Получение лидов")).toBe(false);
     expect(isSubscriptionPackage("Конверсии")).toBe(false);
+  });
+});
+
+describe("classifyCampaignPackage", () => {
+  test("subscription keywords", () => {
+    expect(classifyCampaignPackage("or_tt_crossdevice_community_vk_ocpm_socialengagement_pricedGoals_join")).toBe("subscription");
+    expect(classifyCampaignPackage("Subscribe to community")).toBe("subscription");
+  });
+
+  test("message keywords", () => {
+    expect(classifyCampaignPackage("or_tt_crossdevice_community_vk_ocpс_socialengagement_pricedGoals_contact")).toBe("message");
+    expect(classifyCampaignPackage("or_tt_crossdevice_vk_socialvideo_cpm")).toBe("message");
+  });
+
+  test("awareness keywords — branding before video_and_live", () => {
+    // This package has BOTH "video_and_live" and "branding" — branding must win
+    expect(classifyCampaignPackage("or_tt_crossdevice_vk_video_and_live_cpm_branding_general")).toBe("awareness");
+    expect(classifyCampaignPackage("or_tt_community_vk_promopost_cpm_branding_general")).toBe("awareness");
+  });
+
+  test("lead by default", () => {
+    expect(classifyCampaignPackage("or_tt_crossdevice_community_vk_post_cpc_socialengagement_site_conversions")).toBe("lead");
+    expect(classifyCampaignPackage("Трафик")).toBe("lead");
+    expect(classifyCampaignPackage("")).toBe("lead");
+  });
+
+  test("video_and_live without branding = message", () => {
+    expect(classifyCampaignPackage("or_tt_crossdevice_vk_video_and_live_cpm_socialengagement")).toBe("message");
   });
 });
 
@@ -56,16 +84,22 @@ describe("formatDigestMessage", () => {
   const sampleData: DigestData = {
     accounts: [{
       name: "Сервис Парк",
+      campaigns: [
+        { adPlanId: 15791809, adPlanName: "подписка ДТП", type: "subscription", impressions: 50000, clicks: 100, spent: 3000, results: 571, costPerResult: 5 },
+        { adPlanId: 13038509, adPlanName: "СС_ключи_кузовной", type: "message", impressions: 30000, clicks: 80, spent: 2000, results: 9, costPerResult: 222 },
+        { adPlanId: 19044564, adPlanName: "узнаваемость пост", type: "awareness", impressions: 26989, clicks: 98, spent: 1418, results: 20, costPerResult: 71 },
+      ],
       metrics: {
         impressions: 106989,
         clicks: 278,
         spent: 6418,
-        leads: 9,
-        messages: 0,
+        leads: 0,
+        messages: 9,
         subscriptions: 571,
-        cpl: 768,
-        costPerMsg: 0,
-        costPerSub: 52,
+        views: 20,
+        cpl: 0,
+        costPerMsg: 222,
+        costPerSub: 5,
       },
       ruleEvents: [
         { ruleName: "Клики без лидов", count: 2 },
@@ -77,12 +111,13 @@ describe("formatDigestMessage", () => {
       impressions: 106989,
       clicks: 278,
       spent: 6418,
-      leads: 9,
-      messages: 0,
+      leads: 0,
+      messages: 9,
       subscriptions: 571,
-      cpl: 768,
-      costPerMsg: 0,
-      costPerSub: 52,
+      views: 20,
+      cpl: 0,
+      costPerMsg: 222,
+      costPerSub: 5,
     },
   };
 
@@ -92,10 +127,11 @@ describe("formatDigestMessage", () => {
     expect(msg).toContain("Дайджест за 01.04.2026");
   });
 
-  test("daily format separates leads and subscriptions", () => {
+  test("daily format shows per-campaign breakdown", () => {
     const msg = formatDigestMessage("daily", sampleData, "01.04.2026");
-    expect(msg).toContain("Лиды: 9");
-    expect(msg).toContain("Подписки: 571");
+    expect(msg).toContain("подписка ДТП — подписки: 571");
+    expect(msg).toContain("СС_ключи_кузовной — сообщения: 9");
+    expect(msg).toContain("узнаваемость пост — просмотры: 20");
   });
 
   test("daily format groups rule events", () => {
@@ -104,17 +140,23 @@ describe("formatDigestMessage", () => {
     expect(msg).toContain("CPL лимит — 1");
   });
 
-  test("hides leads line when leads = 0", () => {
-    const noLeads: DigestData = {
+  test("totals include views", () => {
+    const msg = formatDigestMessage("daily", sampleData, "01.04.2026");
+    expect(msg).toContain("просмотры 20");
+    expect(msg).toContain("подписки 571");
+  });
+
+  test("fallback to aggregate when no campaigns", () => {
+    const noCampaigns: DigestData = {
       accounts: [{
         ...sampleData.accounts[0],
-        metrics: { ...sampleData.accounts[0].metrics, leads: 0, cpl: 0 },
+        campaigns: [],
+        metrics: { ...sampleData.accounts[0].metrics, leads: 5, cpl: 100 },
       }],
-      totals: { ...sampleData.totals, leads: 0, cpl: 0 },
+      totals: { ...sampleData.totals, leads: 5, cpl: 100 },
     };
-    const msg = formatDigestMessage("daily", noLeads, "01.04.2026");
-    expect(msg).not.toContain("Лиды:");
-    expect(msg).toContain("Подписки: 571");
+    const msg = formatDigestMessage("daily", noCampaigns, "01.04.2026");
+    expect(msg).toContain("Лиды: 5");
   });
 
   test("weekly format includes comparison header", () => {
@@ -122,13 +164,13 @@ describe("formatDigestMessage", () => {
       ...sampleData,
       prevTotals: {
         impressions: 95000, clicks: 250, spent: 5900,
-        leads: 8, messages: 0, subscriptions: 520, cpl: 800, costPerMsg: 0, costPerSub: 50,
+        leads: 0, messages: 8, subscriptions: 520, views: 15, cpl: 0, costPerMsg: 200, costPerSub: 50,
       },
       accounts: [{
         ...sampleData.accounts[0],
         prevMetrics: {
           impressions: 95000, clicks: 250, spent: 5900,
-          leads: 8, messages: 0, subscriptions: 520, cpl: 800, costPerMsg: 0, costPerSub: 50,
+          leads: 0, messages: 8, subscriptions: 520, views: 15, cpl: 0, costPerMsg: 200, costPerSub: 50,
         },
       }],
     };

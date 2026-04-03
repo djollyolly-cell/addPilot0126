@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { action, internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { classifyCampaignPackage } from "./telegram";
 
 // ─── OLD VK API (api.vk.com/method/ads.*) ─────────────────────────
 // Kept for backwards compatibility; may work with tokens that have `ads` scope
@@ -813,28 +814,21 @@ export const probeVkCampaignEndpoints = action({
   },
 });
 
-/** Fetch campaign type map: campaignId → "lead" | "message" | "subscription" via packages */
+/** Ad group mapping entry: adGroupId → type + adPlanId */
+export interface AdGroupMapping {
+  adGroupId: string;
+  adPlanId: number;
+  type: string;
+}
+
+/** Fetch ad group mapping: adGroupId → { adPlanId, type } via ad_groups.json + packages.json */
 export const getCampaignTypeMap = internalAction({
   args: {
     accessToken: v.string(),
   },
-  handler: async (_, args): Promise<Array<{ campaignId: string; type: string }>> => {
-    // Keywords in VK package names that identify subscription campaigns
-    const SUBSCRIPTION_KEYWORDS = ["_join", "subscribe"];
-    // Keywords for message/engagement campaigns (contact, engage, clip, video promotion)
-    const MESSAGE_KEYWORDS = ["_contact", "_engage", "_clip", "video_and_live", "socialvideo"];
-
-    function classifyCampaign(packageName: string): "lead" | "message" | "subscription" {
-      const lower = packageName.toLowerCase();
-      if (SUBSCRIPTION_KEYWORDS.some(kw => lower.includes(kw))) return "subscription";
-      if (MESSAGE_KEYWORDS.some(kw => lower.includes(kw))) return "message";
-      return "lead";
-    }
-
+  handler: async (_, args): Promise<AdGroupMapping[]> => {
     try {
-      // Use campaigns.json which returns campaign id + package_id directly.
-      // campaign.id matches banner.campaign_id stored in metricsDaily.campaignId.
-      // packages.json provides package names for keyword-based classification.
+      // packages.json: package_id → name for classification
       const packagesRes = await callMtApi<{ items: { id: number; name: string }[] }>(
         "packages.json", args.accessToken,
         { fields: "id,name", limit: "50" }
@@ -845,27 +839,59 @@ export const getCampaignTypeMap = internalAction({
         packageNameMap.set(pkg.id, pkg.name);
       }
 
-      // Fetch all campaigns with pagination (campaigns.json has no documented limit cap)
-      const result: Array<{ campaignId: string; type: string }> = [];
+      // ad_groups.json: id, ad_plan_id, package_id
+      // ad_group_id = metricsDaily.campaignId (banner.campaign_id)
+      // ad_plan_id = VK Ads Campaign (what user sees in cabinet)
+      const result: AdGroupMapping[] = [];
       let offset = 0;
       const LIMIT = 50;
       while (true) {
-        const campaignsRes = await callMtApi<{ items: { id: number; package_id: number }[] }>(
-          "campaigns.json", args.accessToken,
-          { fields: "id,package_id", limit: String(LIMIT), offset: String(offset) }
+        const groupsRes = await callMtApi<{ items: { id: number; ad_plan_id: number; package_id: number }[] }>(
+          "ad_groups.json", args.accessToken,
+          { fields: "id,ad_plan_id,package_id", limit: String(LIMIT), offset: String(offset) }
         );
-        const items = campaignsRes.items || [];
-        for (const c of items) {
-          const packageName = packageNameMap.get(c.package_id) || "";
+        const items = groupsRes.items || [];
+        for (const g of items) {
+          const packageName = packageNameMap.get(g.package_id) || "";
           result.push({
-            campaignId: String(c.id),
-            type: classifyCampaign(packageName),
+            adGroupId: String(g.id),
+            adPlanId: g.ad_plan_id,
+            type: classifyCampaignPackage(packageName),
           });
         }
         if (items.length < LIMIT) break;
         offset += LIMIT;
       }
 
+      return result;
+    } catch {
+      return [];
+    }
+  },
+});
+
+/** Fetch ad_plans (VK Ads Campaigns): id → name */
+export const getAdPlanNames = internalAction({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (_, args): Promise<Array<{ id: number; name: string }>> => {
+    try {
+      const result: Array<{ id: number; name: string }> = [];
+      let offset = 0;
+      const LIMIT = 50;
+      while (true) {
+        const res = await callMtApi<{ items: { id: number; name: string }[] }>(
+          "ad_plans.json", args.accessToken,
+          { fields: "id,name", limit: String(LIMIT), offset: String(offset) }
+        );
+        const items = res.items || [];
+        for (const p of items) {
+          result.push({ id: p.id, name: p.name });
+        }
+        if (items.length < LIMIT) break;
+        offset += LIMIT;
+      }
       return result;
     } catch {
       return [];

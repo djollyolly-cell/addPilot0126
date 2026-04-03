@@ -121,6 +121,7 @@ export const saveDailyPublic = mutation({
     spent: v.number(),
     leads: v.number(),
     reach: v.optional(v.number()),
+    vkResult: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const cpl = args.leads > 0 ? args.spent / args.leads : undefined;
@@ -142,6 +143,7 @@ export const saveDailyPublic = mutation({
         leads: args.leads,
       };
       if (args.reach !== undefined) patch.reach = args.reach;
+      if (args.vkResult !== undefined) patch.vkResult = args.vkResult;
       if (cpl !== undefined) patch.cpl = cpl;
       if (ctr !== undefined) patch.ctr = ctr;
       if (cpc !== undefined) patch.cpc = cpc;
@@ -158,6 +160,7 @@ export const saveDailyPublic = mutation({
       spent: args.spent,
       leads: args.leads,
       reach: args.reach,
+      vkResult: args.vkResult,
       cpl,
       ctr,
       cpc,

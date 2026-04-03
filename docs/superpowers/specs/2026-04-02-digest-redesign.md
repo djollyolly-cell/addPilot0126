@@ -1,53 +1,91 @@
-# Digest Redesign — Leads vs Subscriptions, Per-Account, Period Comparison
+# Digest Redesign v2 — Per-Campaign, Typed Results, Period Comparison
 
 ## Goal
 
-Переработать Telegram-дайджесты (сутки/неделя/месяц): разделить лиды и подписки, показывать данные в разрезе кабинетов, добавить сводку по правилам (сколько раз сработало каждое), сравнение с прошлым периодом для недельного/месячного.
+Переработать Telegram-дайджесты (сутки/неделя/месяц):
+- Группировать данные по **VK Ads кампаниям** (ad_plan), а не по группам (ad_group)
+- Разделять результаты по типу: **лиды**, **сообщения**, **подписки**, **просмотры** (awareness)
+- Клики — отдельная метрика, не путать с результатом
+- Сводка по правилам, сравнение с прошлым периодом
+
+## Иерархия myTarget API v2
+
+```
+ad_plans.json  (= VK Ads Кампании)    — id, name, objective
+  └─ ad_groups.json (= VK Ads Группы) — id, ad_plan_id, package_id
+       └─ banners.json (= VK Объявления) — id, campaign_id (= ad_group_id)
+```
+
+**Критически важно:**
+- `metricsDaily.campaignId` хранит `ad_group_id` (не ad_plan_id!)
+- `banners.campaign_id` = `ad_group_id`
+- Тип результата определяется по `package_id` на уровне **ad_group**
+- Группировка в дайджесте — по `ad_plan_id` (кампания VK Ads)
 
 ## Architecture
 
 Единый пайплайн для всех трёх дайджестов:
 
-1. **Сбор данных** — `collectDigestData(ctx, userId, dateFrom, dateTo, prevDateFrom?, prevDateTo?)` — метрики + события правил + package mapping, в разрезе кабинетов
-2. **Классификация** — по `package_id` группы → `packages.json` name → ключевые слова → лид или подписка
-3. **Форматирование** — `formatDigestMessage(type, data)` — единая функция с вариациями по типу
-4. **Отправка** — существующий `sendMessageWithRetry`
+1. **Маппинг** — загружаем `ad_groups.json` (ad_group_id → ad_plan_id, package_id) + `packages.json` (package_id → name) + `ad_plans.json` (ad_plan_id → name)
+2. **Классификация** — `package_id` → `packages.json` name → ключевые слова → 4 типа
+3. **Агрегация** — метрики из `metricsDaily` → через banner → ad_group → ad_plan
+4. **Форматирование** — `formatDigestMessage(type, data)` — по кампаниям VK Ads
+5. **Отправка** — существующий `sendMessageWithRetry`
 
-### Определение лидов vs подписок
-
-1. Для каждого кабинета загружаем `packages.json` + `ad_groups.json` из VK API
-2. Строим `packageMap: package_id → name`
-3. Для каждой кампании берём `package_id` первой группы
-4. Ищем в имени пакета ключевые слова: `"подписк"`, `"subscribe"`, `"community"`, `"join"` → **подписка**
-5. Всё остальное → **лид**
-6. `results` кампании (из `metricsDaily.leads` или `vk.result`) идут в соответствующую категорию
+### 4 типа результатов (по package_id)
 
 ```typescript
-function isSubscriptionPackage(packageName: string): boolean {
+type CampaignType = "lead" | "message" | "subscription" | "awareness";
+
+function classifyCampaignPackage(packageName: string): CampaignType {
   const lower = packageName.toLowerCase();
-  return ["подписк", "subscribe", "community", "join"].some(kw => lower.includes(kw));
+  if (["join", "subscri", "подписк"].some(kw => lower.includes(kw)))
+    return "subscription";
+  if (["contact", "_engage", "clip", "video_and_live", "socialvideo", "сообщени"].some(kw => lower.includes(kw)))
+    return "message";
+  if (["branding", "reach", "video_view", "awareness"].some(kw => lower.includes(kw)))
+    return "awareness";
+  return "lead";
 }
 ```
+
+**Подтверждено на реальных данных VK API:**
+- `objective=socialengagement` + package с "join" → subscription (подписка ДТП)
+- `objective=socialengagement` + package без ключевых слов → lead (СС_ключи_кузовной)
+- `objective=branding_socialengagement` → awareness (узнаваемость пост/видео)
+- `objective=promoted_vk_post` → зависит от package
 
 ### Данные
 
 ```typescript
+interface DigestCampaignData {
+  adPlanId: number;
+  adPlanName: string;
+  type: CampaignType;              // Определяется по package_id группы
+  impressions: number;
+  clicks: number;                   // Отдельная метрика, НЕ результат
+  spent: number;
+  results: number;                  // Типизированный результат
+  costPerResult: number;            // spent / results
+}
+
 interface DigestAccountData {
-  name: string;                    // Название кабинета
+  name: string;
+  campaigns: DigestCampaignData[];
   metrics: {
     impressions: number;
     clicks: number;
     spent: number;
-    leads: number;                 // Результаты из "лидовых" кампаний
-    subscriptions: number;         // Результаты из "подписочных" кампаний
-    cpl: number;                   // spent_leads / leads
-    costPerSub: number;            // spent_subs / subscriptions
+    leads: number;
+    messages: number;
+    subscriptions: number;
+    views: number;                  // Для awareness кампаний
+    cpl: number;
+    costPerMsg: number;
+    costPerSub: number;
   };
-  prevMetrics?: typeof metrics;    // Метрики за прошлый период (неделя/месяц)
-  ruleEvents: {
-    ruleName: string;
-    count: number;
-  }[];
+  prevMetrics?: typeof metrics;
+  ruleEvents: { ruleName: string; count: number; }[];
   savedAmount: number;
 }
 
@@ -58,23 +96,20 @@ interface DigestData {
 }
 ```
 
-### Сбор метрик по категориям
+### Маппинг ad_group → ad_plan
 
-Для разделения spent между лидами и подписками:
-- Группируем кампании в `metricsDaily` по типу (лид/подписка) через campaign → ad_group → package_id
-- `spent_leads` = сумма spent по "лидовым" кампаниям
-- `spent_subs` = сумма spent по "подписочным" кампаниям
-- `CPL = spent_leads / leads`
-- `CostPerSub = spent_subs / subscriptions`
+Для каждого кабинета при сборе дайджеста:
+1. Загружаем `ad_groups.json` с полями `id, ad_plan_id, package_id`
+2. Загружаем `packages.json` → `package_id → name`
+3. Загружаем `ad_plans.json` → `ad_plan_id → name`
+4. Строим маппинг: `ad_group_id → { adPlanId, adPlanName, type }`
+5. Для каждой записи metricsDaily: `campaignId` (= ad_group_id) → маппинг → агрегируем по ad_plan
 
-### Маппинг campaign → package_id
+### Получение результатов
 
-`metricsDaily` хранит `campaignId` (строка, VK campaign ID = ad_plan ID). Для определения типа:
-1. Загружаем `ad_groups.json` → получаем `ad_plan_id → package_id`
-2. Загружаем `packages.json` → получаем `package_id → name`
-3. Для каждого `ad_plan_id` берём `package_id` первой группы → определяем тип
-
-Кеширование: пакеты не меняются часто, но для простоты запрашиваем при каждом дайджесте (раз в сутки — не нагрузка).
+- `leads` = `metricsDaily.leads` (= Math.max из 5 источников, для rule engine)
+- Для дайджеста используем `metricsDaily.vkResult` (= `base.vk.result`), если есть
+- Fallback: `metricsDaily.leads` если `vkResult` не сохранён
 
 ## Формат сообщений
 
@@ -84,72 +119,30 @@ interface DigestData {
 📊 Дайджест за 01.04.2026
 
 📋 Сервис Парк:
-📈 Показы: 106 989 | 👆 Клики: 278
-💰 Расход: 6 418₽
-🎯 Лиды: 9 | CPL: 768₽
-👥 Подписки: 571 | Стоимость: 52₽
+📈 Показы: 89 738 | 👆 Клики: 176
+💰 Расход: 5 745₽
+
+Кампании:
+🎯 СС_ключи_кузовной — лиды: 2 | CPL: 650₽
+👥 подписка ДТП — подписки: 143 | стоимость: 2₽
+👁 узнаваемость пост — просмотры: 20
+👁 узнаваемость видео — просмотры: 10
 
 ⚙️ Правила: сработало 3 раза
 • Клики без лидов — 2 раза
 • CPL лимит — 1 раз
 ✅ Сэкономлено: ~1 200₽
 
-📋 Другой кабинет:
-📈 Показы: 50 000 | 👆 Клики: 150
-💰 Расход: 3 200₽
-🎯 Лиды: 25 | CPL: 128₽
-
-✅ Правила не сработали
-
-Итого: расход 9 618₽, лиды 34, подписки 571
+Итого: расход 5 745₽, лиды 2, подписки 143
 ```
 
-**Правила:** если лидов = 0, строку "Лиды" не показываем. Аналогично для подписок.
+**Правила отображения:**
+- Показываем только кампании с ненулевым расходом или результатом
+- Иконка по типу: 🎯 лиды, 💬 сообщения, 👥 подписки, 👁 просмотры
+- Клики — общая метрика кабинета, не дублируется по кампаниям
+- Если у типа 0 результатов — не показываем в итогах
 
-### Недельный дайджест
-
-```
-📊 Сводка за неделю (24.03 — 30.03.2026)
-📉 Сравнение с прошлой неделей (17.03 — 23.03)
-
-📋 Сервис Парк:
-📈 Показы: 750 000 (↑12%)
-👆 Клики: 2 100 (↓3%)
-💰 Расход: 45 200₽ (↑8%)
-🎯 Лиды: 9 | CPL: 95₽ (↓5%)
-👥 Подписки: 580 | Стоимость: 52₽ (↑2%)
-
-⚙️ Правила: сработало 17 раз
-• CPL лимит — 12 раз
-• Клики без лидов — 5 раз
-✅ Сэкономлено: ~8 500₽
-
-Итого: расход 45 200₽ (↑8%), лиды 9, подписки 580
-```
-
-Если данных за прошлый период нет — показываем без процентов.
-
-### Месячный дайджест
-
-```
-📅 Отчёт за март 2026
-📉 Сравнение с февралём 2026
-
-📋 Сервис Парк:
-📈 Показы: 3 200 000 (↑5%)
-👆 Клики: 8 900 (↑10%)
-💰 Расход: 185 000₽ (↑3%)
-🎯 Лиды: 45 | CPL: 620₽ (↓12%)
-👥 Подписки: 2 400 | Стоимость: 51₽ (↓2%)
-
-⚙️ Правила: сработало 68 раз
-• CPL лимит — 45 раз
-• Клики без лидов — 15 раз
-• Быстрый расход — 8 раз
-✅ Сэкономлено: ~35 000₽
-
-Итого: расход 185 000₽ (↑3%), лиды 45, подписки 2 400
-```
+### Недельный/месячный — аналогично + дельты (↑↓%)
 
 ## Сравнение с прошлым периодом
 
@@ -162,19 +155,9 @@ function formatDelta(current: number, previous: number): string {
 }
 ```
 
-- **Неделя:** текущая пн-вс vs предыдущая пн-вс
-- **Месяц:** текущий vs предыдущий календарный месяц
-- **Дневной:** без сравнения (слишком шумно)
+## Группировка правил
 
-## Группировка правил (решение проблемы 973 дублей)
-
-Текущая проблема: каждое срабатывание правила = отдельная строка в дайджесте.
-
-Решение: группировать по `ruleName` и показывать количество:
 ```typescript
-// Вместо 973 строк "🛑 Ad 209963110 — 25 кликов без лидов"
-// Показываем: "• Клики без лидов — 973 раза"
-
 const grouped = new Map<string, number>();
 for (const event of events) {
   const name = event.ruleName || event.reason.split("—")[0].trim();
@@ -184,30 +167,31 @@ for (const event of events) {
 
 ## Изменения в файлах
 
-### `convex/telegram.ts`
-- Добавить: `collectDigestData(ctx, userId, dateFrom, dateTo, prevFrom?, prevTo?)` — новая функция сбора данных
-- Переписать: `formatDailyDigest()` — новый формат с кабинетами, лиды/подписки
-- Переписать: `formatWeeklyDigest()` — с дельтами
-- Переписать: `formatMonthlyDigest()` — с дельтами
-- Переписать: `sendDailyDigest` — использовать `collectDigestData`
-- Переписать: `sendWeeklyDigest` — использовать `collectDigestData` + prev period
-- Переписать: `sendMonthlyDigest` — использовать `collectDigestData` + prev period
+### `convex/vkApi.ts`
+- Обновить `getCampaignTypeMap` → возвращать `{ adGroupId, adPlanId, type }[]`
+- Добавить загрузку `ad_groups.json` с `ad_plan_id`
+- Добавить загрузку `ad_plans.json` с `id, name`
 
-### `convex/telegram.ts` — новые queries
-- `getMetricsByAccount(userId, dates[])` — метрики в разрезе кабинетов
-- `getActionLogsByRule(userId, since, until)` — события сгруппированные по правилам
+### `convex/telegram.ts`
+- Обновить `classifyCampaignPackage` — добавить тип `awareness`
+- Обновить `DigestMetrics` — добавить `views`
+- Переписать `collectDigestData` — группировка по ad_plan, 4 типа результатов
+- Переписать `formatDigestMessage` — по-кампанийный формат
+- Обновить `sendDailyDigest`, `sendWeeklyDigest`, `sendMonthlyDigest`
 
 ### Не трогаем
-- `convex/schema.ts` — без изменений схемы
-- `convex/crons.ts` — расписание остаётся тем же
+- `convex/schema.ts` — без изменений
+- `convex/crons.ts` — расписание не меняется
 - `convex/ruleEngine.ts` — логика правил не меняется
-- `convex/reports.ts` — packageMap уже добавлен
 
 ## Edge Cases
 
-- Кабинет без кампаний → не показываем в дайджесте
-- Все результаты = 0 → показываем кабинет с нулями (пользователь должен видеть что мониторинг работает)
-- Package name не содержит ключевых слов → считаем лидом (safe default)
-- Нет данных за прошлый период → показываем без процентов, убираем строку "Сравнение с..."
-- Telegram лимит 4096 символов → если сообщение длиннее, разбиваем на несколько
-- Кабинет без VK токена (expired) → пропускаем, не ломаем дайджест остальных
+- Кабинет без кампаний → не показываем
+- Все результаты = 0 → показываем кабинет с общими метриками
+- Package name не содержит ключевых слов → `lead` (safe default)
+- `objective=branding_socialengagement` → может дополнительно использоваться как fallback для awareness
+- Ad_group не найдена в маппинге → результат идёт в "lead" (fallback)
+- Нет данных за прошлый период → без процентов
+- Telegram лимит 4096 символов → разбиваем на части
+- Кабинет без VK токена → пропускаем, не ломаем остальные
+- vkResult=0 → используем undefined (не путать с отсутствием результата)

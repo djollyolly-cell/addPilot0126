@@ -130,13 +130,26 @@ export interface DigestMetrics {
   leads: number;
   messages: number;
   subscriptions: number;
+  views: number;
   cpl: number;
   costPerMsg: number;
   costPerSub: number;
 }
 
+export interface DigestCampaignData {
+  adPlanId: number;
+  adPlanName: string;
+  type: CampaignType;
+  impressions: number;
+  clicks: number;
+  spent: number;
+  results: number;
+  costPerResult: number;
+}
+
 export interface DigestAccountData {
   name: string;
+  campaigns: DigestCampaignData[];
   metrics: DigestMetrics;
   prevMetrics?: DigestMetrics;
   ruleEvents: { ruleName: string; count: number }[];
@@ -155,8 +168,12 @@ export function isSubscriptionPackage(packageName: string): boolean {
   return classifyCampaignPackage(packageName) === "subscription";
 }
 
-export function classifyCampaignPackage(packageName: string): "lead" | "message" | "subscription" {
+export type CampaignType = "lead" | "message" | "subscription" | "awareness";
+
+export function classifyCampaignPackage(packageName: string): CampaignType {
   const lower = packageName.toLowerCase();
+  // branding/awareness FIRST — before video_and_live which also appears in branding packages
+  if (["branding", "reach", "video_view"].some(kw => lower.includes(kw))) return "awareness";
   if (["join", "subscri", "подписк"].some(kw => lower.includes(kw))) return "subscription";
   if (["contact", "_engage", "clip", "video_and_live", "socialvideo", "сообщени"].some(kw => lower.includes(kw))) return "message";
   return "lead";
@@ -218,14 +235,29 @@ export function formatDigestMessage(
     lines.push(`📈 Показы: ${m.impressions.toLocaleString("ru-RU")}${showDelta ? formatDelta(m.impressions, p!.impressions) : ""} | 👆 Клики: ${m.clicks.toLocaleString("ru-RU")}${showDelta ? formatDelta(m.clicks, p!.clicks) : ""}`);
     lines.push(`💰 Расход: ${m.spent.toLocaleString("ru-RU")}₽${showDelta ? formatDelta(m.spent, p!.spent) : ""}`);
 
-    if (m.leads > 0) {
-      lines.push(`🎯 Лиды: ${m.leads} | CPL: ${m.cpl}₽${showDelta && p!.cpl > 0 ? formatDelta(m.cpl, p!.cpl) : ""}`);
-    }
-    if (m.messages > 0) {
-      lines.push(`💬 Сообщения: ${m.messages} | Стоимость: ${m.costPerMsg}₽${showDelta && p!.costPerMsg > 0 ? formatDelta(m.costPerMsg, p!.costPerMsg) : ""}`);
-    }
-    if (m.subscriptions > 0) {
-      lines.push(`👥 Подписки: ${m.subscriptions} | Стоимость: ${m.costPerSub}₽${showDelta && p!.costPerSub > 0 ? formatDelta(m.costPerSub, p!.costPerSub) : ""}`);
+    // Per-campaign breakdown
+    if (account.campaigns && account.campaigns.length > 0) {
+      lines.push("");
+      for (const camp of account.campaigns) {
+        const icon = { lead: "🎯", message: "💬", subscription: "👥", awareness: "👁" }[camp.type];
+        const label = { lead: "лиды", message: "сообщения", subscription: "подписки", awareness: "просмотры" }[camp.type];
+        const costStr = camp.results > 0 ? ` | стоимость: ${camp.costPerResult}₽` : "";
+        lines.push(`${icon} ${camp.adPlanName} — ${label}: ${camp.results}${costStr}`);
+      }
+    } else {
+      // Fallback: show aggregate metrics without campaign breakdown
+      if (m.leads > 0) {
+        lines.push(`🎯 Лиды: ${m.leads} | CPL: ${m.cpl}₽${showDelta && p!.cpl > 0 ? formatDelta(m.cpl, p!.cpl) : ""}`);
+      }
+      if (m.messages > 0) {
+        lines.push(`💬 Сообщения: ${m.messages} | Стоимость: ${m.costPerMsg}₽${showDelta && p!.costPerMsg > 0 ? formatDelta(m.costPerMsg, p!.costPerMsg) : ""}`);
+      }
+      if (m.subscriptions > 0) {
+        lines.push(`👥 Подписки: ${m.subscriptions} | Стоимость: ${m.costPerSub}₽${showDelta && p!.costPerSub > 0 ? formatDelta(m.costPerSub, p!.costPerSub) : ""}`);
+      }
+      if (m.views > 0) {
+        lines.push(`👁 Просмотры: ${m.views}`);
+      }
     }
 
     lines.push("");
@@ -256,6 +288,7 @@ export function formatDigestMessage(
   if (t.leads > 0) totalsLine += `, лиды ${t.leads}`;
   if (t.messages > 0) totalsLine += `, сообщения ${t.messages}`;
   if (t.subscriptions > 0) totalsLine += `, подписки ${t.subscriptions}`;
+  if (t.views > 0) totalsLine += `, просмотры ${t.views}`;
 
   lines.push(totalsLine);
 
@@ -1503,12 +1536,15 @@ export const collectDigestData = internalAction({
       });
     }
 
-    // For each account, fetch package mapping from VK API to classify leads vs subscriptions
+    // For each account, fetch VK API mapping and aggregate by ad_plan (VK campaign)
     const accounts: DigestAccountData[] = [];
 
     for (const accMetrics of accountMetrics) {
-      // Try to get VK API token for package classification
-      const campaignTypeMap = new Map<string, "lead" | "message" | "subscription">();
+      // adGroupId → { adPlanId, type }
+      type GroupMapping = { adPlanId: number; type: CampaignType };
+      const groupMap = new Map<string, GroupMapping>();
+      // adPlanId → name
+      const planNameMap = new Map<number, string>();
 
       try {
         const accessToken = await ctx.runAction(
@@ -1516,25 +1552,31 @@ export const collectDigestData = internalAction({
           { accountId: accMetrics.accountId as Id<"adAccounts"> }
         );
 
-        // Fetch campaign type map via VK API
-        const typeMapArray = await ctx.runAction(
-          internal.vkApi.getCampaignTypeMap,
-          { accessToken }
-        );
+        const [typeMapArray, adPlanNames] = await Promise.all([
+          ctx.runAction(internal.vkApi.getCampaignTypeMap, { accessToken }),
+          ctx.runAction(internal.vkApi.getAdPlanNames, { accessToken }),
+        ]);
 
         for (const entry of typeMapArray) {
-          campaignTypeMap.set(entry.campaignId, entry.type as "lead" | "message" | "subscription");
+          groupMap.set(entry.adGroupId, {
+            adPlanId: entry.adPlanId,
+            type: entry.type as CampaignType,
+          });
+        }
+        for (const plan of adPlanNames) {
+          planNameMap.set(plan.id, plan.name);
         }
       } catch {
         // Token expired or no access — all campaigns default to "lead"
       }
 
-      // Split metrics by campaign type (3 buckets)
-      const campaignsData = accMetrics.campaigns;
+      // Aggregate metrics by ad_plan (VK campaign), not by ad_group
+      const campaignsData = accMetrics.campaigns; // campaignId = ad_group_id
+      const byPlan = new Map<number, {
+        name: string; type: CampaignType;
+        imp: number; cl: number; sp: number; results: number;
+      }>();
 
-      let leadSpent = 0, leadLeads = 0;
-      let msgSpent = 0, msgLeads = 0;
-      let subSpent = 0, subLeads = 0;
       let totalImpressions = 0, totalClicks = 0, totalSpent = 0;
 
       for (const c of campaignsData) {
@@ -1542,25 +1584,55 @@ export const collectDigestData = internalAction({
         totalClicks += c.clicks;
         totalSpent += c.spent;
 
-        const type = campaignTypeMap.get(c.campaignId) || "lead";
-        if (type === "subscription") {
-          subSpent += c.spent;
-          subLeads += c.leads;
-        } else if (type === "message") {
-          msgSpent += c.spent;
-          msgLeads += c.leads;
-        } else {
-          leadSpent += c.spent;
-          leadLeads += c.leads;
+        const mapping = groupMap.get(c.campaignId);
+        const planId = mapping?.adPlanId || 0;
+        const type = mapping?.type || "lead";
+        const planName = planNameMap.get(planId) || "Неизвестная";
+
+        if (!byPlan.has(planId)) {
+          byPlan.set(planId, { name: planName, type, imp: 0, cl: 0, sp: 0, results: 0 });
         }
+        const p = byPlan.get(planId)!;
+        p.imp += c.impressions;
+        p.cl += c.clicks;
+        p.sp += c.spent;
+        p.results += c.leads; // leads already uses vkResult ?? m.leads in getMetricsByAccount
       }
+
+      // Build campaign list and split results by type
+      const digestCampaigns: DigestCampaignData[] = [];
+      let leadSpent = 0, leadResults = 0;
+      let msgSpent = 0, msgResults = 0;
+      let subSpent = 0, subResults = 0;
+      let viewSpent = 0, viewResults = 0;
+
+      for (const [planId, d] of byPlan) {
+        if (!d.sp && !d.results) continue;
+        digestCampaigns.push({
+          adPlanId: planId,
+          adPlanName: d.name,
+          type: d.type,
+          impressions: d.imp,
+          clicks: d.cl,
+          spent: d.sp,
+          results: d.results,
+          costPerResult: d.results > 0 ? Math.round(d.sp / d.results) : 0,
+        });
+        if (d.type === "lead") { leadSpent += d.sp; leadResults += d.results; }
+        else if (d.type === "message") { msgSpent += d.sp; msgResults += d.results; }
+        else if (d.type === "subscription") { subSpent += d.sp; subResults += d.results; }
+        else if (d.type === "awareness") { viewSpent += d.sp; viewResults += d.results; }
+      }
+
+      // Sort campaigns by spent descending
+      digestCampaigns.sort((a, b) => b.spent - a.spent);
 
       // If no campaign-level data, use account totals (all as leads)
       if (campaignsData.length === 0) {
         totalImpressions = accMetrics.impressions;
         totalClicks = accMetrics.clicks;
         totalSpent = accMetrics.spent;
-        leadLeads = accMetrics.leads;
+        leadResults = accMetrics.leads;
         leadSpent = accMetrics.spent;
       }
 
@@ -1568,60 +1640,51 @@ export const collectDigestData = internalAction({
         impressions: totalImpressions,
         clicks: totalClicks,
         spent: Math.round(totalSpent * 100) / 100,
-        leads: leadLeads,
-        messages: msgLeads,
-        subscriptions: subLeads,
-        cpl: leadLeads > 0 ? Math.round(leadSpent / leadLeads) : 0,
-        costPerMsg: msgLeads > 0 ? Math.round(msgSpent / msgLeads) : 0,
-        costPerSub: subLeads > 0 ? Math.round(subSpent / subLeads) : 0,
+        leads: leadResults,
+        messages: msgResults,
+        subscriptions: subResults,
+        views: viewResults,
+        cpl: leadResults > 0 ? Math.round(leadSpent / leadResults) : 0,
+        costPerMsg: msgResults > 0 ? Math.round(msgSpent / msgResults) : 0,
+        costPerSub: subResults > 0 ? Math.round(subSpent / subResults) : 0,
       };
 
-      // Previous period metrics
+      // Previous period metrics (aggregate by ad_plan using same mapping)
       let prevMetrics: DigestMetrics | undefined;
       if (prevAccountMetrics) {
         const prevAcc = prevAccountMetrics.find((a) => a.accountId === accMetrics.accountId);
         if (prevAcc) {
-          const prevCampaigns = prevAcc.campaigns;
-          let prevLeadSpent = 0, prevLeadLeads = 0;
-          let prevMsgSpent = 0, prevMsgLeads = 0;
-          let prevSubSpent = 0, prevSubLeads = 0;
-          let prevTotalImpressions = 0, prevTotalClicks = 0, prevTotalSpent = 0;
+          const prevByType = { lead: { sp: 0, r: 0 }, message: { sp: 0, r: 0 }, subscription: { sp: 0, r: 0 }, awareness: { sp: 0, r: 0 } };
+          let prevImp = 0, prevCl = 0, prevSp = 0;
 
-          for (const c of prevCampaigns) {
-            prevTotalImpressions += c.impressions;
-            prevTotalClicks += c.clicks;
-            prevTotalSpent += c.spent;
-            const type = campaignTypeMap.get(c.campaignId) || "lead";
-            if (type === "subscription") {
-              prevSubSpent += c.spent;
-              prevSubLeads += c.leads;
-            } else if (type === "message") {
-              prevMsgSpent += c.spent;
-              prevMsgLeads += c.leads;
-            } else {
-              prevLeadSpent += c.spent;
-              prevLeadLeads += c.leads;
-            }
+          for (const c of prevAcc.campaigns) {
+            prevImp += c.impressions;
+            prevCl += c.clicks;
+            prevSp += c.spent;
+            const type = groupMap.get(c.campaignId)?.type || "lead";
+            prevByType[type].sp += c.spent;
+            prevByType[type].r += c.leads;
           }
 
-          if (prevCampaigns.length === 0) {
-            prevTotalImpressions = prevAcc.impressions;
-            prevTotalClicks = prevAcc.clicks;
-            prevTotalSpent = prevAcc.spent;
-            prevLeadLeads = prevAcc.leads;
-            prevLeadSpent = prevAcc.spent;
+          if (prevAcc.campaigns.length === 0) {
+            prevImp = prevAcc.impressions;
+            prevCl = prevAcc.clicks;
+            prevSp = prevAcc.spent;
+            prevByType.lead.r = prevAcc.leads;
+            prevByType.lead.sp = prevAcc.spent;
           }
 
           prevMetrics = {
-            impressions: prevTotalImpressions,
-            clicks: prevTotalClicks,
-            spent: Math.round(prevTotalSpent * 100) / 100,
-            leads: prevLeadLeads,
-            messages: prevMsgLeads,
-            subscriptions: prevSubLeads,
-            cpl: prevLeadLeads > 0 ? Math.round(prevLeadSpent / prevLeadLeads) : 0,
-            costPerMsg: prevMsgLeads > 0 ? Math.round(prevMsgSpent / prevMsgLeads) : 0,
-            costPerSub: prevSubLeads > 0 ? Math.round(prevSubSpent / prevSubLeads) : 0,
+            impressions: prevImp,
+            clicks: prevCl,
+            spent: Math.round(prevSp * 100) / 100,
+            leads: prevByType.lead.r,
+            messages: prevByType.message.r,
+            subscriptions: prevByType.subscription.r,
+            views: prevByType.awareness.r,
+            cpl: prevByType.lead.r > 0 ? Math.round(prevByType.lead.sp / prevByType.lead.r) : 0,
+            costPerMsg: prevByType.message.r > 0 ? Math.round(prevByType.message.sp / prevByType.message.r) : 0,
+            costPerSub: prevByType.subscription.r > 0 ? Math.round(prevByType.subscription.sp / prevByType.subscription.r) : 0,
           };
         }
       }
@@ -1631,6 +1694,7 @@ export const collectDigestData = internalAction({
 
       accounts.push({
         name: accMetrics.accountName,
+        campaigns: digestCampaigns,
         metrics,
         prevMetrics,
         ruleEvents: accRules?.ruleEvents || [],
@@ -1646,6 +1710,7 @@ export const collectDigestData = internalAction({
       leads: accounts.reduce((s, a) => s + a.metrics.leads, 0),
       messages: accounts.reduce((s, a) => s + a.metrics.messages, 0),
       subscriptions: accounts.reduce((s, a) => s + a.metrics.subscriptions, 0),
+      views: accounts.reduce((s, a) => s + a.metrics.views, 0),
       cpl: 0,
       costPerMsg: 0,
       costPerSub: 0,
@@ -1669,21 +1734,22 @@ export const collectDigestData = internalAction({
           leads: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.leads || 0), 0),
           messages: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.messages || 0), 0),
           subscriptions: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.subscriptions || 0), 0),
+          views: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.views || 0), 0),
           cpl: 0,
           costPerMsg: 0,
           costPerSub: 0,
         };
         if (prevTotals.leads > 0) {
-          const prevLeadSpent = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.cpl * a.prevMetrics.leads : 0), 0);
-          prevTotals.cpl = Math.round(prevLeadSpent / prevTotals.leads);
+          const pls = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.cpl * a.prevMetrics.leads : 0), 0);
+          prevTotals.cpl = Math.round(pls / prevTotals.leads);
         }
         if (prevTotals.messages > 0) {
-          const prevMsgSpent = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.costPerMsg * a.prevMetrics.messages : 0), 0);
-          prevTotals.costPerMsg = Math.round(prevMsgSpent / prevTotals.messages);
+          const pms = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.costPerMsg * a.prevMetrics.messages : 0), 0);
+          prevTotals.costPerMsg = Math.round(pms / prevTotals.messages);
         }
         if (prevTotals.subscriptions > 0) {
-          const prevSubSpent = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.costPerSub * a.prevMetrics.subscriptions : 0), 0);
-          prevTotals.costPerSub = Math.round(prevSubSpent / prevTotals.subscriptions);
+          const pss = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.costPerSub * a.prevMetrics.subscriptions : 0), 0);
+          prevTotals.costPerSub = Math.round(pss / prevTotals.subscriptions);
         }
       }
     }
