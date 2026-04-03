@@ -1839,50 +1839,9 @@ export const checkUzBudgetRules = internalAction({
             }
           }
 
-          // Detect paused campaigns NOT in the rule (uncovered)
-          if (rule.actions.notifyOnKeyEvents && targetIds.length > 0) {
-            const uncoveredPaused = allCampaigns.filter((c) => {
-              if (targetIds.includes(String(c.id))) return false;
-              if (c.status === "deleted") return false;
-              if (c.delivery !== "not_delivering") return false;
-              const limit = Number(c.budget_limit_day || "0");
-              return limit > 0;
-            });
-
-            for (const uc of uncoveredPaused) {
-              // Dedup: notify once per day per campaign
-              const alreadyNotified = await ctx.runQuery(
-                internal.ruleEngine.hasUncoveredNotificationToday,
-                { ruleId: rule._id, campaignId: String(uc.id) }
-              );
-              if (alreadyNotified) continue;
-
-              try {
-                await ctx.runAction(internal.telegram.sendBudgetNotification, {
-                  userId: rule.userId,
-                  type: "uncovered_paused" as const,
-                  campaignName: uc.name,
-                  currentBudget: Number(uc.budget_limit_day),
-                });
-                // Log to prevent repeat notifications today
-                await ctx.runMutation(internal.ruleEngine.createActionLog, {
-                  userId: rule.userId,
-                  ruleId: rule._id,
-                  accountId,
-                  adId: String(uc.id),
-                  adName: uc.name,
-                  actionType: "notified" as const,
-                  reason: `Группа приостановлена по дневному бюджету (${Number(uc.budget_limit_day)}₽), но не в правиле`,
-                  metricsSnapshot: { spent: 0, leads: 0 },
-                  savedAmount: 0,
-                  status: "success" as const,
-                  errorMessage: "uncovered_paused_notification",
-                });
-              } catch (notifErr) {
-                console.error(`[uz_budget] Failed to send uncovered notification:`, notifErr);
-              }
-            }
-          }
+          // DISABLED: uncovered campaign notifications — too noisy
+          // TODO: re-enable when filtering is improved
+          // if (rule.actions.notifyOnKeyEvents && targetIds.length > 0) { ... }
         }
       } catch (err) {
         console.error(`[uz_budget] Error processing rule ${rule._id}:`, err);
