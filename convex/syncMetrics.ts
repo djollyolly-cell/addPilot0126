@@ -237,10 +237,16 @@ export const syncAll = internalAction({
           );
         }
 
-        // Update sync time
+        // Update sync time and clear any previous error
         await ctx.runMutation(api.adAccounts.updateSyncTime, {
           accountId: account._id,
         });
+        if (account.lastError) {
+          await ctx.runMutation(api.adAccounts.updateStatus, {
+            accountId: account._id,
+            status: "active",
+          });
+        }
 
         console.log(
           `[syncMetrics] Account ${account._id}: ${stats.length} ads synced`

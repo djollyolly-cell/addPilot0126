@@ -624,6 +624,7 @@ export const getValidVkAdsToken = internalAction({
 // ─── PER-ACCOUNT TOKEN MANAGEMENT ────────────────────────────────
 
 // Get a valid token for a specific adAccount (per-account credentials)
+// Falls back to user-level credentials if per-account ones are missing
 export const getValidTokenForAccount = internalAction({
   args: { accountId: v.id("adAccounts") },
   handler: async (ctx, args): Promise<string> => {
@@ -635,15 +636,46 @@ export const getValidTokenForAccount = internalAction({
       throw new Error("Токен VK Ads не найден. Подключите кабинет заново.");
     }
 
-    // Agency/manual API keys: no clientId/clientSecret, no expiry — return as-is
-    if (!account.clientId && !account.clientSecret) {
-      return account.accessToken;
-    }
-
-    // Per-account OAuth flow (has clientId + clientSecret)
     const now = Date.now();
     const BUFFER_MS = 5 * 60 * 1000;
 
+    // Resolve credentials: per-account first, then user-level fallback
+    // (skip fallback for agency accounts — they use API keys without OAuth)
+    const isAgency = account.vkAccountId?.startsWith("agency_");
+    let clientId = account.clientId;
+    let clientSecret = account.clientSecret;
+
+    if (!isAgency && (!clientId || !clientSecret)) {
+      // Try user-level credentials as fallback
+      const userCreds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
+        userId: account.userId as Id<"users">,
+      });
+      if (userCreds?.clientId && userCreds?.clientSecret) {
+        clientId = userCreds.clientId;
+        clientSecret = userCreds.clientSecret;
+        console.log(
+          `[getValidTokenForAccount] Account ${args.accountId}: using user-level credentials (per-account missing)`
+        );
+      }
+    }
+
+    // No credentials at all — agency/manual API keys
+    if (!clientId && !clientSecret) {
+      // If token has no expiry, treat as non-expiring
+      if (!account.tokenExpiresAt) {
+        return account.accessToken;
+      }
+      // If token is still valid, return it
+      if (account.tokenExpiresAt > now + BUFFER_MS) {
+        return account.accessToken;
+      }
+      // Token expired and no credentials to refresh — error
+      throw new Error(
+        "TOKEN_EXPIRED: Токен VK Ads истёк, а clientId/clientSecret отсутствуют. Подключите кабинет заново."
+      );
+    }
+
+    // Has credentials — check if token is still valid
     if (account.tokenExpiresAt && account.tokenExpiresAt > now + BUFFER_MS) {
       return account.accessToken;
     }
@@ -655,19 +687,37 @@ export const getValidTokenForAccount = internalAction({
 
     // Token expired — try refresh
     if (!account.refreshToken) {
-      throw new Error("Токен VK Ads истёк. Подключите кабинет заново.");
+      throw new Error("Токен VK Ads истёк, refreshToken отсутствует. Подключите кабинет заново.");
     }
 
     try {
       const refreshed = await ctx.runAction(internal.auth.refreshTokenForAccount, {
         accountId: args.accountId,
         refreshToken: account.refreshToken,
-        clientId: account.clientId!,
-        clientSecret: account.clientSecret!,
+        clientId: clientId!,
+        clientSecret: clientSecret!,
       });
+
+      // If we used user-level credentials as fallback, save them to the account
+      // so future refreshes don't need the fallback
+      if (!account.clientId || !account.clientSecret) {
+        await ctx.runMutation(internal.adAccounts.updateAccountCredentials, {
+          accountId: args.accountId,
+          clientId: clientId!,
+          clientSecret: clientSecret!,
+          accessToken: refreshed.accessToken,
+          refreshToken: refreshed.refreshToken,
+          tokenExpiresAt: now + (refreshed.expiresIn || 86400) * 1000,
+        });
+        console.log(
+          `[getValidTokenForAccount] Account ${args.accountId}: saved user-level credentials to account after successful refresh`
+        );
+      }
+
       return refreshed.accessToken;
-    } catch {
-      throw new Error("Не удалось обновить токен VK Ads. Подключите кабинет заново.");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`Не удалось обновить токен VK Ads: ${msg}. Подключите кабинет заново.`);
     }
   },
 });
@@ -685,6 +735,7 @@ export const getAccountWithCredentials = internalQuery({
       clientId: account.clientId,
       clientSecret: account.clientSecret,
       userId: account.userId,
+      vkAccountId: account.vkAccountId,
     };
   },
 });

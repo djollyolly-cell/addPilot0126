@@ -176,6 +176,14 @@ export const connect = mutation({
       if (args.clientSecret !== undefined) {
         patch.clientSecret = args.clientSecret;
       }
+      // Ensure credentials are never left empty — fill from user-level if missing
+      // (skip for agency accounts — they use API keys without OAuth)
+      const isAgencyExisting = existing.vkAccountId.startsWith("agency_");
+      if (!isAgencyExisting && !patch.clientId && !existing.clientId) {
+        const owner = await ctx.db.get(args.userId);
+        if (owner?.vkAdsClientId) patch.clientId = owner.vkAdsClientId;
+        if (owner?.vkAdsClientSecret) patch.clientSecret = owner.vkAdsClientSecret;
+      }
       await ctx.db.patch(existing._id, patch);
       return existing._id;
     }
@@ -204,6 +212,18 @@ export const connect = mutation({
       throw new Error(`Лимит кабинетов для тарифа "${user.subscriptionTier}" исчерпан (${limit})`);
     }
 
+    // If clientId/clientSecret not passed, try user-level credentials
+    // (skip for agency accounts — they use API keys without OAuth)
+    let finalClientId = args.clientId;
+    let finalClientSecret = args.clientSecret;
+    if (!finalClientId || !finalClientSecret) {
+      const isAgency = args.vkAccountId.startsWith("agency_");
+      if (!isAgency && user.vkAdsClientId && user.vkAdsClientSecret) {
+        finalClientId = finalClientId || user.vkAdsClientId;
+        finalClientSecret = finalClientSecret || user.vkAdsClientSecret;
+      }
+    }
+
     const accountId = await ctx.db.insert("adAccounts", {
       userId: args.userId,
       vkAccountId: args.vkAccountId,
@@ -211,8 +231,8 @@ export const connect = mutation({
       accessToken: args.accessToken,
       refreshToken: args.refreshToken,
       tokenExpiresAt: args.tokenExpiresAt,
-      clientId: args.clientId,
-      clientSecret: args.clientSecret,
+      clientId: finalClientId,
+      clientSecret: finalClientSecret,
       status: "active",
       createdAt: Date.now(),
     });
@@ -820,9 +840,13 @@ export const syncNow = action({
         }
       }
 
-      // Update sync timestamp
+      // Update sync timestamp and clear any previous error
       await ctx.runMutation(api.adAccounts.updateSyncTime, {
         accountId: args.accountId,
+      });
+      await ctx.runMutation(api.adAccounts.updateStatus, {
+        accountId: args.accountId,
+        status: "active",
       });
 
       return { success: true, campaigns: mtCampaigns.length, ads: adsCount };
