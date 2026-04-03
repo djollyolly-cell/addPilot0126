@@ -47,7 +47,7 @@ const TIER_COLORS: Record<string, string> = {
   pro: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400',
 };
 
-const BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || 'AddPilotBot';
+const BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || 'Addpilot_bot';
 
 export function SettingsPage() {
   const { user } = useAuth();
