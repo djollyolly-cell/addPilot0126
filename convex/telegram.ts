@@ -1326,17 +1326,19 @@ export const getMetricsByAccount = internalQuery({
           .collect();
 
         for (const m of metrics) {
+          // Use vkResult for digest accuracy (fallback to leads for old records)
+          const reportLeads = (m as Record<string, unknown>).vkResult as number | undefined ?? m.leads ?? 0;
           totalImpressions += m.impressions || 0;
           totalClicks += m.clicks || 0;
           totalSpent += m.spent || 0;
-          totalLeads += m.leads || 0;
+          totalLeads += reportLeads;
 
           if (m.campaignId) {
             const existing = campaignMetrics.get(m.campaignId) || { impressions: 0, clicks: 0, spent: 0, leads: 0 };
             existing.impressions += m.impressions || 0;
             existing.clicks += m.clicks || 0;
             existing.spent += m.spent || 0;
-            existing.leads += m.leads || 0;
+            existing.leads += reportLeads;
             campaignMetrics.set(m.campaignId, existing);
           }
         }

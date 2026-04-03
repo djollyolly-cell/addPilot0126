@@ -168,6 +168,7 @@ export const syncAll = internalAction({
               clicks,
               spent,
               leads,
+              vkResult,
               reach: base.reach,
             });
           }

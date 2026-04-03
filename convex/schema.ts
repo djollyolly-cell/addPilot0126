@@ -217,6 +217,7 @@ export default defineSchema({
     clicks: v.number(),
     spent: v.number(),
     leads: v.number(),
+    vkResult: v.optional(v.number()),
     reach: v.optional(v.number()),
     cpl: v.optional(v.number()),
     ctr: v.optional(v.number()),
