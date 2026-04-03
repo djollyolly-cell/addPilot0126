@@ -852,14 +852,14 @@ describe("telegram", () => {
     const message = formatDigestMessage("daily", {
       accounts: [{
         name: "Тестовый кабинет",
-        metrics: { impressions: 10000, clicks: 50, spent: 8800, leads: 6, subscriptions: 0, cpl: 500, costPerSub: 0 },
+        metrics: { impressions: 10000, clicks: 50, spent: 8800, leads: 6, messages: 0, subscriptions: 0, cpl: 500, costPerMsg: 0, costPerSub: 0 },
         ruleEvents: [
           { ruleName: "CPL лимит", count: 2 },
           { ruleName: "Бюджет исчерпан", count: 1 },
         ],
         savedAmount: 3500,
       }],
-      totals: { impressions: 10000, clicks: 50, spent: 8800, leads: 6, subscriptions: 0, cpl: 500, costPerSub: 0 },
+      totals: { impressions: 10000, clicks: 50, spent: 8800, leads: 6, messages: 0, subscriptions: 0, cpl: 500, costPerMsg: 0, costPerSub: 0 },
     }, "27.01.2026");
 
     // Contains date header
@@ -972,11 +972,11 @@ describe("telegram", () => {
     const message = formatDigestMessage("daily", {
       accounts: [{
         name: "Тест",
-        metrics: { impressions: 10000, clicks: 50, spent: 500, leads: 2, subscriptions: 0, cpl: 250, costPerSub: 0 },
+        metrics: { impressions: 10000, clicks: 50, spent: 500, leads: 2, messages: 0, subscriptions: 0, cpl: 250, costPerMsg: 0, costPerSub: 0 },
         ruleEvents: [],
         savedAmount: 0,
       }],
-      totals: { impressions: 10000, clicks: 50, spent: 500, leads: 2, subscriptions: 0, cpl: 250, costPerSub: 0 },
+      totals: { impressions: 10000, clicks: 50, spent: 500, leads: 2, messages: 0, subscriptions: 0, cpl: 250, costPerMsg: 0, costPerSub: 0 },
     }, "27.01.2026");
     expect(message).toContain("Дайджест за 27.01.2026");
     expect(message).toContain("Лиды: 2");

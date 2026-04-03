@@ -61,8 +61,10 @@ describe("formatDigestMessage", () => {
         clicks: 278,
         spent: 6418,
         leads: 9,
+        messages: 0,
         subscriptions: 571,
         cpl: 768,
+        costPerMsg: 0,
         costPerSub: 52,
       },
       ruleEvents: [
@@ -76,8 +78,10 @@ describe("formatDigestMessage", () => {
       clicks: 278,
       spent: 6418,
       leads: 9,
+      messages: 0,
       subscriptions: 571,
       cpl: 768,
+      costPerMsg: 0,
       costPerSub: 52,
     },
   };
@@ -118,13 +122,13 @@ describe("formatDigestMessage", () => {
       ...sampleData,
       prevTotals: {
         impressions: 95000, clicks: 250, spent: 5900,
-        leads: 8, subscriptions: 520, cpl: 800, costPerSub: 50,
+        leads: 8, messages: 0, subscriptions: 520, cpl: 800, costPerMsg: 0, costPerSub: 50,
       },
       accounts: [{
         ...sampleData.accounts[0],
         prevMetrics: {
           impressions: 95000, clicks: 250, spent: 5900,
-          leads: 8, subscriptions: 520, cpl: 800, costPerSub: 50,
+          leads: 8, messages: 0, subscriptions: 520, cpl: 800, costPerMsg: 0, costPerSub: 50,
         },
       }],
     };
