@@ -1784,13 +1784,17 @@ export const checkUzBudgetRules = internalAction({
                 { ruleId: rule._id, campaignId: String(campaign.id) }
               );
 
-              // Resume campaign after budget increase
-              await ctx.runAction(internal.vkApi.resumeCampaign, {
-                accessToken,
-                campaignId: campaign.id,
-              });
+              // Resume campaign after budget increase (separate try/catch — budget already set)
+              try {
+                await ctx.runAction(internal.vkApi.resumeCampaign, {
+                  accessToken,
+                  campaignId: campaign.id,
+                });
+              } catch (resumeErr) {
+                console.error(`[uz_budget] Budget set OK but resume failed for campaign ${campaign.id}:`, resumeErr);
+              }
 
-              // Log success
+              // Log success (budget was increased regardless of resume result)
               await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
                 userId: rule.userId,
                 ruleId: rule._id,

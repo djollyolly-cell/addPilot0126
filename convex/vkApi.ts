@@ -1031,6 +1031,7 @@ export const createMtBanner = action({
 });
 
 // Update campaign (status, budget, targetings)
+// Uses fallback for new VK Ads accounts (ad_plans endpoint)
 export const updateMtCampaign = action({
   args: {
     accessToken: v.string(),
@@ -1038,11 +1039,12 @@ export const updateMtCampaign = action({
     data: v.any(),
   },
   handler: async (_, args) => {
-    return postMtApi<MtCampaign>(
-      `campaigns/${args.campaignId}.json`,
-      args.accessToken,
-      args.data
-    );
+    // Convert data to Record<string, string> for postCampaignWithFallback
+    const body: Record<string, string> = {};
+    for (const [key, val] of Object.entries(args.data as Record<string, unknown>)) {
+      body[key] = String(val);
+    }
+    return postCampaignWithFallback(args.accessToken, args.campaignId, body);
   },
 });
 
@@ -1124,7 +1126,93 @@ export const getCampaignsForAccount = internalAction({
 });
 
 /**
+ * POST to campaigns or ad_plans endpoint with automatic fallback.
+ * New VK Ads accounts use ad_plans (not campaigns) for budget/status changes.
+ * Strategy: try campaigns/{id} first (legacy). If "unallowed_value" error →
+ * look up ad_plan_id via ad_groups/{id} → retry via ad_plans/{ad_plan_id}.
+ */
+async function postCampaignWithFallback(
+  accessToken: string,
+  campaignId: number,
+  body: Record<string, string>,
+): Promise<MtCampaign> {
+  // 1. Try legacy endpoint: campaigns/{id}.json
+  const legacyUrl = `${MT_API_BASE}/api/v2/campaigns/${campaignId}.json`;
+  const legacyResp = await fetch(legacyUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (legacyResp.status === 401) throw new Error("TOKEN_EXPIRED");
+
+  if (legacyResp.ok) {
+    const text = await legacyResp.text();
+    if (text.trim()) return JSON.parse(text) as MtCampaign;
+    return { id: campaignId } as unknown as MtCampaign;
+  }
+
+  // Check if this is a new-format account error
+  const errorText = await legacyResp.text();
+  if (!errorText.includes("unallowed_value")) {
+    throw new Error(`VK Ads API Error ${legacyResp.status}: ${errorText}`);
+  }
+
+  // 2. New VK Ads format — look up ad_plan_id via ad_groups list endpoint
+  //    (single ad_groups/{id}.json does NOT return ad_plan_id field)
+  const groupUrl = new URL(`${MT_API_BASE}/api/v2/ad_groups.json`);
+  groupUrl.searchParams.set("_id", String(campaignId));
+  groupUrl.searchParams.set("fields", "id,ad_plan_id");
+  const groupResp = await fetch(groupUrl.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (groupResp.status === 401) throw new Error("TOKEN_EXPIRED");
+  if (!groupResp.ok) {
+    throw new Error(
+      `Failed to look up ad_group ${campaignId}: ${await groupResp.text()}`,
+    );
+  }
+  const groupList = (await groupResp.json()) as {
+    items?: Array<{ id: number; ad_plan_id?: number }>;
+  };
+  const groupItem = groupList.items?.find((g) => g.id === campaignId);
+  const adPlanId = groupItem?.ad_plan_id;
+  if (!adPlanId) {
+    throw new Error(
+      `ad_group ${campaignId} has no ad_plan_id — cannot set budget via ad_plans`,
+    );
+  }
+
+  // 3. Retry via ad_plans/{ad_plan_id}.json
+  const planUrl = `${MT_API_BASE}/api/v2/ad_plans/${adPlanId}.json`;
+  const planResp = await fetch(planUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (planResp.status === 401) throw new Error("TOKEN_EXPIRED");
+  if (!planResp.ok) {
+    const planErr = await planResp.text();
+    throw new Error(
+      `VK Ads API Error ${planResp.status} (ad_plan ${adPlanId}): ${planErr}`,
+    );
+  }
+  const planText = await planResp.text();
+  if (planText.trim()) return JSON.parse(planText) as MtCampaign;
+  return { id: adPlanId } as unknown as MtCampaign;
+}
+
+/**
  * Set daily budget on a campaign (group).
+ * Supports both legacy myTarget accounts (campaigns endpoint)
+ * and new VK Ads accounts (ad_plans endpoint via fallback).
  * @param newLimitRubles — budget in rubles (API accepts rubles directly)
  */
 export const setCampaignBudget = internalAction({
@@ -1134,33 +1222,17 @@ export const setCampaignBudget = internalAction({
     newLimitRubles: v.number(),
   },
   handler: async (_, args) => {
-    // API accepts rubles directly (108 = 108₽)
-    // Use raw fetch because VK API may return empty body on successful update
-    const url = `${MT_API_BASE}/api/v2/campaigns/${args.campaignId}.json`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${args.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ budget_limit_day: String(Math.round(args.newLimitRubles)) }),
-    });
-    if (response.status === 401) throw new Error("TOKEN_EXPIRED");
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`VK Ads API Error ${response.status}: ${text}`);
-    }
-    // Parse JSON only if body is not empty
-    const text = await response.text();
-    if (text.trim()) {
-      return JSON.parse(text) as MtCampaign;
-    }
-    return { id: args.campaignId } as unknown as MtCampaign;
+    return await postCampaignWithFallback(
+      args.accessToken,
+      args.campaignId,
+      { budget_limit_day: String(Math.round(args.newLimitRubles)) },
+    );
   },
 });
 
 /**
  * Activate a campaign (resume after budget block).
+ * Supports both legacy myTarget and new VK Ads accounts.
  */
 export const resumeCampaign = internalAction({
   args: {
@@ -1168,23 +1240,11 @@ export const resumeCampaign = internalAction({
     campaignId: v.number(),
   },
   handler: async (_, args) => {
-    const url = `${MT_API_BASE}/api/v2/campaigns/${args.campaignId}.json`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${args.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ status: "active" }),
-    });
-    if (response.status === 401) throw new Error("TOKEN_EXPIRED");
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`VK Ads API Error ${response.status}: ${text}`);
-    }
-    const text = await response.text();
-    if (text.trim()) return JSON.parse(text) as MtCampaign;
-    return { id: args.campaignId } as unknown as MtCampaign;
+    return await postCampaignWithFallback(
+      args.accessToken,
+      args.campaignId,
+      { status: "active" },
+    );
   },
 });
 
