@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useMutation, useQuery } from 'convex/react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { BusinessProfileEditor } from '@/components/BusinessProfileEditor';
@@ -51,7 +51,9 @@ const BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || 'AddPilotBot'
 
 export function SettingsPage() {
   const { user } = useAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business'>('profile');
+  const location = useLocation();
+  const initialTab = (location.state as any)?.tab || 'profile';
+  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business'>(initialTab);
 
   if (!user) {
     return (

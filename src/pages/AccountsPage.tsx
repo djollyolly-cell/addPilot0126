@@ -7,7 +7,8 @@ import { VkAdsConnectWizard } from '../components/VkAdsConnectWizard';
 import { AgencyConnectModal } from '../components/AgencyConnectModal';
 import { UpgradeModal } from '../components/UpgradeModal';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
-import { Building2, Loader2, AlertCircle, RefreshCw, Link, KeyRound } from 'lucide-react';
+import { Building2, Loader2, AlertCircle, RefreshCw, Link, KeyRound, MessageCircle } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
 
@@ -30,10 +31,16 @@ export function AccountsPage() {
     user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
   );
 
+  const telegramStatus = useQuery(
+    api.telegram.getConnectionStatus,
+    user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
+  );
+
   const fetchAndConnect = useAction(api.adAccounts.fetchAndConnect);
   const disconnectAccount = useMutation(api.adAccounts.disconnect);
   const syncNow = useAction(api.adAccounts.syncNow);
   const updateTier = useMutation(api.users.updateTier);
+  const navigate = useNavigate();
 
   const autoFetchedRef = useRef(false);
 
@@ -251,6 +258,27 @@ export function AccountsPage() {
         >
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{error}</span>
+        </div>
+      )}
+
+      {/* Telegram banner — show when accounts exist but Telegram not connected */}
+      {accounts && accounts.length > 0 && telegramStatus && !telegramStatus.connected && (
+        <div className="flex items-center gap-3 p-4 rounded-xl border border-primary/20 bg-primary/5">
+          <div className="p-2 rounded-lg bg-primary/10 shrink-0">
+            <MessageCircle className="w-5 h-5 text-primary" />
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-medium">Подключите Telegram-бота</p>
+            <p className="text-xs text-muted-foreground">
+              Получайте мгновенные оповещения об остановке объявлений и срабатывании правил
+            </p>
+          </div>
+          <button
+            onClick={() => navigate('/settings', { state: { tab: 'telegram' } })}
+            className="shrink-0 px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
+          >
+            Подключить
+          </button>
         </div>
       )}
 
