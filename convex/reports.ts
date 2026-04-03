@@ -257,10 +257,14 @@ async function fetchAllData(
       "ad_groups.json", accessToken,
       { fields: "id,name,status,ad_plan_id,package_id,budget_limit,budget_limit_day", limit: "250" }
     ),
+    // packages.json max limit=50 (VK API constraint). Non-fatal: if fails, objectives won't have labels.
     callMtApi<{ items: { id: number; name: string }[] }>(
       "packages.json", accessToken,
-      { fields: "id,name", limit: "200" }
-    ),
+      { fields: "id,name", limit: "50" }
+    ).catch((err) => {
+      console.error("[reports] packages.json failed (non-fatal):", err instanceof Error ? err.message : err);
+      return { items: [] as { id: number; name: string }[] };
+    }),
   ]);
 
   const adPlans = adPlansData.items || [];
