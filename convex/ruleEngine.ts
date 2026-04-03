@@ -1676,7 +1676,7 @@ export const logBudgetAction = internalMutation({
 
 /**
  * Check all active uz_budget_manage rules.
- * Called from syncAll after metrics update.
+ * Runs as independent cron (not inside syncAll) to avoid timeout dependency.
  */
 export const checkUzBudgetRules = internalAction({
   args: {},
@@ -1685,6 +1685,8 @@ export const checkUzBudgetRules = internalAction({
     if (uzRules.length === 0) return;
 
     let totalActions = 0;
+    // Skip-reason counters for diagnostics
+    let skipped = { blocked: 0, noBudget: 0, delivering: 0, dedup: 0, maxReached: 0, tokenErr: 0 };
 
     for (const rule of uzRules) {
       try {
@@ -1704,18 +1706,12 @@ export const checkUzBudgetRules = internalAction({
             );
           } catch {
             console.error(`[uz_budget] Cannot get token for account ${accountId}`);
+            skipped.tokenErr++;
             continue;
           }
 
-          // Get campaigns from VK API
-          const campaigns = await ctx.runAction(
-            internal.vkApi.getCampaignsForAccount,
-            { accessToken }
-          );
-
-          // Filter by targetCampaignIds
-          const targetIds = rule.targetCampaignIds || [];
-          const allCampaigns = campaigns as Array<{
+          // Get campaigns from VK API (isolated per account — failure doesn't block others)
+          let campaigns: Array<{
             id: number;
             name: string;
             status: string;
@@ -1723,16 +1719,28 @@ export const checkUzBudgetRules = internalAction({
             package_id?: number;
             delivery?: string;
           }>;
-          const targetCampaigns = allCampaigns.filter(
+          try {
+            campaigns = await ctx.runAction(
+              internal.vkApi.getCampaignsForAccount,
+              { accessToken }
+            ) as typeof campaigns;
+          } catch (apiErr) {
+            console.error(`[uz_budget] Failed to fetch campaigns for account ${accountId}:`, apiErr);
+            continue;
+          }
+
+          // Filter by targetCampaignIds
+          const targetIds = rule.targetCampaignIds || [];
+          const targetCampaigns = campaigns.filter(
             (c) => targetIds.includes(String(c.id))
           );
 
           for (const campaign of targetCampaigns) {
             const dailyLimitRubles = Number(campaign.budget_limit_day || "0");
-            if (dailyLimitRubles <= 0) continue; // No budget set — skip
+            if (dailyLimitRubles <= 0) { skipped.noBudget++; continue; }
 
             // Skip deleted/blocked campaigns (blocked = VK moderation, not budget)
-            if (campaign.status === "deleted" || campaign.status === "blocked") continue;
+            if (campaign.status === "deleted" || campaign.status === "blocked") { skipped.blocked++; continue; }
 
             // Get spent today
             const spentToday = await ctx.runQuery(
@@ -1745,17 +1753,18 @@ export const checkUzBudgetRules = internalAction({
             // Safety net: spent >= 90% prevents false triggers (e.g. no balance, moderation)
             const isDeliveryPaused = campaign.delivery === "not_delivering";
             const isSpentNearLimit = spentToday >= dailyLimitRubles * 0.90;
-            if (!isDeliveryPaused || !isSpentNearLimit) continue;
+            if (!isDeliveryPaused || !isSpentNearLimit) { skipped.delivering++; continue; }
 
             // Dedup: skip if budget was already increased and spent hasn't grown since
             const recentIncrease = await ctx.runQuery(
               internal.ruleEngine.hasRecentBudgetIncrease,
               { ruleId: rule._id, campaignId: String(campaign.id), withinMs: 5 * 60 * 1000, currentSpent: spentToday }
             );
-            if (recentIncrease) continue;
+            if (recentIncrease) { skipped.dedup++; continue; }
 
             // Check max budget
             if (maxDailyBudget && dailyLimitRubles >= maxDailyBudget) {
+              skipped.maxReached++;
               if (rule.actions.notifyOnKeyEvents) {
                 try {
                   await ctx.runAction(internal.telegram.sendBudgetNotification, {
@@ -1869,8 +1878,13 @@ export const checkUzBudgetRules = internalAction({
       }
     }
 
-    if (totalActions > 0) {
-      console.log(`[uz_budget] ${totalActions} budget actions performed`);
-    }
+    // Summary log — always emit for observability
+    const skipTotal = Object.values(skipped).reduce((a, b) => a + b, 0);
+    console.log(
+      `[uz_budget] ${totalActions} increased` +
+      (skipTotal > 0
+        ? ` | skipped: ${skipped.delivering} delivering, ${skipped.dedup} dedup, ${skipped.blocked} blocked, ${skipped.maxReached} max, ${skipped.noBudget} no-budget, ${skipped.tokenErr} token-err`
+        : "")
+    );
   },
 });

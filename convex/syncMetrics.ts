@@ -278,15 +278,8 @@ export const syncAll = internalAction({
       );
     }
 
-    // UZ budget rules — check budget exhaustion and auto-increase
-    try {
-      await ctx.runAction(internal.ruleEngine.checkUzBudgetRules, {});
-    } catch (error) {
-      console.error(
-        "[syncMetrics] Error running UZ budget rules:",
-        error instanceof Error ? error.message : error
-      );
-    }
+    // UZ budget rules — moved to separate cron "uz-budget-increase" (crons.ts)
+    // to avoid timeout when syncAll takes too long
 
     // Poll moderation status for AI Cabinet banners
     try {

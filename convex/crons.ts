@@ -80,6 +80,14 @@ crons.interval(
   internal.aiRecommendations.checkAllCampaigns
 );
 
+// UZ budget increase — independent cron, not tied to syncAll
+// Runs every 5 min to catch budget-exhausted campaigns quickly
+crons.interval(
+  "uz-budget-increase",
+  { minutes: 5 },
+  internal.ruleEngine.checkUzBudgetRules
+);
+
 // UZ budget reset — every 30 min, checks user timezone for midnight reset
 crons.interval(
   "uz-budget-reset",
