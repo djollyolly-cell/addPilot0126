@@ -20,6 +20,8 @@ import {
   Send,
   AlertCircle,
   CheckCircle,
+  Bell,
+  X,
 } from 'lucide-react';
 import { Label } from '../components/ui/label';
 import { Id } from '../../convex/_generated/dataModel';
@@ -70,6 +72,7 @@ function AdminDashboard() {
   const updateTier = useMutation(api.admin.updateUserTier);
   const updateExpiry = useMutation(api.admin.updateUserExpiry);
   const toggleAdmin = useMutation(api.admin.toggleAdmin);
+  const sendNotification = useMutation(api.admin.sendUserNotification);
 
   const [search, setSearch] = useState('');
   const [tierFilter, setTierFilter] = useState<string>('all');
@@ -77,6 +80,12 @@ function AdminDashboard() {
   const [editingExpiry, setEditingExpiry] = useState<string | null>(null);
   const [expiryInput, setExpiryInput] = useState('');
   const [togglingAdmin, setTogglingAdmin] = useState<string | null>(null);
+  const [notifyUserId, setNotifyUserId] = useState<string | null>(null);
+  const [notifyTitle, setNotifyTitle] = useState('');
+  const [notifyMessage, setNotifyMessage] = useState('');
+  const [notifyType, setNotifyType] = useState<'info' | 'warning' | 'payment'>('info');
+  const [notifySending, setNotifySending] = useState(false);
+  const [notifyResult, setNotifyResult] = useState<string | null>(null);
 
   const filteredUsers = users
     ?.filter((u) => {
@@ -130,6 +139,35 @@ function AdminDashboard() {
     setEditingExpiry(null);
     setExpiryInput('');
   };
+
+  const handleSendNotification = async () => {
+    if (!notifyUserId || !notifyTitle.trim() || !notifyMessage.trim()) return;
+    setNotifySending(true);
+    setNotifyResult(null);
+    try {
+      await sendNotification({
+        sessionToken,
+        userId: notifyUserId as Id<'users'>,
+        title: notifyTitle.trim(),
+        message: notifyMessage.trim(),
+        type: notifyType,
+      });
+      setNotifyResult('Уведомление отправлено');
+      setNotifyTitle('');
+      setNotifyMessage('');
+      setTimeout(() => { setNotifyResult(null); setNotifyUserId(null); }, 2000);
+    } catch (err) {
+      setNotifyResult(`Ошибка: ${err instanceof Error ? err.message : 'Неизвестная ошибка'}`);
+    } finally {
+      setNotifySending(false);
+    }
+  };
+
+  const NOTIFY_TEMPLATES = [
+    { label: 'Оплата', title: 'Необходима оплата подписки', message: 'Ваш тариф был деактивирован. Для продолжения использования сервиса, пожалуйста, оплатите подписку в разделе Тарифы.', type: 'payment' as const },
+    { label: 'Истекает', title: 'Подписка скоро истекает', message: 'Ваша подписка истекает через несколько дней. Продлите подписку, чтобы не потерять доступ к функциям.', type: 'warning' as const },
+    { label: 'Инфо', title: 'Информация', message: '', type: 'info' as const },
+  ];
 
   const toDateInput = (ts: number) => {
     const d = new Date(ts);
@@ -239,6 +277,72 @@ function AdminDashboard() {
 
       {/* Telegram Broadcast */}
       <BroadcastSection sessionToken={sessionToken} />
+
+      {/* Notification Modal */}
+      {notifyUserId && (
+        <Card className="border-primary/30">
+          <CardHeader className="flex flex-row items-center justify-between pb-3">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Bell className="w-5 h-5" />
+              Уведомление для {filteredUsers?.find((u) => u._id === notifyUserId)?.name || 'пользователя'}
+            </CardTitle>
+            <Button variant="ghost" size="icon" onClick={() => { setNotifyUserId(null); setNotifyResult(null); }}>
+              <X className="w-4 h-4" />
+            </Button>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="flex flex-wrap gap-2">
+              {NOTIFY_TEMPLATES.map((t) => (
+                <Button
+                  key={t.label}
+                  size="sm"
+                  variant="outline"
+                  onClick={() => { setNotifyTitle(t.title); setNotifyMessage(t.message); setNotifyType(t.type); }}
+                >
+                  {t.label}
+                </Button>
+              ))}
+            </div>
+            <div className="flex gap-3">
+              <select
+                className="text-xs border border-border rounded px-2 py-1 bg-background"
+                value={notifyType}
+                onChange={(e) => setNotifyType(e.target.value as 'info' | 'warning' | 'payment')}
+              >
+                <option value="info">Инфо</option>
+                <option value="warning">Предупреждение</option>
+                <option value="payment">Оплата</option>
+              </select>
+              <Input
+                placeholder="Заголовок"
+                value={notifyTitle}
+                onChange={(e) => setNotifyTitle(e.target.value)}
+                className="flex-1"
+              />
+            </div>
+            <textarea
+              className="w-full min-h-[80px] p-3 rounded-lg border border-border bg-background text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+              placeholder="Текст уведомления..."
+              value={notifyMessage}
+              onChange={(e) => setNotifyMessage(e.target.value)}
+            />
+            {notifyResult && (
+              <div className={`flex items-center gap-2 p-2 rounded-lg text-sm ${notifyResult.startsWith('Ошибка') ? 'bg-destructive/10 text-destructive' : 'bg-green-500/10 text-green-700'}`}>
+                {notifyResult.startsWith('Ошибка') ? <AlertCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
+                {notifyResult}
+              </div>
+            )}
+            <Button
+              onClick={handleSendNotification}
+              disabled={notifySending || !notifyTitle.trim() || !notifyMessage.trim()}
+              size="sm"
+            >
+              {notifySending ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Send className="w-4 h-4 mr-2" />}
+              Отправить
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Users Table */}
       <Card>
@@ -368,18 +472,29 @@ function AdminDashboard() {
                         </button>
                       </td>
                       <td className="py-3">
-                        <select
-                          className="text-xs border border-border rounded px-2 py-1 bg-background"
-                          value={u.subscriptionTier}
-                          disabled={changingTier === u._id}
-                          onChange={(e) =>
-                            handleTierChange(u._id, e.target.value as 'freemium' | 'start' | 'pro')
-                          }
-                        >
-                          <option value="freemium">Freemium</option>
-                          <option value="start">Start</option>
-                          <option value="pro">Pro</option>
-                        </select>
+                        <div className="flex items-center gap-1">
+                          <select
+                            className="text-xs border border-border rounded px-2 py-1 bg-background"
+                            value={u.subscriptionTier}
+                            disabled={changingTier === u._id}
+                            onChange={(e) =>
+                              handleTierChange(u._id, e.target.value as 'freemium' | 'start' | 'pro')
+                            }
+                          >
+                            <option value="freemium">Freemium</option>
+                            <option value="start">Start</option>
+                            <option value="pro">Pro</option>
+                          </select>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            title="Отправить уведомление"
+                            onClick={() => { setNotifyUserId(u._id); setNotifyResult(null); }}
+                          >
+                            <Bell className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}
