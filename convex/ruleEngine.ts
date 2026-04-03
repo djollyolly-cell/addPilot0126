@@ -1548,18 +1548,23 @@ export const hasRecentBudgetIncrease = internalQuery({
       const spentAtLastIncrease = lastLog.metricsSnapshot.spent ?? 0;
       const newBudgetAtLastIncrease = lastLog.metricsSnapshot.newBudget;
 
-      // If we know the budget that was set at last increase, check if campaign
-      // has spent through it (≥90%). This handles the case where budget was
-      // increased but campaign spent up to the new limit and paused again.
-      if (newBudgetAtLastIncrease && args.currentSpent >= newBudgetAtLastIncrease * 0.90) {
-        return false; // campaign consumed the new budget — allow next increase
+      if (newBudgetAtLastIncrease !== undefined) {
+        // New logs with newBudget tracking
+        if (args.currentSpent >= newBudgetAtLastIncrease * 0.90) {
+          return false; // campaign consumed the new budget — allow next increase
+        }
+        if (args.currentSpent <= spentAtLastIncrease) {
+          return true; // spent didn't grow — skip
+        }
+        return false; // spent grew — allow new increase
       }
 
-      // Otherwise, only skip if spent hasn't grown since last increase
-      if (args.currentSpent <= spentAtLastIncrease) {
-        return true; // spent didn't grow — skip
+      // Legacy logs (no newBudget): if spent hasn't decreased, fall through
+      // to time-based dedup instead of blocking forever
+      if (args.currentSpent < spentAtLastIncrease) {
+        return true; // spent decreased (e.g. after daily reset) — skip
       }
-      return false; // spent grew — allow new increase
+      // Fall through to time-based dedup below
     }
 
     // Fallback: use time-based dedup
