@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
+import { useNavigate } from 'react-router-dom';
 import { TargetTreeSelector, TargetSelection } from '../components/TargetTreeSelector';
 import { ActionRadio, ActionMode, actionModeToFlags } from '../components/ActionRadio';
 import { UpgradeModal } from '../components/UpgradeModal';
@@ -66,6 +67,7 @@ function flagsToActionMode(actions: { stopAd: boolean; notify: boolean }): Actio
 
 export function RulesPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
@@ -418,6 +420,7 @@ export function RulesPage() {
           onClose={() => setShowUpgradeModal(false)}
           onUpgrade={() => {
             setShowUpgradeModal(false);
+            navigate('/pricing');
           }}
         />
       )}

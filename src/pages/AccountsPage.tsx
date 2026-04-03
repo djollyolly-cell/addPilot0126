@@ -39,7 +39,6 @@ export function AccountsPage() {
   const fetchAndConnect = useAction(api.adAccounts.fetchAndConnect);
   const disconnectAccount = useMutation(api.adAccounts.disconnect);
   const syncNow = useAction(api.adAccounts.syncNow);
-  const updateTier = useMutation(api.users.updateTier);
   const navigate = useNavigate();
 
   const autoFetchedRef = useRef(false);
@@ -93,17 +92,9 @@ export function AccountsPage() {
     setShowAgencyModal(true);
   };
 
-  const handleUpgrade = async (tier: 'start' | 'pro') => {
-    try {
-      await updateTier({
-        userId: user.userId as Id<"users">,
-        tier,
-      });
-      setShowUpgradeModal(false);
-      setSuccess(`Тариф обновлён до ${tier === 'start' ? 'Start' : 'Pro'}! Теперь можете подключить больше кабинетов.`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Не удалось обновить тариф');
-    }
+  const handleUpgrade = () => {
+    setShowUpgradeModal(false);
+    navigate('/pricing');
   };
 
   const handleRefresh = async () => {
