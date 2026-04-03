@@ -264,7 +264,9 @@ function AdminDashboard() {
                     <th className="pb-3 font-medium text-muted-foreground">Доступ до</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Промо</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Кабинеты</th>
+                    <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Правила</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Telegram</th>
+                    <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Оплачено</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Дата рег.</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Админ</th>
                     <th className="pb-3 font-medium text-muted-foreground">Действия</th>
@@ -332,11 +334,21 @@ function AdminDashboard() {
                         )}
                       </td>
                       <td className="py-3 pr-4 hidden sm:table-cell">{u.accountsCount}</td>
+                      <td className="py-3 pr-4 hidden sm:table-cell">{u.rulesCount}</td>
                       <td className="py-3 pr-4 hidden md:table-cell">
                         {u.telegramChatId ? (
                           <Badge variant="success">Да</Badge>
                         ) : (
                           <span className="text-muted-foreground">Нет</span>
+                        )}
+                      </td>
+                      <td className="py-3 pr-4 hidden md:table-cell">
+                        {u.totalPaid > 0 ? (
+                          <span className="text-xs font-medium text-green-600">
+                            {(u.totalPaid / 100).toFixed(2)} BYN
+                          </span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
                         )}
                       </td>
                       <td className="py-3 pr-4 hidden md:table-cell text-muted-foreground">

@@ -81,6 +81,9 @@ export const listUsers = query({
           logsCount: logs.length,
           lastPromoCode: lastPayment?.promoCode || null,
           lastBonusDays: lastPayment?.bonusDays || null,
+          totalPaid: payments
+            .filter((p) => p.status === "completed")
+            .reduce((sum, p) => sum + (p.amount || 0), 0),
         };
       })
     );

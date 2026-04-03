@@ -26,9 +26,11 @@ export const resetBudgets = internalAction({
   args: {},
   handler: async (ctx) => {
     const uzRules = await ctx.runQuery(internal.ruleEngine.getActiveUzRules);
+    console.log(`[uz_budget_reset] Found ${uzRules.length} active uz rules`);
     const resetRules = (uzRules as UzRule[]).filter(
       (r) => r.conditions.resetDaily
     );
+    console.log(`[uz_budget_reset] Rules with resetDaily=true: ${resetRules.length}`);
     if (resetRules.length === 0) return;
 
     for (const rule of resetRules) {
@@ -51,6 +53,8 @@ export const resetBudgets = internalAction({
         const parts = formatter.formatToParts(now);
         const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "-1", 10);
         const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "-1", 10);
+
+        console.log(`[uz_budget_reset] Rule ${rule._id}: tz=${tz}, hour=${hour}, minute=${minute}`);
 
         // Cron runs every 30 min → catch window 00:00-00:29
         if (hour !== 0 || minute >= 30) continue;
@@ -93,6 +97,8 @@ export const resetBudgets = internalAction({
           for (const campaignIdStr of targetIds) {
             const campaignId = parseInt(campaignIdStr);
             if (isNaN(campaignId)) continue;
+            // Only process campaigns that belong to this account
+            if (!nameMap.has(campaignIdStr)) continue;
             const campaignName = nameMap.get(campaignIdStr) || `Группа #${campaignIdStr}`;
 
             try {
