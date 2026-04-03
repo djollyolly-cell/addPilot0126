@@ -1,5 +1,8 @@
 import { Outlet, Link, useLocation } from 'react-router-dom';
+import { useQuery } from 'convex/react';
+import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
+import { Id } from '../../convex/_generated/dataModel';
 import {
   LayoutDashboard,
   Building2,
@@ -15,6 +18,7 @@ import {
   Sparkles,
   Film,
   Wand2,
+  MessageCircle,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -28,6 +32,7 @@ const navigation = [
   { name: 'Видео', href: '/videos', icon: Film },
   { name: 'Логи', href: '/logs', icon: ScrollText },
   { name: 'Тарифы', href: '/pricing', icon: Crown },
+  { name: 'Поддержка', href: '/support', icon: MessageCircle },
   { name: 'Настройки', href: '/settings', icon: Settings },
 ];
 
@@ -46,6 +51,13 @@ export function Layout() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const isAdmin = user && (user.isAdmin === true || ADMIN_EMAILS.includes(user.email));
+
+  // Unread support messages count
+  const supportThreads = useQuery(
+    api.userNotifications.getUserThreads,
+    user?.userId ? { userId: user.userId as Id<'users'> } : 'skip'
+  );
+  const supportUnread = supportThreads?.reduce((sum, t) => sum + t.unreadCount, 0) ?? 0;
 
   const navItems = [
     ...navigation,
@@ -68,6 +80,7 @@ export function Layout() {
         <nav className="p-4 space-y-1">
           {navItems.map((item) => {
             const isActive = location.pathname === item.href;
+            const badge = item.href === '/support' && supportUnread > 0 ? supportUnread : 0;
             return (
               <Link
                 key={item.name}
@@ -81,6 +94,16 @@ export function Layout() {
               >
                 <item.icon className="w-5 h-5" />
                 {item.name}
+                {badge > 0 && (
+                  <span className={cn(
+                    'ml-auto text-xs font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1',
+                    isActive
+                      ? 'bg-primary-foreground text-primary'
+                      : 'bg-destructive text-white'
+                  )}>
+                    {badge}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -147,18 +170,26 @@ export function Layout() {
             const isActive =
               location.pathname === item.href ||
               (item.href === '/settings' && location.pathname.startsWith('/settings'));
+            const badge = item.href === '/support' && supportUnread > 0 ? supportUnread : 0;
             return (
               <Link
                 key={item.name}
                 to={item.href}
                 className={cn(
-                  'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors',
+                  'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors relative',
                   isActive
                     ? 'text-primary'
                     : 'text-muted-foreground'
                 )}
               >
-                <item.icon className="w-5 h-5" />
+                <div className="relative">
+                  <item.icon className="w-5 h-5" />
+                  {badge > 0 && (
+                    <span className="absolute -top-1.5 -right-2 bg-destructive text-white text-[9px] font-bold rounded-full min-w-[14px] h-[14px] flex items-center justify-center px-0.5">
+                      {badge}
+                    </span>
+                  )}
+                </div>
                 <span className="text-[10px] font-medium leading-none">{item.name}</span>
               </Link>
             );

@@ -315,6 +315,7 @@ export const sendUserNotification = mutation({
       title: args.title,
       message: args.message,
       type: args.type,
+      direction: "admin_to_user",
       isRead: false,
       createdAt: Date.now(),
     });

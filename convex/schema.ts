@@ -558,7 +558,7 @@ export default defineSchema({
   })
     .index("by_accountId", ["accountId"])
     .index("by_field_changedAt", ["field", "changedAt"]),
-  // In-app notifications for specific users (admin → user)
+  // In-app notifications & feedback threads
   userNotifications: defineTable({
     userId: v.id("users"),
     title: v.string(),
@@ -566,11 +566,20 @@ export default defineSchema({
     type: v.union(
       v.literal("info"),
       v.literal("warning"),
-      v.literal("payment")
+      v.literal("payment"),
+      v.literal("feedback")
     ),
+    direction: v.optional(v.union(
+      v.literal("admin_to_user"),
+      v.literal("user_to_admin")
+    )),
+    // Thread support: first message has no threadId, replies point to root message
+    threadId: v.optional(v.id("userNotifications")),
     isRead: v.boolean(),
     createdAt: v.number(),
   })
     .index("by_userId", ["userId"])
-    .index("by_userId_unread", ["userId", "isRead"]),
+    .index("by_userId_unread", ["userId", "isRead"])
+    .index("by_direction", ["direction", "isRead"])
+    .index("by_threadId", ["threadId"]),
 }, { schemaValidation: false });

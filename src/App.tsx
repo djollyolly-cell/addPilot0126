@@ -20,6 +20,7 @@ const PricingPage = lazy(() => import('./pages/PricingPage').then(m => ({ defaul
 const PrivacyPage = lazy(() => import('./pages/PrivacyPage').then(m => ({ default: m.PrivacyPage })));
 const TermsPage = lazy(() => import('./pages/TermsPage').then(m => ({ default: m.TermsPage })));
 const AdminPage = lazy(() => import('./pages/AdminPage').then(m => ({ default: m.AdminPage })));
+const SupportPage = lazy(() => import('./pages/SupportPage').then(m => ({ default: m.SupportPage })));
 const CreativesPage = lazy(() => import('./pages/CreativesPage').then(m => ({ default: m.CreativesPage })));
 const VideosPage = lazy(() => import('./pages/VideosPage').then(m => ({ default: m.VideosPage })));
 const AICabinetPage = lazy(() => import('./pages/AICabinetPage'));
@@ -140,6 +141,7 @@ function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/settings/telegram" element={<TelegramSettingsPage />} />
         <Route path="/pricing" element={<PricingPage />} />
+        <Route path="/support" element={<SupportPage />} />
         <Route path="/admin" element={<AdminPage />} />
       </Route>
 

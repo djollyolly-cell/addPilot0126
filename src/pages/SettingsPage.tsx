@@ -29,6 +29,8 @@ import {
   WifiOff,
   AlertTriangle,
   Briefcase,
+  Send,
+  AlertCircle,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
@@ -346,6 +348,248 @@ function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['us
             )}
           </CardContent>
         </Card>
+      </div>
+
+      {/* Feedback Form */}
+      <FeedbackForm userId={user.userId as Id<'users'>} />
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Feedback Form
+   ═══════════════════════════════════════════════════════════ */
+
+function FeedbackForm({ userId }: { userId: Id<'users'> }) {
+  const sendFeedback = useMutation(api.userNotifications.sendFeedback);
+  const threads = useQuery(api.userNotifications.getUserThreads, { userId });
+  const markAllRead = useMutation(api.userNotifications.markAllRead);
+
+  const [title, setTitle] = useState('');
+  const [message, setMessage] = useState('');
+  const [sending, setSending] = useState(false);
+  const [result, setResult] = useState<'success' | 'error' | null>(null);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [openThreadId, setOpenThreadId] = useState<string | null>(null);
+
+  const handleSend = async (threadId?: string) => {
+    if (!message.trim()) return;
+    setSending(true);
+    setResult(null);
+    try {
+      await sendFeedback({
+        userId,
+        title: threadId ? '' : (title.trim() || 'Обратная связь'),
+        message: message.trim(),
+        threadId: threadId as Id<'userNotifications'> | undefined,
+      });
+      setResult('success');
+      setTitle('');
+      setMessage('');
+      setTimeout(() => setResult(null), 3000);
+    } catch (err) {
+      setResult('error');
+      setErrorMsg(err instanceof Error ? err.message : 'Ошибка отправки');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const totalUnread = threads?.reduce((sum, t) => sum + t.unreadCount, 0) ?? 0;
+
+  // Mark admin replies as read when user opens the section
+  useEffect(() => {
+    if (totalUnread > 0) {
+      markAllRead({ userId });
+    }
+  }, [totalUnread, markAllRead, userId]);
+
+  return (
+    <Card data-testid="feedback-form">
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2">
+          <MessageCircle className="w-5 h-5" />
+          Обратная связь
+          {totalUnread > 0 && (
+            <Badge variant="destructive" className="ml-2">{totalUnread}</Badge>
+          )}
+        </CardTitle>
+        <CardDescription>Напишите нам, если есть вопросы или предложения</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* New message form */}
+        <div className="space-y-3">
+          <input
+            type="text"
+            placeholder="Тема (необязательно)"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            className="w-full px-3 py-2 rounded-lg border border-border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            data-testid="feedback-title"
+          />
+          <textarea
+            placeholder="Ваше сообщение..."
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            className="w-full min-h-[80px] p-3 rounded-lg border border-border bg-background text-sm resize-y focus:outline-none focus:ring-2 focus:ring-ring"
+            data-testid="feedback-message"
+          />
+          {result === 'success' && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-green-500/10 text-green-700 text-sm">
+              <CheckCircle2 className="w-4 h-4 shrink-0" />
+              Сообщение отправлено!
+            </div>
+          )}
+          {result === 'error' && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+              <AlertCircle className="w-4 h-4 shrink-0" />
+              {errorMsg}
+            </div>
+          )}
+          <Button
+            onClick={() => handleSend()}
+            disabled={sending || !message.trim()}
+            size="sm"
+            className="gap-2"
+            data-testid="feedback-send"
+          >
+            {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+            Отправить
+          </Button>
+        </div>
+
+        {/* Previous threads */}
+        {threads && threads.length > 0 && (
+          <div className="space-y-3 pt-4 border-t">
+            <p className="text-sm font-medium text-muted-foreground">Ваши обращения</p>
+            {threads.map((t) => (
+              <div key={t.threadId}>
+                <button
+                  onClick={() => setOpenThreadId(openThreadId === t.threadId ? null : t.threadId)}
+                  className={`w-full text-left p-3 rounded-lg border transition-colors ${
+                    t.unreadCount > 0
+                      ? 'border-primary/30 bg-primary/5'
+                      : 'border-border hover:bg-muted/50'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">
+                        {t.title || 'Обратная связь'}
+                      </p>
+                      <p className="text-xs text-muted-foreground truncate">{t.lastMessage}</p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {t.unreadCount > 0 && (
+                        <Badge variant="destructive" className="text-xs">{t.unreadCount}</Badge>
+                      )}
+                      <span className="text-xs text-muted-foreground">
+                        {new Date(t.lastMessageAt).toLocaleDateString('ru-RU', {
+                          day: '2-digit',
+                          month: '2-digit',
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                </button>
+
+                {/* Thread messages */}
+                {openThreadId === t.threadId && (
+                  <UserThreadMessages
+                    threadId={t.threadId as Id<'userNotifications'>}
+                    userId={userId}
+                    onReply={(text) => {
+                      setMessage(text);
+                    }}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function UserThreadMessages({
+  threadId,
+  userId,
+  onReply: _onReply,
+}: {
+  threadId: Id<'userNotifications'>;
+  userId: Id<'users'>;
+  onReply: (text: string) => void;
+}) {
+  const thread = useQuery(api.userNotifications.getThread, { threadId });
+  const sendFeedback = useMutation(api.userNotifications.sendFeedback);
+  const [replyText, setReplyText] = useState('');
+  const [sending, setSending] = useState(false);
+
+  if (!thread) return null;
+
+  const handleReply = async () => {
+    if (!replyText.trim()) return;
+    setSending(true);
+    try {
+      await sendFeedback({
+        userId,
+        title: '',
+        message: replyText.trim(),
+        threadId,
+      });
+      setReplyText('');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const formatTime = (ts: number) =>
+    new Date(ts).toLocaleDateString('ru-RU', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+
+  return (
+    <div className="mt-2 ml-3 space-y-2 border-l-2 border-border pl-3">
+      {thread.map((msg) => (
+        <div
+          key={msg._id}
+          className={`p-2 rounded-lg text-sm ${
+            msg.direction === 'admin_to_user'
+              ? 'bg-primary/10 border border-primary/20'
+              : 'bg-muted/50 border border-border'
+          }`}
+        >
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-xs font-medium">
+              {msg.direction === 'admin_to_user' ? 'Поддержка' : 'Вы'}
+            </span>
+            <span className="text-xs text-muted-foreground">{formatTime(msg.createdAt)}</span>
+          </div>
+          <p className="text-sm whitespace-pre-wrap">{msg.message}</p>
+        </div>
+      ))}
+
+      {/* Reply in thread */}
+      <div className="flex gap-2">
+        <textarea
+          className="flex-1 min-h-[40px] p-2 rounded-lg border border-border bg-background text-sm resize-none focus:outline-none focus:ring-2 focus:ring-ring"
+          placeholder="Ответить..."
+          value={replyText}
+          onChange={(e) => setReplyText(e.target.value)}
+          rows={1}
+        />
+        <Button
+          size="sm"
+          onClick={handleReply}
+          disabled={sending || !replyText.trim()}
+          className="shrink-0 self-end"
+        >
+          {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+        </Button>
       </div>
     </div>
   );
