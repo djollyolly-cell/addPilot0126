@@ -304,6 +304,51 @@ const EventFeed = memo(function EventFeed({
   );
 });
 
+/** In-app user notifications (sent by admin) */
+const UserNotificationsBanner = memo(function UserNotificationsBanner({ userId }: { userId: Id<"users"> }) {
+  const notifications = useQuery(api.userNotifications.getUnread, { userId });
+  const markRead = useMutation(api.userNotifications.markRead);
+
+  if (!notifications || notifications.length === 0) return null;
+
+  const iconColor: Record<string, string> = {
+    info: "text-blue-500 bg-blue-500/10",
+    warning: "text-amber-500 bg-amber-500/10",
+    payment: "text-destructive bg-destructive/10",
+  };
+  const borderColor: Record<string, string> = {
+    info: "border-blue-500/30",
+    warning: "border-amber-500/30",
+    payment: "border-destructive/30",
+  };
+
+  return (
+    <>
+      {notifications.map((n) => (
+        <Card key={n._id} className={cn("border", borderColor[n.type] || "border-border")} data-testid="user-notification">
+          <CardContent className="flex items-start gap-4 p-4">
+            <div className={cn("p-2 rounded-full shrink-0", iconColor[n.type] || "bg-muted")}>
+              <Bell className="w-5 h-5" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-medium">{n.title}</p>
+              <p className="text-sm text-muted-foreground mt-0.5">{n.message}</p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="shrink-0 text-muted-foreground"
+              onClick={() => markRead({ notificationId: n._id })}
+            >
+              Закрыть
+            </Button>
+          </CardContent>
+        </Card>
+      ))}
+    </>
+  );
+});
+
 /** Expired Subscription Banner */
 const ExpiredSubscriptionBanner = memo(function ExpiredSubscriptionBanner() {
   const navigate = useNavigate();
@@ -530,6 +575,9 @@ export function DashboardPage() {
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6" data-testid="dashboard-page">
+      {/* ── User notifications ── */}
+      {typedUserId && <UserNotificationsBanner userId={typedUserId} />}
+
       {/* ── Subscription banners ── */}
       {isExpired && <ExpiredSubscriptionBanner />}
       {isExpiringSoon && user.subscriptionExpiresAt && (

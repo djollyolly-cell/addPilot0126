@@ -295,6 +295,34 @@ export const broadcastTelegram = action({
   },
 });
 
+// Send in-app notification to a specific user
+export const sendUserNotification = mutation({
+  args: {
+    sessionToken: v.string(),
+    userId: v.id("users"),
+    title: v.string(),
+    message: v.string(),
+    type: v.union(v.literal("info"), v.literal("warning"), v.literal("payment")),
+  },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("User not found");
+
+    await ctx.db.insert("userNotifications", {
+      userId: args.userId,
+      title: args.title,
+      message: args.message,
+      type: args.type,
+      isRead: false,
+      createdAt: Date.now(),
+    });
+
+    return { success: true };
+  },
+});
+
 // Internal query for admin verification (used by actions)
 export const verifyAdmin = internalQuery({
   args: { sessionToken: v.string() },

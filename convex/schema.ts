@@ -558,4 +558,19 @@ export default defineSchema({
   })
     .index("by_accountId", ["accountId"])
     .index("by_field_changedAt", ["field", "changedAt"]),
+  // In-app notifications for specific users (admin → user)
+  userNotifications: defineTable({
+    userId: v.id("users"),
+    title: v.string(),
+    message: v.string(),
+    type: v.union(
+      v.literal("info"),
+      v.literal("warning"),
+      v.literal("payment")
+    ),
+    isRead: v.boolean(),
+    createdAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_userId_unread", ["userId", "isRead"]),
 }, { schemaValidation: false });
