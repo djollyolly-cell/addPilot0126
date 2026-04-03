@@ -59,6 +59,10 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
   const [promoError, setPromoError] = useState<string | null>(null);
 
   const createBepaidCheckout = useAction(api.billing.createBepaidCheckout);
+  const upgradeInfo = useQuery(
+    api.billing.getUpgradePrice,
+    user?.userId ? { userId: user.userId as Id<"users">, newTier: tier } : "skip"
+  );
   const promoValidation = useQuery(
     api.billing.validatePromoCode,
     promoCode.trim().length >= 3 ? { code: promoCode.trim() } : "skip"
@@ -106,6 +110,14 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
   const price = currency === 'BYN' ? priceBYN : priceRUB;
   const currencySymbol = currency === 'BYN' ? 'BYN' : '₽';
 
+  // Prorated upgrade calculation
+  const isUpgrade = upgradeInfo?.isUpgrade === true;
+  const upgradeCredit = upgradeInfo?.credit ?? 0;
+  const upgradeCostBYN = isUpgrade
+    ? Math.max(Math.ceil(priceBYN - upgradeCredit), 1)
+    : priceBYN;
+  const finalAmountBYN = isUpgrade ? upgradeCostBYN : priceBYN;
+
   const handleApplyPromo = () => {
     if (!promoCode.trim()) return;
     setPromoError(null);
@@ -150,8 +162,10 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
         userId: user.userId as Id<"users">,
         tier,
         returnUrl,
-        amountBYN: priceBYN,
+        amountBYN: finalAmountBYN,
         promoCode: promoApplied ? promoCode.trim().toUpperCase() : undefined,
+        isUpgrade: isUpgrade || undefined,
+        creditAmount: isUpgrade ? upgradeCredit : undefined,
       });
 
       if (result.success && result.redirectUrl) {
@@ -309,7 +323,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
               Оплата тарифа {tierInfo.name}
             </CardTitle>
             <CardDescription className="pl-8">
-              {price} {currencySymbol}/месяц • 🇧🇾 Беларусь
+              {isUpgrade ? `${upgradeCostBYN} BYN (доплата)` : `${price} ${currencySymbol}/месяц`} • 🇧🇾 Беларусь
             </CardDescription>
           </CardHeader>
 
@@ -329,6 +343,24 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
                 ))}
               </ul>
             </div>
+
+            {/* Upgrade credit info */}
+            {isUpgrade && (
+              <div className="p-4 bg-green-500/10 rounded-lg space-y-1 text-sm" data-testid="upgrade-credit-info">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Кредит за остаток ({upgradeInfo?.remainingDays} дн.)</span>
+                  <span className="text-green-700 dark:text-green-400 font-medium">−{upgradeCredit.toFixed(2)} BYN</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Стоимость {tierInfo.name}</span>
+                  <span>{priceBYN} BYN</span>
+                </div>
+                <div className="flex justify-between font-bold border-t border-border pt-1 mt-1">
+                  <span>К оплате</span>
+                  <span>{upgradeCostBYN} BYN</span>
+                </div>
+              </div>
+            )}
 
             {/* Промокод */}
             <div className="space-y-2">
@@ -410,7 +442,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
               ) : (
                 <>
                   <ExternalLink className="h-4 w-4 mr-2" />
-                  Перейти к оплате {price} {currencySymbol}
+                  Перейти к оплате {finalAmountBYN} BYN
                   {promoApplied && ` + ${promoApplied.bonusDays} дней`}
                 </>
               )}
@@ -474,8 +506,26 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
 
           <div className="p-3 bg-blue-500/10 text-blue-700 dark:text-blue-400 rounded-lg text-sm">
             <p>Оплата проходит через платёжную систему bePaid.</p>
-            <p className="mt-1">Сумма к оплате: <strong>{priceBYN} BYN</strong> (≈ {priceRUB} ₽ по курсу НБРБ)</p>
+            <p className="mt-1">Сумма к оплате: <strong>{finalAmountBYN} BYN</strong> (≈ {priceRUB} ₽ по курсу НБРБ)</p>
           </div>
+
+          {/* Upgrade credit info */}
+          {isUpgrade && (
+            <div className="p-4 bg-green-500/10 rounded-lg space-y-1 text-sm" data-testid="upgrade-credit-info">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Кредит за остаток ({upgradeInfo?.remainingDays} дн.)</span>
+                <span className="text-green-700 dark:text-green-400 font-medium">−{upgradeCredit.toFixed(2)} BYN</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Стоимость {tierInfo.name}</span>
+                <span>{priceBYN} BYN</span>
+              </div>
+              <div className="flex justify-between font-bold border-t border-border pt-1 mt-1">
+                <span>К оплате</span>
+                <span>{upgradeCostBYN} BYN</span>
+              </div>
+            </div>
+          )}
 
           {/* Промокод */}
           <div className="space-y-2">
@@ -557,7 +607,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
             ) : (
               <>
                 <ExternalLink className="h-4 w-4 mr-2" />
-                Перейти к оплате {priceBYN} BYN
+                Перейти к оплате {finalAmountBYN} BYN
                 {promoApplied && ` + ${promoApplied.bonusDays} дней`}
               </>
             )}
