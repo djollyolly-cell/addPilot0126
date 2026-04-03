@@ -128,8 +128,10 @@ export interface DigestMetrics {
   clicks: number;
   spent: number;
   leads: number;
+  messages: number;
   subscriptions: number;
   cpl: number;
+  costPerMsg: number;
   costPerSub: number;
 }
 
@@ -150,8 +152,14 @@ export interface DigestData {
 // ─── Digest pure helpers ─────────────────────────────────────────────
 
 export function isSubscriptionPackage(packageName: string): boolean {
+  return classifyCampaignPackage(packageName) === "subscription";
+}
+
+export function classifyCampaignPackage(packageName: string): "lead" | "message" | "subscription" {
   const lower = packageName.toLowerCase();
-  return ["подписк", "subscribe", "community", "join"].some(kw => lower.includes(kw));
+  if (["join", "subscri", "подписк"].some(kw => lower.includes(kw))) return "subscription";
+  if (["contact", "engage", "clip", "video_and_live", "socialvideo", "сообщени"].some(kw => lower.includes(kw))) return "message";
+  return "lead";
 }
 
 export function formatDelta(current: number, previous: number): string {
@@ -213,6 +221,9 @@ export function formatDigestMessage(
     if (m.leads > 0) {
       lines.push(`🎯 Лиды: ${m.leads} | CPL: ${m.cpl}₽${showDelta && p!.cpl > 0 ? formatDelta(m.cpl, p!.cpl) : ""}`);
     }
+    if (m.messages > 0) {
+      lines.push(`💬 Сообщения: ${m.messages} | Стоимость: ${m.costPerMsg}₽${showDelta && p!.costPerMsg > 0 ? formatDelta(m.costPerMsg, p!.costPerMsg) : ""}`);
+    }
     if (m.subscriptions > 0) {
       lines.push(`👥 Подписки: ${m.subscriptions} | Стоимость: ${m.costPerSub}₽${showDelta && p!.costPerSub > 0 ? formatDelta(m.costPerSub, p!.costPerSub) : ""}`);
     }
@@ -243,6 +254,7 @@ export function formatDigestMessage(
 
   let totalsLine = `<b>Итого:</b> расход ${t.spent.toLocaleString("ru-RU")}₽${showTotalDelta ? formatDelta(t.spent, pt!.spent) : ""}`;
   if (t.leads > 0) totalsLine += `, лиды ${t.leads}`;
+  if (t.messages > 0) totalsLine += `, сообщения ${t.messages}`;
   if (t.subscriptions > 0) totalsLine += `, подписки ${t.subscriptions}`;
 
   lines.push(totalsLine);
@@ -1496,7 +1508,7 @@ export const collectDigestData = internalAction({
 
     for (const accMetrics of accountMetrics) {
       // Try to get VK API token for package classification
-      const campaignTypeMap = new Map<string, "lead" | "subscription">();
+      const campaignTypeMap = new Map<string, "lead" | "message" | "subscription">();
 
       try {
         const accessToken = await ctx.runAction(
@@ -1511,16 +1523,17 @@ export const collectDigestData = internalAction({
         );
 
         for (const entry of typeMapArray) {
-          campaignTypeMap.set(entry.campaignId, entry.type as "lead" | "subscription");
+          campaignTypeMap.set(entry.campaignId, entry.type as "lead" | "message" | "subscription");
         }
       } catch {
         // Token expired or no access — all campaigns default to "lead"
       }
 
-      // Split metrics by campaign type
+      // Split metrics by campaign type (3 buckets)
       const campaignsData = accMetrics.campaigns;
 
       let leadSpent = 0, leadLeads = 0;
+      let msgSpent = 0, msgLeads = 0;
       let subSpent = 0, subLeads = 0;
       let totalImpressions = 0, totalClicks = 0, totalSpent = 0;
 
@@ -1533,6 +1546,9 @@ export const collectDigestData = internalAction({
         if (type === "subscription") {
           subSpent += c.spent;
           subLeads += c.leads;
+        } else if (type === "message") {
+          msgSpent += c.spent;
+          msgLeads += c.leads;
         } else {
           leadSpent += c.spent;
           leadLeads += c.leads;
@@ -1553,8 +1569,10 @@ export const collectDigestData = internalAction({
         clicks: totalClicks,
         spent: Math.round(totalSpent * 100) / 100,
         leads: leadLeads,
+        messages: msgLeads,
         subscriptions: subLeads,
         cpl: leadLeads > 0 ? Math.round(leadSpent / leadLeads) : 0,
+        costPerMsg: msgLeads > 0 ? Math.round(msgSpent / msgLeads) : 0,
         costPerSub: subLeads > 0 ? Math.round(subSpent / subLeads) : 0,
       };
 
@@ -1565,6 +1583,7 @@ export const collectDigestData = internalAction({
         if (prevAcc) {
           const prevCampaigns = prevAcc.campaigns;
           let prevLeadSpent = 0, prevLeadLeads = 0;
+          let prevMsgSpent = 0, prevMsgLeads = 0;
           let prevSubSpent = 0, prevSubLeads = 0;
           let prevTotalImpressions = 0, prevTotalClicks = 0, prevTotalSpent = 0;
 
@@ -1576,6 +1595,9 @@ export const collectDigestData = internalAction({
             if (type === "subscription") {
               prevSubSpent += c.spent;
               prevSubLeads += c.leads;
+            } else if (type === "message") {
+              prevMsgSpent += c.spent;
+              prevMsgLeads += c.leads;
             } else {
               prevLeadSpent += c.spent;
               prevLeadLeads += c.leads;
@@ -1595,8 +1617,10 @@ export const collectDigestData = internalAction({
             clicks: prevTotalClicks,
             spent: Math.round(prevTotalSpent * 100) / 100,
             leads: prevLeadLeads,
+            messages: prevMsgLeads,
             subscriptions: prevSubLeads,
             cpl: prevLeadLeads > 0 ? Math.round(prevLeadSpent / prevLeadLeads) : 0,
+            costPerMsg: prevMsgLeads > 0 ? Math.round(prevMsgSpent / prevMsgLeads) : 0,
             costPerSub: prevSubLeads > 0 ? Math.round(prevSubSpent / prevSubLeads) : 0,
           };
         }
@@ -1620,12 +1644,16 @@ export const collectDigestData = internalAction({
       clicks: accounts.reduce((s, a) => s + a.metrics.clicks, 0),
       spent: Math.round(accounts.reduce((s, a) => s + a.metrics.spent, 0) * 100) / 100,
       leads: accounts.reduce((s, a) => s + a.metrics.leads, 0),
+      messages: accounts.reduce((s, a) => s + a.metrics.messages, 0),
       subscriptions: accounts.reduce((s, a) => s + a.metrics.subscriptions, 0),
       cpl: 0,
+      costPerMsg: 0,
       costPerSub: 0,
     };
     const totalLeadSpent = accounts.reduce((s, a) => s + (a.metrics.leads > 0 ? a.metrics.cpl * a.metrics.leads : 0), 0);
     totals.cpl = totals.leads > 0 ? Math.round(totalLeadSpent / totals.leads) : 0;
+    const totalMsgSpent = accounts.reduce((s, a) => s + (a.metrics.messages > 0 ? a.metrics.costPerMsg * a.metrics.messages : 0), 0);
+    totals.costPerMsg = totals.messages > 0 ? Math.round(totalMsgSpent / totals.messages) : 0;
     const totalSubSpent = accounts.reduce((s, a) => s + (a.metrics.subscriptions > 0 ? a.metrics.costPerSub * a.metrics.subscriptions : 0), 0);
     totals.costPerSub = totals.subscriptions > 0 ? Math.round(totalSubSpent / totals.subscriptions) : 0;
 
@@ -1639,13 +1667,19 @@ export const collectDigestData = internalAction({
           clicks: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.clicks || 0), 0),
           spent: Math.round(accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.spent || 0), 0) * 100) / 100,
           leads: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.leads || 0), 0),
+          messages: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.messages || 0), 0),
           subscriptions: accsWithPrev.reduce((s, a) => s + (a.prevMetrics?.subscriptions || 0), 0),
           cpl: 0,
+          costPerMsg: 0,
           costPerSub: 0,
         };
         if (prevTotals.leads > 0) {
           const prevLeadSpent = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.cpl * a.prevMetrics.leads : 0), 0);
           prevTotals.cpl = Math.round(prevLeadSpent / prevTotals.leads);
+        }
+        if (prevTotals.messages > 0) {
+          const prevMsgSpent = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.costPerMsg * a.prevMetrics.messages : 0), 0);
+          prevTotals.costPerMsg = Math.round(prevMsgSpent / prevTotals.messages);
         }
         if (prevTotals.subscriptions > 0) {
           const prevSubSpent = accsWithPrev.reduce((s, a) => s + (a.prevMetrics ? a.prevMetrics.costPerSub * a.prevMetrics.subscriptions : 0), 0);

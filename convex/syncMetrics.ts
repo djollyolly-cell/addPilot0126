@@ -168,7 +168,7 @@ export const syncAll = internalAction({
               clicks,
               spent,
               leads,
-              vkResult,
+              vkResult: vkResult > 0 ? vkResult : undefined,
               reach: base.reach,
             });
           }

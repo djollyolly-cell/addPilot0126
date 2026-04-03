@@ -813,17 +813,22 @@ export const probeVkCampaignEndpoints = action({
   },
 });
 
-/** Fetch campaign type map: ad_plan_id → "lead" | "subscription" via packages + ad_groups */
+/** Fetch campaign type map: campaignId → "lead" | "message" | "subscription" via packages */
 export const getCampaignTypeMap = internalAction({
   args: {
     accessToken: v.string(),
   },
   handler: async (_, args): Promise<Array<{ campaignId: string; type: string }>> => {
-    const SUBSCRIPTION_KEYWORDS = ["подписк", "subscribe", "community", "join"];
+    // Keywords in VK package names that identify subscription campaigns
+    const SUBSCRIPTION_KEYWORDS = ["_join", "subscribe"];
+    // Keywords for message/engagement campaigns (contact, engage, clip, video promotion)
+    const MESSAGE_KEYWORDS = ["_contact", "_engage", "_clip", "video_and_live", "socialvideo"];
 
-    function isSubscription(name: string): boolean {
-      const lower = name.toLowerCase();
-      return SUBSCRIPTION_KEYWORDS.some(kw => lower.includes(kw));
+    function classifyCampaign(packageName: string): "lead" | "message" | "subscription" {
+      const lower = packageName.toLowerCase();
+      if (SUBSCRIPTION_KEYWORDS.some(kw => lower.includes(kw))) return "subscription";
+      if (MESSAGE_KEYWORDS.some(kw => lower.includes(kw))) return "message";
+      return "lead";
     }
 
     try {
@@ -854,7 +859,7 @@ export const getCampaignTypeMap = internalAction({
           const packageName = packageNameMap.get(c.package_id) || "";
           result.push({
             campaignId: String(c.id),
-            type: isSubscription(packageName) ? "subscription" : "lead",
+            type: classifyCampaign(packageName),
           });
         }
         if (items.length < LIMIT) break;
