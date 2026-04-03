@@ -158,7 +158,7 @@ export function isSubscriptionPackage(packageName: string): boolean {
 export function classifyCampaignPackage(packageName: string): "lead" | "message" | "subscription" {
   const lower = packageName.toLowerCase();
   if (["join", "subscri", "подписк"].some(kw => lower.includes(kw))) return "subscription";
-  if (["contact", "engage", "clip", "video_and_live", "socialvideo", "сообщени"].some(kw => lower.includes(kw))) return "message";
+  if (["contact", "_engage", "clip", "video_and_live", "socialvideo", "сообщени"].some(kw => lower.includes(kw))) return "message";
   return "lead";
 }
 
