@@ -53,6 +53,82 @@ export const getSubscription = query({
   },
 });
 
+// ─── Prorated Upgrade ────────────────────────────────
+
+const TIER_ORDER: Record<string, number> = { freemium: 0, start: 1, pro: 2 };
+
+export interface UpgradePriceInput {
+  currentTier: string;
+  newTier: string;
+  subscriptionExpiresAt: number | undefined;
+  lastPaymentAmount: number | undefined;
+  lastPaymentBonusDays: number | undefined;
+  lastPaymentCurrency: string | undefined;
+  now: number;
+}
+
+export interface UpgradePriceResult {
+  credit: number;
+  remainingDays: number;
+  isUpgrade: boolean;
+  currency?: string;
+}
+
+/** Pure calculation — exported for unit testing */
+export function calculateUpgradePrice(input: UpgradePriceInput): UpgradePriceResult {
+  const { currentTier, newTier, subscriptionExpiresAt, lastPaymentAmount, lastPaymentBonusDays, lastPaymentCurrency, now } = input;
+  const noUpgrade: UpgradePriceResult = { credit: 0, remainingDays: 0, isUpgrade: false };
+
+  if (currentTier === "freemium" || !subscriptionExpiresAt || subscriptionExpiresAt <= now) {
+    return noUpgrade;
+  }
+  if ((TIER_ORDER[newTier] ?? 0) <= (TIER_ORDER[currentTier] ?? 0)) {
+    return noUpgrade;
+  }
+  if (!lastPaymentAmount || !lastPaymentCurrency) {
+    return noUpgrade;
+  }
+
+  const remainingDays = Math.ceil((subscriptionExpiresAt - now) / (24 * 60 * 60 * 1000));
+  const totalDays = 30 + (lastPaymentBonusDays || 0);
+  const dailyRate = lastPaymentAmount / totalDays;
+  const credit = Math.round(dailyRate * remainingDays * 100) / 100;
+
+  return { credit, remainingDays, isUpgrade: true, currency: lastPaymentCurrency };
+}
+
+/** Query: get upgrade credit for prorated pricing */
+export const getUpgradePrice = query({
+  args: {
+    userId: v.id("users"),
+    newTier: v.union(v.literal("start"), v.literal("pro")),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return { credit: 0, remainingDays: 0, isUpgrade: false };
+
+    const currentTier = (user.subscriptionTier as string) ?? "freemium";
+
+    // Find last completed payment
+    const payments = await ctx.db
+      .query("payments")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .order("desc")
+      .collect();
+    const lastPayment = payments.find((p) => p.status === "completed");
+
+    return calculateUpgradePrice({
+      currentTier,
+      newTier: args.newTier,
+      subscriptionExpiresAt: user.subscriptionExpiresAt,
+      lastPaymentAmount: lastPayment?.amount,
+      lastPaymentBonusDays: lastPayment?.bonusDays,
+      lastPaymentCurrency: lastPayment?.currency,
+      now: Date.now(),
+    });
+  },
+});
+
 // bePaid checkout result type
 type BepaidCheckoutResult = {
   success: boolean;
