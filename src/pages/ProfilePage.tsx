@@ -166,7 +166,7 @@ export function ProfilePage() {
                     Перейти на Start
                   </Button>
                   <p className="text-xs text-center text-muted-foreground mt-2">
-                    990 ₽/мес — автоостановка, до 3 кабинетов
+                    1 290 ₽/мес — автоостановка, до 3 кабинетов
                   </p>
                 </>
               ) : (

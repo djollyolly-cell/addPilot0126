@@ -275,7 +275,7 @@ function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['us
                   onClick={() => navigate('/pricing')}
                   className="w-full px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
                 >
-                  Перейти на Start — 990 ₽/мес
+                  Перейти на Start — 1 290 ₽/мес
                 </button>
               ) : (
                 <button

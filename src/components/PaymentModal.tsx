@@ -10,16 +10,10 @@ import { X, CreditCard, Lock, CheckCircle, AlertCircle, Loader2, ExternalLink, C
 import { useAuth } from '@/lib/useAuth';
 import { cn } from '@/lib/utils';
 
-// Prices in RUB (base currency)
-const PRICES_RUB = {
-  start: 990,
-  pro: 2490,
-} as const;
-
 // Fallback BYN prices (used if exchange rate API fails)
 const FALLBACK_BYN_PRICES = {
-  start: 35,
-  pro: 88,
+  start: 46,
+  pro: 106,
 } as const;
 
 type Currency = 'RUB' | 'BYN';
@@ -105,7 +99,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
     return FALLBACK_BYN_PRICES[tier];
   };
 
-  const priceRUB = PRICES_RUB[tier];
+  const priceRUB = tierInfo.price;
   const priceBYN = calculateBYNPrice(priceRUB);
   const price = currency === 'BYN' ? priceBYN : priceRUB;
   const currencySymbol = currency === 'BYN' ? 'BYN' : '₽';

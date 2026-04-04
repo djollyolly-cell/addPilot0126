@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { useQuery } from 'convex/react';
+import { api } from '../../convex/_generated/api';
+import { Id } from '../../convex/_generated/dataModel';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -20,7 +23,7 @@ const TIERS = {
   },
   start: {
     name: "Start",
-    price: 990,
+    price: 1290,
     period: "/мес",
     accountsLimit: 3,
     rulesLimit: 10,
@@ -30,7 +33,7 @@ const TIERS = {
   },
   pro: {
     name: "Pro",
-    price: 2490,
+    price: 2990,
     period: "/мес",
     accountsLimit: -1,
     rulesLimit: -1,
@@ -50,6 +53,12 @@ export function PricingPage() {
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const currentTier = (user?.subscriptionTier || 'freemium') as TierKey;
+
+  // Get user's personalized prices (respects grandfathered pricing)
+  const userPrices = useQuery(
+    api.billing.getUserPrices,
+    user?.userId ? { userId: user.userId as Id<"users"> } : "skip"
+  );
 
   // Handle URL params on mount: ?status=success/failed and ?plan=start/pro
   useEffect(() => {
@@ -165,12 +174,21 @@ export function PricingPage() {
                 </div>
                 <CardTitle className="text-2xl">{tier.name}</CardTitle>
                 <CardDescription>
-                  <span className="text-4xl font-bold text-foreground">
-                    {tier.price === 0 ? 'Бесплатно' : `${tier.price} ₽`}
-                  </span>
-                  {tier.period && (
-                    <span className="text-muted-foreground">{tier.period}</span>
-                  )}
+                  {(() => {
+                    const displayPrice = key === 'freemium' ? 0
+                      : userPrices ? userPrices[key as 'start' | 'pro']
+                      : tier.price;
+                    return (
+                      <>
+                        <span className="text-4xl font-bold text-foreground">
+                          {displayPrice === 0 ? 'Бесплатно' : `${displayPrice.toLocaleString('ru-RU')} ₽`}
+                        </span>
+                        {tier.period && (
+                          <span className="text-muted-foreground">{tier.period}</span>
+                        )}
+                      </>
+                    );
+                  })()}
                 </CardDescription>
               </CardHeader>
 
@@ -209,7 +227,10 @@ export function PricingPage() {
       {showPaymentModal && selectedTier && selectedTier !== 'freemium' && (
         <PaymentModal
           tier={selectedTier}
-          tierInfo={TIERS[selectedTier]}
+          tierInfo={{
+            ...TIERS[selectedTier],
+            price: userPrices ? userPrices[selectedTier as 'start' | 'pro'] : TIERS[selectedTier].price,
+          }}
           onClose={() => setShowPaymentModal(false)}
           onSuccess={handlePaymentSuccess}
         />

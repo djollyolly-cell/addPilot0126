@@ -13,14 +13,14 @@ export const TIERS = {
   },
   start: {
     name: "Start",
-    price: 990,
+    price: 1290,
     accountsLimit: 3,
     rulesLimit: 10,
     features: ["3 рекламных кабинета", "10 правил автоматизации", "Telegram-уведомления", "Базовая аналитика"],
   },
   pro: {
     name: "Pro",
-    price: 2490,
+    price: 2990,
     accountsLimit: -1, // unlimited
     rulesLimit: -1, // unlimited
     features: ["Безлимит кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
@@ -28,6 +28,24 @@ export const TIERS = {
 } as const;
 
 export type SubscriptionTier = keyof typeof TIERS;
+
+// Old prices before 2026-04-04 increase
+const OLD_PRICES = { start: 990, pro: 2490 } as const;
+
+// Get user's effective prices (respects grandfathered/locked pricing)
+export const getUserPrices = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) return { start: TIERS.start.price, pro: TIERS.pro.price };
+
+    const locked = user.lockedPrices;
+    if (locked && locked.until > Date.now()) {
+      return { start: locked.start, pro: locked.pro };
+    }
+    return { start: TIERS.start.price, pro: TIERS.pro.price };
+  },
+});
 
 // bePaid API configuration
 const BEPAID_CHECKOUT_URL = "https://checkout.bepaid.by/ctp/api/checkouts";
@@ -885,5 +903,51 @@ export const togglePromoCode = mutation({
     const promo = await ctx.db.get(args.promoId);
     if (!promo) throw new Error("Промокод не найден");
     await ctx.db.patch(args.promoId, { isActive: !promo.isActive });
+  },
+});
+
+// ─── Price Migration (one-time) ─────────────────────────────────────
+// Lock old prices for existing users:
+// - Paid users: lock until subscriptionExpiresAt (continuous subscription)
+// - Registered but unpaid: lock until 00:00 05.04.2026 (MSK = UTC+3)
+export const migrateLockOldPrices = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    // 00:00 05.04.2026 MSK = 04.04.2026 21:00 UTC
+    const deadline = new Date("2026-04-04T21:00:00Z").getTime();
+    let locked = 0;
+
+    for (const user of users) {
+      // Skip if already has locked prices
+      if (user.lockedPrices) continue;
+
+      const tier = user.subscriptionTier ?? "freemium";
+      const hasPaidSubscription = tier !== "freemium" && user.subscriptionExpiresAt && user.subscriptionExpiresAt > Date.now();
+
+      if (hasPaidSubscription) {
+        // Paid users: lock prices until their subscription expires
+        await ctx.db.patch(user._id, {
+          lockedPrices: {
+            start: OLD_PRICES.start,
+            pro: OLD_PRICES.pro,
+            until: user.subscriptionExpiresAt!,
+          },
+        });
+        locked++;
+      } else {
+        // Registered but unpaid: lock until 00:00 05.04.2026 MSK
+        await ctx.db.patch(user._id, {
+          lockedPrices: {
+            start: OLD_PRICES.start,
+            pro: OLD_PRICES.pro,
+            until: deadline,
+          },
+        });
+        locked++;
+      }
+    }
+
+    return { locked, total: users.length };
   },
 });

@@ -36,6 +36,12 @@ export default defineSchema({
     vkAdsCabinetId: v.optional(v.string()),
     isAdmin: v.optional(v.boolean()),
     updatedAt: v.optional(v.number()),
+    // Grandfathered pricing: old prices locked until this timestamp
+    lockedPrices: v.optional(v.object({
+      start: v.number(),
+      pro: v.number(),
+      until: v.number(),
+    })),
   })
     .index("by_vkId", ["vkId"])
     .index("by_email", ["email"]),

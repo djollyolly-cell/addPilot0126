@@ -370,7 +370,7 @@ function PricingSection() {
     {
       id: 'start',
       name: 'Start',
-      price: '990',
+      price: '1 290',
       description: 'Для фрилансеров',
       features: [
         '3 рекламных кабинета',
@@ -385,7 +385,7 @@ function PricingSection() {
     {
       id: 'pro',
       name: 'Pro',
-      price: '2 490',
+      price: '2 990',
       description: 'Для агентств',
       features: [
         'Безлимит кабинетов',
