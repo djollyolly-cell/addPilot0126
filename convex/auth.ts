@@ -667,7 +667,30 @@ export const getValidTokenForAccount = internalAction({
       if (account.tokenExpiresAt > now + BUFFER_MS) {
         return account.accessToken;
       }
-      // Token expired and no credentials to refresh — error
+      // Token expired, no credentials — try agency_client_credentials as last resort
+      // This needs user-level OAuth credentials + vkAccountId
+      const userCreds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
+        userId: account.userId as Id<"users">,
+      });
+      if (userCreds?.clientId && userCreds?.clientSecret && account.vkAccountId) {
+        try {
+          console.log(
+            `[getValidTokenForAccount] Account ${args.accountId}: no credentials, trying agency_client_credentials`
+          );
+          const generated = await ctx.runAction(internal.auth.generateAgencyToken, {
+            accountId: args.accountId,
+            clientId: userCreds.clientId,
+            clientSecret: userCreds.clientSecret,
+            agencyClientId: account.vkAccountId,
+          });
+          return generated.accessToken;
+        } catch (agencyErr) {
+          const agencyMsg = agencyErr instanceof Error ? agencyErr.message : String(agencyErr);
+          console.log(
+            `[getValidTokenForAccount] Account ${args.accountId}: agency_client_credentials failed: ${agencyMsg}`
+          );
+        }
+      }
       throw new Error(
         "TOKEN_EXPIRED: Токен VK Ads истёк, а clientId/clientSecret отсутствуют. Подключите кабинет заново."
       );
@@ -692,7 +715,40 @@ export const getValidTokenForAccount = internalAction({
       });
       refreshToken = userTokens?.refreshToken ?? undefined;
     }
+    // Helper: try agency_client_credentials as last-resort fallback
+    const tryAgencyFallback = async (): Promise<string | null> => {
+      if (!account.vkAccountId) return null;
+      // Use user-level credentials (may differ from clientId/clientSecret resolved above)
+      const userCreds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
+        userId: account.userId as Id<"users">,
+      });
+      const agencyClientId = userCreds?.clientId;
+      const agencyClientSecret = userCreds?.clientSecret;
+      if (!agencyClientId || !agencyClientSecret) return null;
+      try {
+        console.log(
+          `[getValidTokenForAccount] Account ${args.accountId}: trying agency_client_credentials fallback`
+        );
+        const generated = await ctx.runAction(internal.auth.generateAgencyToken, {
+          accountId: args.accountId,
+          clientId: agencyClientId,
+          clientSecret: agencyClientSecret,
+          agencyClientId: account.vkAccountId,
+        });
+        return generated.accessToken;
+      } catch (agencyErr) {
+        const agencyMsg = agencyErr instanceof Error ? agencyErr.message : String(agencyErr);
+        console.log(
+          `[getValidTokenForAccount] Account ${args.accountId}: agency_client_credentials fallback failed: ${agencyMsg}`
+        );
+        return null;
+      }
+    };
+
     if (!refreshToken) {
+      // No refresh token — try agency_client_credentials before giving up
+      const agencyToken = await tryAgencyFallback();
+      if (agencyToken) return agencyToken;
       throw new Error("Токен VK Ads истёк, refreshToken отсутствует. Подключите кабинет заново.");
     }
 
@@ -722,6 +778,10 @@ export const getValidTokenForAccount = internalAction({
 
       return refreshed.accessToken;
     } catch (err) {
+      // Refresh failed — try agency_client_credentials as last resort
+      const agencyToken = await tryAgencyFallback();
+      if (agencyToken) return agencyToken;
+
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`Не удалось обновить токен VK Ads: ${msg}. Подключите кабинет заново.`);
     }
@@ -742,6 +802,7 @@ export const getAccountWithCredentials = internalQuery({
       clientSecret: account.clientSecret,
       userId: account.userId,
       vkAccountId: account.vkAccountId,
+      name: account.name,
     };
   },
 });
@@ -785,6 +846,86 @@ export const refreshTokenForAccount = internalAction({
       refreshToken: data.refresh_token,
       expiresIn: data.expires_in || 86400,
     };
+  },
+});
+
+// Generate token for agency client via agency_client_credentials grant
+// Fallback when refresh_token is unavailable or fails
+export const generateAgencyToken = internalAction({
+  args: {
+    accountId: v.id("adAccounts"),
+    clientId: v.string(),
+    clientSecret: v.string(),
+    agencyClientId: v.string(), // vkAccountId of the agency client
+  },
+  handler: async (ctx, args) => {
+    console.log(
+      `[generateAgencyToken] Account ${args.accountId}: trying agency_client_credentials for client ${args.agencyClientId}`
+    );
+
+    const resp = await fetch(`${VK_ADS_API_BASE}/api/v2/oauth2/token.json`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "agency_client_credentials",
+        client_id: args.clientId,
+        client_secret: args.clientSecret,
+        agency_client_id: args.agencyClientId,
+      }).toString(),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      throw new Error(
+        `agency_client_credentials failed: ${data.error_description || data.error}`
+      );
+    }
+
+    const now = Date.now();
+    const expiresIn = data.expires_in || 86400;
+
+    // Save new tokens to account
+    await ctx.runMutation(internal.auth.updateAgencyAccountTokens, {
+      accountId: args.accountId,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      tokenExpiresAt: now + expiresIn * 1000,
+      clientId: args.clientId,
+      clientSecret: args.clientSecret,
+    });
+
+    console.log(
+      `[generateAgencyToken] Account ${args.accountId}: success, expires in ${expiresIn}s`
+    );
+
+    return {
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresIn,
+    };
+  },
+});
+
+// Save tokens from agency_client_credentials to account
+export const updateAgencyAccountTokens = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    accessToken: v.string(),
+    refreshToken: v.optional(v.string()),
+    tokenExpiresAt: v.number(),
+    clientId: v.string(),
+    clientSecret: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.accountId, {
+      accessToken: args.accessToken,
+      refreshToken: args.refreshToken,
+      tokenExpiresAt: args.tokenExpiresAt,
+      clientId: args.clientId,
+      clientSecret: args.clientSecret,
+      status: "active",
+      lastError: undefined,
+    });
   },
 });
 

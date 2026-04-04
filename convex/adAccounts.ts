@@ -1676,3 +1676,19 @@ export const checkAgencyTokenHealth = internalAction({
     console.log(`[tokenHealth] Checked ${checked}: ${healthy} healthy, ${failed} failed`);
   },
 });
+
+// TEMP: save refresh token to an agency account (one-time use, remove after)
+export const saveAgencyRefreshToken = mutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    refreshToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) throw new Error("Account not found");
+    await ctx.db.patch(args.accountId, {
+      refreshToken: args.refreshToken,
+    });
+    return { success: true, accountName: account.name };
+  },
+});
