@@ -1,6 +1,27 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 
+// TEMP: send in-app notification to a user
+export const sendSystemNotification = mutation({
+  args: {
+    userId: v.id("users"),
+    title: v.string(),
+    message: v.string(),
+    type: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("userNotifications", {
+      userId: args.userId,
+      title: args.title,
+      message: args.message,
+      type: args.type as "info" | "warning" | "payment" | "feedback",
+      direction: "admin_to_user",
+      isRead: false,
+      createdAt: Date.now(),
+    });
+  },
+});
+
 // Get unread notifications for current user (admin → user only)
 export const getUnread = query({
   args: { userId: v.id("users") },

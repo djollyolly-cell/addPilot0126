@@ -1385,3 +1385,197 @@ export const updateAccountCredentials = internalMutation({
     });
   },
 });
+
+// TEMP: diagnose all agency accounts — check credentials for auto-refresh
+export const diagnosAgencyAccounts = query({
+  args: {},
+  handler: async (ctx) => {
+    const allAccounts = await ctx.db.query("adAccounts").collect();
+    const agencyAccounts = allAccounts.filter(a => a.vkAccountId.startsWith("agency_"));
+
+    const results = [];
+    for (const acc of agencyAccounts) {
+      const user = await ctx.db.get(acc.userId);
+      results.push({
+        accountId: acc._id,
+        name: acc.name,
+        vkAccountId: acc.vkAccountId,
+        userId: acc.userId,
+        userName: user?.name || user?.email || "unknown",
+        hasAccessToken: !!acc.accessToken,
+        hasRefreshToken: !!acc.refreshToken,
+        hasClientId: !!acc.clientId,
+        hasClientSecret: !!acc.clientSecret,
+        tokenExpiresAt: acc.tokenExpiresAt,
+        tokenExpired: acc.tokenExpiresAt ? acc.tokenExpiresAt < Date.now() : null,
+        status: acc.status,
+        lastError: acc.lastError,
+        // User-level fallback available?
+        userHasRefreshToken: !!user?.vkAdsRefreshToken,
+        userHasClientId: !!user?.vkAdsClientId,
+        userHasClientSecret: !!user?.vkAdsClientSecret,
+        userVkAdsTokenExpiresAt: user?.vkAdsTokenExpiresAt,
+      });
+    }
+    return results;
+  },
+});
+
+// TEMP: migrate agency accounts — copy user-level OAuth creds to agency accounts
+export const migrateAgencyCredentials = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const allAccounts = await ctx.db.query("adAccounts").collect();
+    const agencyAccounts = allAccounts.filter(a => a.vkAccountId.startsWith("agency_"));
+
+    const results = [];
+    for (const acc of agencyAccounts) {
+      const user = await ctx.db.get(acc.userId);
+      if (!user) continue;
+
+      const patch: Record<string, unknown> = {};
+
+      if (!acc.clientId && user.vkAdsClientId) {
+        patch.clientId = user.vkAdsClientId;
+      }
+      if (!acc.clientSecret && user.vkAdsClientSecret) {
+        patch.clientSecret = user.vkAdsClientSecret;
+      }
+      if (!acc.refreshToken && user.vkAdsRefreshToken) {
+        patch.refreshToken = user.vkAdsRefreshToken;
+      }
+      if (!acc.tokenExpiresAt && user.vkAdsTokenExpiresAt) {
+        patch.tokenExpiresAt = user.vkAdsTokenExpiresAt;
+      }
+
+      if (Object.keys(patch).length > 0) {
+        await ctx.db.patch(acc._id, patch);
+        results.push({
+          accountId: acc._id,
+          name: acc.name,
+          patched: Object.keys(patch),
+        });
+      } else {
+        results.push({
+          accountId: acc._id,
+          name: acc.name,
+          patched: [],
+          note: "already has all credentials or user has none",
+        });
+      }
+    }
+    return results;
+  },
+});
+
+// ─── AGENCY TOKEN HEALTH CHECK ──────────────────────────────────
+
+// Internal query: get all agency accounts for health check
+export const getAgencyAccountsForHealthCheck = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const allAccounts = await ctx.db.query("adAccounts").collect();
+    return allAccounts
+      .filter(a => a.vkAccountId.startsWith("agency_"))
+      .map(a => ({
+        _id: a._id,
+        name: a.name,
+        userId: a.userId,
+        accessToken: a.accessToken,
+        status: a.status,
+        lastError: a.lastError,
+        hasRefreshToken: !!a.refreshToken,
+        hasClientId: !!a.clientId,
+      }));
+  },
+});
+
+// Internal mutation: update account status after health check
+export const updateAccountHealth = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    status: v.string(),
+    lastError: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.accountId, {
+      status: args.status as "active" | "paused" | "error",
+      lastError: args.lastError,
+    });
+  },
+});
+
+// Action: check all agency tokens health, notify on failure
+export const checkAgencyTokenHealth = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const accounts = await ctx.runQuery(internal.adAccounts.getAgencyAccountsForHealthCheck, {});
+
+    let checked = 0;
+    let healthy = 0;
+    let failed = 0;
+
+    for (const acc of accounts) {
+      if (!acc.accessToken) continue;
+      checked++;
+
+      try {
+        // Lightweight API call to test token
+        const resp = await fetch(`https://target.my.com/api/v2/user.json`, {
+          headers: { Authorization: `Bearer ${acc.accessToken}` },
+        });
+
+        if (resp.ok) {
+          healthy++;
+          // If was in error state, restore to active
+          if (acc.status === "error") {
+            await ctx.runMutation(internal.adAccounts.updateAccountHealth, {
+              accountId: acc._id,
+              status: "active",
+              lastError: undefined,
+            });
+            console.log(`[tokenHealth] ${acc.name}: restored to active`);
+          }
+        } else if (resp.status === 401 || resp.status === 403) {
+          failed++;
+          const wasAlreadyError = acc.status === "error";
+
+          // Mark as error
+          await ctx.runMutation(internal.adAccounts.updateAccountHealth, {
+            accountId: acc._id,
+            status: "error",
+            lastError: `TOKEN_EXPIRED (${resp.status}) — обнаружено ${new Date().toISOString().slice(0, 10)}`,
+          });
+
+          // Notify user via Telegram (only on first failure, not repeated)
+          if (!wasAlreadyError) {
+            const user = await ctx.runQuery(internal.users.getById, { userId: acc.userId });
+            if (user?.telegramChatId) {
+              const canRefresh = acc.hasRefreshToken && acc.hasClientId;
+              const message = canRefresh
+                ? `⚠️ <b>Токен кабинета «${acc.name}» истёк</b>\n\nПопытка автоматического обновления при следующем запросе. Если не удастся — потребуется переподключить кабинет.`
+                : `⚠️ <b>Токен кабинета «${acc.name}» истёк</b>\n\nЭтот кабинет подключён через API-ключ без возможности автообновления.\n\n<b>Что делать:</b>\n1. Запросите новый API-ключ у сервиса (Vitamin.tools, eLama и т.д.)\n2. Удалите кабинет в настройках AdPilot\n3. Подключите заново с новым ключом\n\nПока токен не обновлён, мониторинг и правила для этого кабинета приостановлены.`;
+
+              try {
+                await ctx.runAction(internal.telegram.sendMessage, {
+                  chatId: user.telegramChatId,
+                  text: message,
+                });
+                console.log(`[tokenHealth] ${acc.name}: notified user ${user.name || user.email}`);
+              } catch (e) {
+                console.log(`[tokenHealth] ${acc.name}: failed to notify: ${e}`);
+              }
+            }
+          }
+
+          console.log(`[tokenHealth] ${acc.name}: TOKEN EXPIRED (${resp.status})`);
+        }
+        // Other errors (500, etc.) — skip, might be temporary
+      } catch (e) {
+        console.log(`[tokenHealth] ${acc.name}: network error: ${e}`);
+      }
+    }
+
+    console.log(`[tokenHealth] Checked ${checked}: ${healthy} healthy, ${failed} failed`);
+  },
+});

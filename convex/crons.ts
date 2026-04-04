@@ -95,4 +95,11 @@ crons.interval(
   internal.uzBudgetCron.resetBudgets
 );
 
+// Agency token health check — every 6 hours, test tokens and notify on failure
+crons.interval(
+  "agency-token-health",
+  { hours: 6 },
+  internal.adAccounts.checkAgencyTokenHealth
+);
+
 export default crons;
