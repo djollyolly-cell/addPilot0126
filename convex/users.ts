@@ -42,6 +42,11 @@ export const create = mutation({
     }
 
     const now = Date.now();
+    // Grandfathered pricing: new users before deadline get old prices
+    const PRICE_DEADLINE = new Date("2026-04-04T21:00:00Z").getTime(); // 05.04.2026 00:00 MSK
+    const lockedPrices = now < PRICE_DEADLINE
+      ? { start: 990, pro: 2490, until: PRICE_DEADLINE }
+      : undefined;
     const userId = await ctx.db.insert("users", {
       email: args.email,
       vkId: args.vkId,
@@ -49,6 +54,7 @@ export const create = mutation({
       avatarUrl: args.avatarUrl,
       subscriptionTier: "freemium",
       onboardingCompleted: false,
+      lockedPrices,
       createdAt: now,
       updatedAt: now,
     });
@@ -341,6 +347,11 @@ export const upsertFromVk = internalMutation({
     }
 
     // Create new user
+    // Grandfathered pricing: new users before deadline get old prices
+    const PRICE_DEADLINE = new Date("2026-04-04T21:00:00Z").getTime(); // 05.04.2026 00:00 MSK
+    const lockedPrices = now < PRICE_DEADLINE
+      ? { start: 990, pro: 2490, until: PRICE_DEADLINE }
+      : undefined;
     const userId = await ctx.db.insert("users", {
       email: args.email,
       vkId: args.vkId,
@@ -352,6 +363,7 @@ export const upsertFromVk = internalMutation({
       vkTokenExpiresAt: tokenExpiresAt,
       subscriptionTier: "freemium",
       onboardingCompleted: false,
+      lockedPrices,
       createdAt: now,
       updatedAt: now,
     });
