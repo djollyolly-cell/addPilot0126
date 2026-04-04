@@ -640,12 +640,10 @@ export const getValidTokenForAccount = internalAction({
     const BUFFER_MS = 5 * 60 * 1000;
 
     // Resolve credentials: per-account first, then user-level fallback
-    // (skip fallback for agency accounts — they use API keys without OAuth)
-    const isAgency = account.vkAccountId?.startsWith("agency_");
     let clientId = account.clientId;
     let clientSecret = account.clientSecret;
 
-    if (!isAgency && (!clientId || !clientSecret)) {
+    if (!clientId || !clientSecret) {
       // Try user-level credentials as fallback
       const userCreds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
         userId: account.userId as Id<"users">,
@@ -686,14 +684,22 @@ export const getValidTokenForAccount = internalAction({
     }
 
     // Token expired — try refresh
-    if (!account.refreshToken) {
+    // Use account-level refreshToken first, fallback to user-level
+    let refreshToken = account.refreshToken;
+    if (!refreshToken) {
+      const userTokens = await ctx.runQuery(internal.users.getVkAdsTokens, {
+        userId: account.userId as Id<"users">,
+      });
+      refreshToken = userTokens?.refreshToken ?? undefined;
+    }
+    if (!refreshToken) {
       throw new Error("Токен VK Ads истёк, refreshToken отсутствует. Подключите кабинет заново.");
     }
 
     try {
       const refreshed = await ctx.runAction(internal.auth.refreshTokenForAccount, {
         accountId: args.accountId,
-        refreshToken: account.refreshToken,
+        refreshToken,
         clientId: clientId!,
         clientSecret: clientSecret!,
       });

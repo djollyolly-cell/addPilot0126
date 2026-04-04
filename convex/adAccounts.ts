@@ -177,9 +177,7 @@ export const connect = mutation({
         patch.clientSecret = args.clientSecret;
       }
       // Ensure credentials are never left empty — fill from user-level if missing
-      // (skip for agency accounts — they use API keys without OAuth)
-      const isAgencyExisting = existing.vkAccountId.startsWith("agency_");
-      if (!isAgencyExisting && !patch.clientId && !existing.clientId) {
+      if (!patch.clientId && !existing.clientId) {
         const owner = await ctx.db.get(args.userId);
         if (owner?.vkAdsClientId) patch.clientId = owner.vkAdsClientId;
         if (owner?.vkAdsClientSecret) patch.clientSecret = owner.vkAdsClientSecret;
@@ -213,12 +211,10 @@ export const connect = mutation({
     }
 
     // If clientId/clientSecret not passed, try user-level credentials
-    // (skip for agency accounts — they use API keys without OAuth)
     let finalClientId = args.clientId;
     let finalClientSecret = args.clientSecret;
     if (!finalClientId || !finalClientSecret) {
-      const isAgency = args.vkAccountId.startsWith("agency_");
-      if (!isAgency && user.vkAdsClientId && user.vkAdsClientSecret) {
+      if (user.vkAdsClientId && user.vkAdsClientSecret) {
         finalClientId = finalClientId || user.vkAdsClientId;
         finalClientSecret = finalClientSecret || user.vkAdsClientSecret;
       }
