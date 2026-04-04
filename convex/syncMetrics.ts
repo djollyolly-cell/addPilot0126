@@ -2,6 +2,9 @@ import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { MtVideoStats } from "./vkApi";
+import { withTimeout } from "./vkApi";
+
+const ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account
 
 // Today's date in YYYY-MM-DD format
 function todayStr(): string {
@@ -21,6 +24,20 @@ function todayStr(): string {
 export const syncAll = internalAction({
   args: {},
   handler: async (ctx) => {
+    // Level 3: Heartbeat guard — detect stuck previous runs
+    const STUCK_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
+    const prevHeartbeat = await ctx.runQuery(internal.syncMetrics.getCronHeartbeat, { name: "syncAll" });
+    if (prevHeartbeat && prevHeartbeat.status === "running") {
+      const stuckMinutes = Math.round((Date.now() - prevHeartbeat.startedAt) / 60_000);
+      if (Date.now() - prevHeartbeat.startedAt > STUCK_THRESHOLD_MS) {
+        console.warn(`[syncAll] WARNING: previous run started ${stuckMinutes}m ago and hasn't finished. Possible hang. Proceeding anyway.`);
+      }
+    }
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, { name: "syncAll", status: "running" });
+
+    let syncError: string | undefined;
+    try {
+
     // Get all active ad accounts
     const accounts = await ctx.runQuery(internal.syncMetrics.listActiveAccounts);
 
@@ -33,6 +50,7 @@ export const syncAll = internalAction({
 
     for (const account of accounts) {
       try {
+        await withTimeout((async () => {
         // Use per-account token (with fallback to user-level for old accounts)
         const accessToken = await ctx.runAction(
           internal.auth.getValidTokenForAccount,
@@ -101,7 +119,7 @@ export const syncAll = internalAction({
           console.log(
             `[syncMetrics] Empty stats for account ${account._id}, skipping`
           );
-          continue;
+          return;
         }
 
         // Save metrics for each ad (banner)
@@ -252,6 +270,7 @@ export const syncAll = internalAction({
         console.log(
           `[syncMetrics] Account ${account._id}: ${stats.length} ads synced`
         );
+        })(), ACCOUNT_TIMEOUT_MS, `syncAll account ${account._id}`);
       } catch (error) {
         const msg =
           error instanceof Error ? error.message : "Unknown error";
@@ -268,9 +287,13 @@ export const syncAll = internalAction({
       }
     }
 
-    // After all accounts synced, run rule engine
+    // After all accounts synced, run rule engine (with 120s timeout)
     try {
-      await ctx.runAction(internal.ruleEngine.checkAllRules, {});
+      await withTimeout(
+        ctx.runAction(internal.ruleEngine.checkAllRules, {}),
+        120_000,
+        "checkAllRules"
+      );
     } catch (error) {
       console.error(
         "[syncMetrics] Error running rule engine:",
@@ -290,6 +313,17 @@ export const syncAll = internalAction({
         error instanceof Error ? error.message : error
       );
     }
+
+    } catch (err) {
+      syncError = err instanceof Error ? err.message : "Unknown error";
+      console.error("[syncAll] Fatal error:", syncError);
+    } finally {
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "syncAll",
+        status: syncError ? "failed" : "completed",
+        error: syncError,
+      });
+    }
   },
 });
 
@@ -301,6 +335,49 @@ export const listActiveAccounts = internalQuery({
   handler: async (ctx) => {
     const accounts = await ctx.db.query("adAccounts").collect();
     return accounts.filter((a) => a.status === "active" || a.status === "error");
+  },
+});
+
+// ─── Cron Heartbeat ──────────────────────────────────────────────
+
+export const getCronHeartbeat = internalQuery({
+  args: { name: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("cronHeartbeats")
+      .withIndex("by_name", (q) => q.eq("name", args.name))
+      .first();
+  },
+});
+
+export const upsertCronHeartbeat = internalMutation({
+  args: {
+    name: v.string(),
+    status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
+    error: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("cronHeartbeats")
+      .withIndex("by_name", (q) => q.eq("name", args.name))
+      .first();
+
+    const now = Date.now();
+    if (existing) {
+      await ctx.db.patch(existing._id, {
+        status: args.status,
+        startedAt: args.status === "running" ? now : existing.startedAt,
+        finishedAt: args.status !== "running" ? now : undefined,
+        error: args.error,
+      });
+    } else {
+      await ctx.db.insert("cronHeartbeats", {
+        name: args.name,
+        startedAt: now,
+        status: args.status,
+        error: args.error,
+      });
+    }
   },
 });
 

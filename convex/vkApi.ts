@@ -16,6 +16,42 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const FETCH_TIMEOUT_MS = 30_000; // 30s default timeout for VK API requests
+const UPLOAD_TIMEOUT_MS = 60_000; // 60s for file uploads
+
+async function fetchWithTimeout(
+  url: string | URL,
+  options?: RequestInit,
+  timeoutMs: number = FETCH_TIMEOUT_MS
+): Promise<Response> {
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    return await fetch(url.toString(), { ...options, signal });
+  } catch (err: unknown) {
+    if (err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError")) {
+      throw new Error(`VK_API_TIMEOUT: request timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  }
+}
+
+// Utility: wrap a promise with a timeout
+export async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`TIMEOUT: ${label} exceeded ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
 interface VkApiResponse<T> {
   response?: T;
   error?: {
@@ -38,7 +74,7 @@ async function callVkApi<T>(
       ...params,
     });
 
-    const response = await fetch(`${VK_API_URL}/${method}?${urlParams.toString()}`);
+    const response = await fetchWithTimeout(`${VK_API_URL}/${method}?${urlParams.toString()}`);
     const data: VkApiResponse<T> = await response.json();
 
     if (data.error) {
@@ -182,7 +218,7 @@ async function callMtApi<T>(
       Object.entries(params).forEach(([k, val]) => url.searchParams.set(k, val));
     }
 
-    const response = await fetch(url.toString(), {
+    const response = await fetchWithTimeout(url.toString(), {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -221,7 +257,7 @@ async function postMtApi<T>(
   for (let attempt = 0; attempt < MT_MAX_RETRIES; attempt++) {
     const url = `${MT_API_BASE}/api/v2/${endpoint}`;
 
-    const response = await fetch(url, {
+    const response = await fetchWithTimeout(url, {
       method,
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -266,11 +302,11 @@ async function uploadMtContent(
   if (height) formData.append("height", String(height));
 
   const url = `${MT_API_BASE}/api/v2/${endpoint}`;
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     method: "POST",
     headers: { Authorization: `Bearer ${accessToken}` },
     body: formData,
-  });
+  }, UPLOAD_TIMEOUT_MS);
 
   if (response.status === 401) throw new Error("TOKEN_EXPIRED");
   if (!response.ok) {
@@ -492,7 +528,7 @@ export const stopAd = action({
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < MT_MAX_RETRIES; attempt++) {
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${args.accessToken}`,
@@ -538,7 +574,7 @@ export const restartAd = action({
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < MT_MAX_RETRIES; attempt++) {
-      const response = await fetch(url, {
+      const response = await fetchWithTimeout(url, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${args.accessToken}`,
@@ -792,7 +828,7 @@ export const probeVkCampaignEndpoints = action({
         const url = new URL(`${MT_API_BASE}/api/v2/${ep.url}`);
         Object.entries(ep.params).forEach(([k, v]) => url.searchParams.set(k, v));
 
-        const response = await fetch(url.toString(), {
+        const response = await fetchWithTimeout(url.toString(), {
           headers: { Authorization: `Bearer ${args.accessToken}` },
         });
 
@@ -1138,7 +1174,7 @@ async function postCampaignWithFallback(
 ): Promise<MtCampaign> {
   // 1. Try legacy endpoint: campaigns/{id}.json
   const legacyUrl = `${MT_API_BASE}/api/v2/campaigns/${campaignId}.json`;
-  const legacyResp = await fetch(legacyUrl, {
+  const legacyResp = await fetchWithTimeout(legacyUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -1166,7 +1202,7 @@ async function postCampaignWithFallback(
   const groupUrl = new URL(`${MT_API_BASE}/api/v2/ad_groups.json`);
   groupUrl.searchParams.set("_id", String(campaignId));
   groupUrl.searchParams.set("fields", "id,ad_plan_id");
-  const groupResp = await fetch(groupUrl.toString(), {
+  const groupResp = await fetchWithTimeout(groupUrl.toString(), {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (groupResp.status === 401) throw new Error("TOKEN_EXPIRED");
@@ -1188,7 +1224,7 @@ async function postCampaignWithFallback(
 
   // 3. Retry via ad_plans/{ad_plan_id}.json
   const planUrl = `${MT_API_BASE}/api/v2/ad_plans/${adPlanId}.json`;
-  const planResp = await fetch(planUrl, {
+  const planResp = await fetchWithTimeout(planUrl, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${accessToken}`,

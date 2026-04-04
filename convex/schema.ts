@@ -592,4 +592,13 @@ export default defineSchema({
     .index("by_userId_unread", ["userId", "isRead"])
     .index("by_direction", ["direction", "isRead"])
     .index("by_threadId", ["threadId"]),
+
+  // Cron heartbeats — detect stuck/zombie cron runs
+  cronHeartbeats: defineTable({
+    name: v.string(),
+    startedAt: v.number(),
+    finishedAt: v.optional(v.number()),
+    status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
+    error: v.optional(v.string()),
+  }).index("by_name", ["name"]),
 }, { schemaValidation: false });

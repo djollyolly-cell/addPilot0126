@@ -8,6 +8,9 @@ import {
 } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { withTimeout } from "./vkApi";
+
+const ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account
 
 // ═══════════════════════════════════════════════════════════
 // Pure functions — exported for direct unit testing
@@ -1681,6 +1684,20 @@ export const logBudgetAction = internalMutation({
 export const checkUzBudgetRules = internalAction({
   args: {},
   handler: async (ctx) => {
+    // Level 3: Heartbeat guard
+    const STUCK_THRESHOLD_MS = 10 * 60 * 1000;
+    const prevHeartbeat = await ctx.runQuery(internal.syncMetrics.getCronHeartbeat, { name: "checkUzBudgetRules" });
+    if (prevHeartbeat && prevHeartbeat.status === "running") {
+      const stuckMinutes = Math.round((Date.now() - prevHeartbeat.startedAt) / 60_000);
+      if (Date.now() - prevHeartbeat.startedAt > STUCK_THRESHOLD_MS) {
+        console.warn(`[uz_budget] WARNING: previous run started ${stuckMinutes}m ago and hasn't finished. Proceeding anyway.`);
+      }
+    }
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, { name: "checkUzBudgetRules", status: "running" });
+
+    let cronError: string | undefined;
+    try {
+
     const uzRules = await ctx.runQuery(internal.ruleEngine.getActiveUzRules);
     if (uzRules.length === 0) return;
 
@@ -1698,6 +1715,8 @@ export const checkUzBudgetRules = internalAction({
         if (!initialBudget || !budgetStep) continue;
 
         for (const accountId of rule.targetAccountIds) {
+          try {
+          await withTimeout((async () => {
           let accessToken: string;
           try {
             accessToken = await ctx.runAction(
@@ -1707,7 +1726,7 @@ export const checkUzBudgetRules = internalAction({
           } catch {
             console.error(`[uz_budget] Cannot get token for account ${accountId}`);
             skipped.tokenErr++;
-            continue;
+            return;
           }
 
           // Get campaigns from VK API (isolated per account — failure doesn't block others)
@@ -1718,7 +1737,7 @@ export const checkUzBudgetRules = internalAction({
             budget_limit_day: string;
             package_id?: number;
             delivery?: string;
-          }>;
+          }> = [];
           try {
             campaigns = await ctx.runAction(
               internal.vkApi.getCampaignsForAccount,
@@ -1726,7 +1745,7 @@ export const checkUzBudgetRules = internalAction({
             ) as typeof campaigns;
           } catch (apiErr) {
             console.error(`[uz_budget] Failed to fetch campaigns for account ${accountId}:`, apiErr);
-            continue;
+            return;
           }
 
           // Filter by targetCampaignIds
@@ -1872,6 +1891,11 @@ export const checkUzBudgetRules = internalAction({
           // DISABLED: uncovered campaign notifications — too noisy
           // TODO: re-enable when filtering is improved
           // if (rule.actions.notifyOnKeyEvents && targetIds.length > 0) { ... }
+          })(), ACCOUNT_TIMEOUT_MS, `uz_budget account ${accountId}`);
+          } catch (accountErr) {
+            console.error(`[uz_budget] Account ${accountId} timed out or failed:`, accountErr);
+            skipped.tokenErr++;
+          }
         }
       } catch (err) {
         console.error(`[uz_budget] Error processing rule ${rule._id}:`, err);
@@ -1886,5 +1910,16 @@ export const checkUzBudgetRules = internalAction({
         ? ` | skipped: ${skipped.delivering} delivering, ${skipped.dedup} dedup, ${skipped.blocked} blocked, ${skipped.maxReached} max, ${skipped.noBudget} no-budget, ${skipped.tokenErr} token-err`
         : "")
     );
+
+    } catch (err) {
+      cronError = err instanceof Error ? err.message : "Unknown error";
+      console.error("[uz_budget] Fatal error:", cronError);
+    } finally {
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "checkUzBudgetRules",
+        status: cronError ? "failed" : "completed",
+        error: cronError,
+      });
+    }
   },
 });
