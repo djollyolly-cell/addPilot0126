@@ -361,7 +361,7 @@ export const fetchAvailableAccounts = action({
       username: string;
     }>;
   }> => {
-    // Get credentials — prefer passed args, fallback to user record (for pre-fill)
+    // Get credentials — prefer passed args, fallback to user record, then existing accounts
     let clientId = args.clientId;
     let clientSecret = args.clientSecret;
 
@@ -371,6 +371,20 @@ export const fetchAvailableAccounts = action({
       });
       clientId = clientId || creds?.clientId;
       clientSecret = clientSecret || creds?.clientSecret;
+    }
+
+    // Fallback: check existing adAccounts for this user
+    if (!clientId || !clientSecret) {
+      const accounts = await ctx.runQuery(api.adAccounts.list, {
+        userId: args.userId,
+      });
+      for (const acc of accounts) {
+        if (acc.clientId && acc.clientSecret) {
+          clientId = clientId || acc.clientId;
+          clientSecret = clientSecret || acc.clientSecret;
+          break;
+        }
+      }
     }
 
     if (!clientId || !clientSecret) {
@@ -630,7 +644,7 @@ export const fetchAndConnect = action({
     clientSecret: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ connected: number; accounts: Array<{ account_id: string; account_name: string }> }> => {
-    // Get credentials — prefer passed args, fallback to user record
+    // Get credentials — prefer passed args, fallback to user record, then existing accounts
     let clientId = args.clientId;
     let clientSecret = args.clientSecret;
 
@@ -640,6 +654,20 @@ export const fetchAndConnect = action({
       });
       clientId = clientId || creds?.clientId;
       clientSecret = clientSecret || creds?.clientSecret;
+    }
+
+    // Fallback: check existing adAccounts for this user
+    if (!clientId || !clientSecret) {
+      const accounts = await ctx.runQuery(api.adAccounts.list, {
+        userId: args.userId,
+      });
+      for (const acc of accounts) {
+        if (acc.clientId && acc.clientSecret) {
+          clientId = clientId || acc.clientId;
+          clientSecret = clientSecret || acc.clientSecret;
+          break;
+        }
+      }
     }
 
     if (!clientId || !clientSecret) {
