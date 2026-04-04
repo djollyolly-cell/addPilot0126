@@ -549,7 +549,76 @@ export const connectAgencyAccount = action({
       }
     }
 
+    // Check if user has OAuth credentials — if not, warn about token expiry
+    const user = await ctx.runQuery(internal.users.getById, { userId: args.userId });
+    const hasOAuth = !!(user?.vkAdsClientId && user?.vkAdsClientSecret && user?.vkAdsRefreshToken);
+
+    if (!hasOAuth) {
+      // Immediate in-app notification
+      await ctx.runMutation(api.userNotifications.sendSystemNotification, {
+        userId: args.userId,
+        title: "Подключите VK Ads API для автообновления токенов",
+        message: "Агентский кабинет подключён через API-ключ — он имеет ограниченный срок действия. Зайдите в Настройки → VK Ads API → Подключить, введите Client ID и Client Secret рекламного кабинета. После этого токены будут продлеваться автоматически.",
+        type: "warning",
+      });
+
+      // Schedule reminder in 2 hours (via mutation, since scheduler needs mutation ctx)
+      await ctx.runMutation(internal.adAccounts.scheduleOAuthReminder, {
+        userId: args.userId,
+      });
+    }
+
     return { accountId: accountId as string };
+  },
+});
+
+// Internal mutation: schedule OAuth reminder via scheduler
+export const scheduleOAuthReminder = internalMutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    await ctx.scheduler.runAfter(
+      2 * 60 * 60 * 1000,
+      internal.adAccounts.remindOAuthConnect,
+      { userId: args.userId }
+    );
+  },
+});
+
+// Internal: remind user to connect OAuth if still not connected after 2h
+export const remindOAuthConnect = internalAction({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.runQuery(internal.users.getById, { userId: args.userId });
+    if (!user) return;
+
+    // Check if OAuth was connected in the meantime
+    const hasOAuth = !!(user.vkAdsClientId && user.vkAdsClientSecret && user.vkAdsRefreshToken);
+    if (hasOAuth) {
+      console.log(`[remindOAuth] User ${user.name || user.email}: already connected OAuth, skipping`);
+      return;
+    }
+
+    // In-app notification (urgent)
+    await ctx.runMutation(api.userNotifications.sendSystemNotification, {
+      userId: args.userId,
+      title: "⚠️ Срочно: подключите VK Ads API",
+      message: "Ваши агентские кабинеты работают без автообновления токенов. Когда токен истечёт, мониторинг и правила перестанут работать. Зайдите в Настройки → VK Ads API → Подключить.",
+      type: "warning",
+    });
+
+    // Telegram notification (if connected)
+    if (user.telegramChatId) {
+      try {
+        await ctx.runAction(internal.telegram.sendMessage, {
+          chatId: user.telegramChatId,
+          text: `⚠️ <b>Срочно: подключите VK Ads API</b>\n\nВаши агентские кабинеты работают без автообновления токенов. Когда API-ключ истечёт, мониторинг и правила перестанут работать.\n\n<b>Что нужно сделать:</b>\n1. Зайдите в AdPilot → Настройки\n2. В разделе «VK Ads API» нажмите «Подключить»\n3. Введите Client ID и Client Secret рекламного кабинета\n4. Пройдите авторизацию`,
+        });
+      } catch (e) {
+        console.log(`[remindOAuth] Failed to send Telegram to ${user.name}: ${e}`);
+      }
+    }
+
+    console.log(`[remindOAuth] User ${user.name || user.email}: reminded to connect OAuth`);
   },
 });
 
