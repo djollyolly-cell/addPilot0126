@@ -347,10 +347,25 @@ export const handleBepaidWebhook = internalMutation({
       const totalDays = 30 + bonusDays;
       const expiresAt = Date.now() + totalDays * 24 * 60 * 60 * 1000;
 
+      // Extend lockedPrices if user has them and subscription is continuous
+      const paidUser = await ctx.db.get(payment.userId);
+      const lockedUpdate: Record<string, unknown> = {};
+      if (paidUser?.lockedPrices) {
+        // Subscription is continuous if not yet expired at time of renewal
+        const isStillActive = paidUser.subscriptionExpiresAt && paidUser.subscriptionExpiresAt >= Date.now();
+        if (isStillActive) {
+          lockedUpdate.lockedPrices = {
+            ...paidUser.lockedPrices,
+            until: expiresAt,
+          };
+        }
+      }
+
       await ctx.db.patch(payment.userId, {
         subscriptionTier: payment.tier,
         subscriptionExpiresAt: expiresAt,
         updatedAt: Date.now(),
+        ...lockedUpdate,
       });
 
       console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId} (${totalDays} days, promo: ${payment.promoCode || "none"})`);
@@ -427,11 +442,24 @@ export const processPayment = mutation({
     const totalDays = 30 + bonusDays;
     const expiresAt = Date.now() + totalDays * 24 * 60 * 60 * 1000;
 
+    // Extend lockedPrices if subscription is continuous
+    const lockedUpdate: Record<string, unknown> = {};
+    if (user.lockedPrices) {
+      const isStillActive = user.subscriptionExpiresAt && user.subscriptionExpiresAt >= Date.now();
+      if (isStillActive) {
+        lockedUpdate.lockedPrices = {
+          ...user.lockedPrices,
+          until: expiresAt,
+        };
+      }
+    }
+
     // Update user subscription
     await ctx.db.patch(args.userId, {
       subscriptionTier: args.tier,
       subscriptionExpiresAt: expiresAt,
       updatedAt: Date.now(),
+      ...lockedUpdate,
     });
 
     return {
