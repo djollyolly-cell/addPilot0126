@@ -490,6 +490,47 @@ export const getMtStatistics = action({
   },
 });
 
+// Get campaign statistics for today via myTarget API v2
+// Returns total spent today (in rubles) for a specific campaign, queried directly from VK API
+export const getCampaignSpentToday = internalAction({
+  args: {
+    accessToken: v.string(),
+    campaignId: v.string(), // VK campaign ID (numeric string)
+  },
+  handler: async (_, args): Promise<number> => {
+    // VK API uses Moscow time (UTC+3) for daily stats
+    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    const today = msk.toISOString().slice(0, 10);
+
+    try {
+      const data = await callMtApi<{ items: MtStatItem[]; total: MtStatRow | null }>(
+        "statistics/campaigns/day.json",
+        args.accessToken,
+        {
+          id: args.campaignId,
+          date_from: today,
+          date_to: today,
+          metrics: "base",
+        }
+      );
+      const items = data.items || [];
+      if (items.length === 0) return 0;
+
+      // Sum spent across all rows for today
+      let totalSpent = 0;
+      for (const item of items) {
+        for (const row of item.rows || []) {
+          totalSpent += parseFloat(row.base?.spent || "0");
+        }
+      }
+      return totalSpent;
+    } catch (err) {
+      console.error(`[vkApi] getCampaignSpentToday failed for campaign ${args.campaignId}:`, err);
+      return 0;
+    }
+  },
+});
+
 // Get banner statistics WITH video metrics (started, viewed 25/50/75/100%)
 // myTarget API v2: metrics=base,video returns video completion data
 // Verified: API returns video.started, video.viewed_25_percent, etc.

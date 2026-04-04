@@ -1493,27 +1493,7 @@ export const getActiveUzRules = internalQuery({
   },
 });
 
-/** Get total spent today for a campaign (sum of all ads in that group).
- *  Uses Moscow time (UTC+3) for date, matching VK/myTarget API convention. */
-export const getCampaignSpentToday = internalQuery({
-  args: {
-    accountId: v.id("adAccounts"),
-    campaignId: v.string(),
-  },
-  handler: async (ctx, args) => {
-    // VK API uses Moscow time (UTC+3) for daily stats
-    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
-    const today = msk.toISOString().slice(0, 10);
-    const metrics = await ctx.db
-      .query("metricsDaily")
-      .withIndex("by_accountId_date", (q) =>
-        q.eq("accountId", args.accountId).eq("date", today)
-      )
-      .collect();
-    const campaignMetrics = metrics.filter((m) => m.campaignId === args.campaignId);
-    return campaignMetrics.reduce((sum, m) => sum + (m.spent || 0), 0);
-  },
-});
+// getCampaignSpentToday moved to vkApi.ts — now queries VK API directly (real-time)
 
 /** Check if budget was recently increased (dedup within 5 min) */
 export const hasRecentBudgetIncrease = internalQuery({
@@ -1758,21 +1738,25 @@ export const checkUzBudgetRules = internalAction({
             const dailyLimitRubles = Number(campaign.budget_limit_day || "0");
             if (dailyLimitRubles <= 0) { skipped.noBudget++; continue; }
 
-            // Skip deleted/blocked campaigns (blocked = VK moderation, not budget)
-            if (campaign.status === "deleted" || campaign.status === "blocked") { skipped.blocked++; continue; }
+            // Skip only deleted campaigns
+            if (campaign.status === "deleted") { skipped.blocked++; continue; }
 
-            // Get spent today
-            const spentToday = await ctx.runQuery(
-              internal.ruleEngine.getCampaignSpentToday,
-              { accountId, campaignId: String(campaign.id) }
+            // Get spent today directly from VK API (real-time, not metricsDaily)
+            const spentToday = await ctx.runAction(
+              internal.vkApi.getCampaignSpentToday,
+              { accessToken, campaignId: String(campaign.id) }
             );
 
-            // Budget exhaustion check: campaign must be actually paused by VK
-            // VK sets delivery:"not_delivering" when daily budget is exhausted
-            // Safety net: spent >= 90% prevents false triggers (e.g. no balance, moderation)
+            // Budget exhaustion check:
+            // 1. Normal case: status="active", delivery="not_delivering" — VK paused delivery because budget spent
+            // 2. Blocked case: status="blocked" can also mean budget exhausted (VK sometimes uses this)
+            //    Safety net: spent >= 90% ensures we only trigger when budget is actually spent
             const isDeliveryPaused = campaign.delivery === "not_delivering";
+            const isBlocked = campaign.status === "blocked";
             const isSpentNearLimit = spentToday >= dailyLimitRubles * 0.90;
-            if (!isDeliveryPaused || !isSpentNearLimit) { skipped.delivering++; continue; }
+
+            // Trigger if: (delivery paused OR blocked) AND spent >= 90% of budget
+            if (!(isDeliveryPaused || isBlocked) || !isSpentNearLimit) { skipped.delivering++; continue; }
 
             // Dedup: skip if budget was already increased and spent hasn't grown since
             const recentIncrease = await ctx.runQuery(
