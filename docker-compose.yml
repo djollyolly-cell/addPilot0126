@@ -1,51 +1,14 @@
 # ============================================
-# AdPilot Docker Compose — Dokploy (Self-Hosted Convex)
-# Prod: aipilot.by  → self-hosted Convex (178.172.235.49:3220)
-# Dev:  dev.aipilot.by → (disabled, single instance)
-# ============================================
-# Convex backend запущен отдельным compose-сервисом:
-# docker/docker-compose.convex-selfhosted.yml
+# AdPilot Docker Compose — DEV (dev.aipilot.by)
 # ============================================
 
 services:
   # ─────────────────────────────────────────
-  # Frontend PROD (aipilot.by)
-  # ─────────────────────────────────────────
-  frontend:
-    image: ghcr.io/djollyolly-cell/addpilot-frontend:latest
-    pull_policy: always
-    container_name: adpilot-frontend
-    restart: always
-    expose:
-      - "3000"
-    networks:
-      - dokploy-network
-    environment:
-      - NODE_ENV=production
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`) || Host(`www.${DOMAIN}`)"
-      - "traefik.http.routers.frontend.entrypoints=websecure"
-      - "traefik.http.routers.frontend.tls.certresolver=letsencrypt"
-      - "traefik.http.services.frontend.loadbalancer.server.port=3000"
-      # Redirect www to non-www
-      - "traefik.http.middlewares.www-redirect.redirectregex.regex=^https://www\\.(.+)"
-      - "traefik.http.middlewares.www-redirect.redirectregex.replacement=https://$${1}"
-      - "traefik.http.routers.frontend.middlewares=www-redirect"
-
-  # ─────────────────────────────────────────
   # Frontend DEV (dev.aipilot.by)
   # ─────────────────────────────────────────
   frontend-dev:
-    profiles: ["dev"]
-    build:
-      context: .
-      dockerfile: Dockerfile.prod
-      args:
-        - VITE_CONVEX_URL=${VITE_CONVEX_URL_DEV}
-        - VITE_REDIRECT_URI=${VITE_REDIRECT_URI_DEV}
-        - VITE_TELEGRAM_BOT_USERNAME=${VITE_TELEGRAM_BOT_USERNAME}
-        - VITE_CONVEX_SITE_URL=${VITE_CONVEX_SITE_URL_DEV}
+    image: ghcr.io/djollyolly-cell/addpilot-frontend:latest
+    pull_policy: always
     container_name: adpilot-frontend-dev
     restart: always
     expose:
