@@ -675,7 +675,7 @@ export const getValidTokenForAccount = internalAction({
       if (userCreds?.clientId && userCreds?.clientSecret && account.vkAccountId) {
         try {
           console.log(
-            `[getValidTokenForAccount] Account ${args.accountId}: no credentials, trying agency_client_credentials`
+            `[getValidTokenForAccount] «${account.name}» (${args.accountId}): no credentials, trying agency_client_credentials`
           );
           const generated = await ctx.runAction(internal.auth.generateAgencyToken, {
             accountId: args.accountId,
@@ -687,7 +687,7 @@ export const getValidTokenForAccount = internalAction({
         } catch (agencyErr) {
           const agencyMsg = agencyErr instanceof Error ? agencyErr.message : String(agencyErr);
           console.log(
-            `[getValidTokenForAccount] Account ${args.accountId}: agency_client_credentials failed: ${agencyMsg}`
+            `[getValidTokenForAccount] «${account.name}» (${args.accountId}): agency_client_credentials failed: ${agencyMsg}`
           );
         }
       }
@@ -727,7 +727,7 @@ export const getValidTokenForAccount = internalAction({
       if (!agencyClientId || !agencyClientSecret) return null;
       try {
         console.log(
-          `[getValidTokenForAccount] Account ${args.accountId}: trying agency_client_credentials fallback`
+          `[getValidTokenForAccount] «${account.name}» (${args.accountId}): trying agency_client_credentials fallback`
         );
         const generated = await ctx.runAction(internal.auth.generateAgencyToken, {
           accountId: args.accountId,
@@ -739,7 +739,7 @@ export const getValidTokenForAccount = internalAction({
       } catch (agencyErr) {
         const agencyMsg = agencyErr instanceof Error ? agencyErr.message : String(agencyErr);
         console.log(
-          `[getValidTokenForAccount] Account ${args.accountId}: agency_client_credentials fallback failed: ${agencyMsg}`
+          `[getValidTokenForAccount] «${account.name}» (${args.accountId}): agency_client_credentials fallback failed: ${agencyMsg}`
         );
         return null;
       }
