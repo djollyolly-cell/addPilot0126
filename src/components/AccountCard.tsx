@@ -130,16 +130,16 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
                   </button>
                 </div>
               ) : (
-                <div className="flex items-center gap-1.5 group" data-testid="account-name">
+                <div className="flex items-center gap-1.5" data-testid="account-name">
                   <h3 className="font-medium text-sm truncate">{account.name}</h3>
                   <button
                     type="button"
                     onClick={(e) => { e.stopPropagation(); setEditName(account.name); setIsEditingName(true); }}
-                    className="p-0.5 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-primary transition-all"
+                    className="p-0.5 rounded text-muted-foreground hover:text-primary transition-colors"
                     title="Переименовать"
                     data-testid="rename-button"
                   >
-                    <Pencil className="w-3 h-3" />
+                    <Pencil className="w-3.5 h-3.5" />
                   </button>
                 </div>
               )}
