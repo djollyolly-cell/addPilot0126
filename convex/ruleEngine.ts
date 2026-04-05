@@ -1843,7 +1843,7 @@ export const checkUzBudgetRules = internalAction({
                 actionType: "budget_increased" as const,
                 oldBudget: dailyLimitRubles,
                 newBudget: newLimit,
-                step: budgetStep,
+                step: effectiveStep,
                 spentToday,
               });
 
@@ -1856,17 +1856,14 @@ export const checkUzBudgetRules = internalAction({
                     campaignName: campaign.name,
                     oldBudget: dailyLimitRubles,
                     newBudget: newLimit,
-                    step: budgetStep,
+                    step: effectiveStep,
                   });
                 } catch (notifErr) {
                   console.error(`[uz_budget] Failed to send budget notification:`, notifErr);
                 }
               }
 
-              // Increment trigger count
-              await ctx.runMutation(internal.ruleEngine.incrementTriggerCount, {
-                ruleId: rule._id,
-              });
+              // triggerCount is already incremented inside logBudgetAction
 
               totalActions++;
             } catch (err) {

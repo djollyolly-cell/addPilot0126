@@ -441,10 +441,12 @@ export const getRule = internalQuery({
 export const initializeUzBudgets = action({
   args: {
     ruleId: v.id("rules"),
+    userId: v.id("users"),
   },
   handler: async (ctx, args) => {
     const rule = await ctx.runQuery(internal.rules.getRule, { ruleId: args.ruleId });
     if (!rule || rule.type !== "uz_budget_manage" || !rule.isActive) return;
+    if (rule.userId !== args.userId) return;
 
     const { initialBudget } = rule.conditions as { initialBudget?: number };
     if (!initialBudget) return;

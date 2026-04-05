@@ -386,7 +386,7 @@ export function RulesPage() {
                     });
                     // For UZ rules: immediately set budgets to initialBudget
                     if (data.type === 'uz_budget_manage' && newRuleId) {
-                      initializeUzBudgets({ ruleId: newRuleId }).catch((err) => {
+                      initializeUzBudgets({ ruleId: newRuleId, userId: user.userId as Id<"users"> }).catch((err) => {
                         console.error('[initializeUzBudgets] Failed:', err);
                       });
                     }
