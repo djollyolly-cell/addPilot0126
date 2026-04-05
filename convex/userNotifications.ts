@@ -61,6 +61,22 @@ export const markAllRead = mutation({
   },
 });
 
+// TEMP: Mark all price change notifications as read for all users
+export const markPriceNotificationsRead = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("userNotifications").collect();
+    let count = 0;
+    for (const n of all) {
+      if (n.title === "Цены меняются с 5 апреля" && !n.isRead) {
+        await ctx.db.patch(n._id, { isRead: true });
+        count++;
+      }
+    }
+    return { marked: count };
+  },
+});
+
 // Send feedback from user to admin (new thread or reply)
 export const sendFeedback = mutation({
   args: {
