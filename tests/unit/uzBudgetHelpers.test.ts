@@ -1,6 +1,7 @@
 /**
  * Unit tests for UZ budget helper pure functions.
  */
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect } from "vitest";
 import {
   groupRulesByAccount,
