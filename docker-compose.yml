@@ -6,7 +6,7 @@ services:
   # ─────────────────────────────────────────
   # Frontend DEV (dev.aipilot.by)
   # ─────────────────────────────────────────
-  frontend-dev:
+  frontend:
     image: ghcr.io/djollyolly-cell/addpilot-frontend:latest
     pull_policy: always
     container_name: adpilot-frontend-dev
