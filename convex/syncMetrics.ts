@@ -502,6 +502,157 @@ export const updateAiBannerModeration = internalMutation({
   },
 });
 
+// TEMP — full service diagnostic (read-only)
+export const serviceDiagnostic = query({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const threeHoursAgo = now - 3 * 60 * 60 * 1000;
+    const today = new Date().toISOString().slice(0, 10);
+
+    // 1. All users
+    const users = await ctx.db.query("users").collect();
+    const usersSummary = users.map((u) => ({
+      id: u._id,
+      email: u.email,
+      name: u.name,
+      tier: u.subscriptionTier ?? "freemium",
+      telegramChatId: u.telegramChatId ?? null,
+    }));
+
+    // 2. All ad accounts with status
+    const accounts = await ctx.db.query("adAccounts").collect();
+    const accountsSummary = accounts.map((a) => ({
+      id: a._id,
+      userId: a.userId,
+      vkAccountId: a.vkAccountId,
+      name: a.name,
+      status: a.status,
+      lastSyncAt: a.lastSyncAt ? new Date(a.lastSyncAt).toISOString() : null,
+      lastError: a.lastError ?? null,
+    }));
+
+    // 3. All rules with trigger info
+    const rules = await ctx.db.query("rules").collect();
+    const rulesSummary = rules.map((r) => ({
+      id: r._id,
+      userId: r.userId,
+      name: r.name,
+      type: r.type,
+      isActive: r.isActive,
+      triggerCount: r.triggerCount ?? 0,
+      lastTriggeredAt: r.lastTriggeredAt
+        ? new Date(r.lastTriggeredAt).toISOString()
+        : null,
+      targetAccountIds: r.targetAccountIds,
+      targetCampaignIds: r.targetCampaignIds ?? [],
+      conditions: r.conditions,
+      actions: r.actions,
+    }));
+
+    // 4. Recent action logs (last 200)
+    const logs = await ctx.db.query("actionLogs").order("desc").take(200);
+    const logsSummary = logs.map((l) => ({
+      ruleId: l.ruleId,
+      adId: l.adId,
+      adName: l.adName,
+      actionType: l.actionType,
+      reason: l.reason,
+      status: l.status,
+      errorMessage: l.errorMessage ?? null,
+      savedAmount: l.savedAmount ?? 0,
+      metricsSnapshot: l.metricsSnapshot,
+      createdAt: new Date(l.createdAt).toISOString(),
+    }));
+
+    // 5. Rules not triggered in 3+ hours (among active ones)
+    const staleRules = rulesSummary.filter((r) => {
+      if (!r.isActive) return false;
+      if (!r.lastTriggeredAt) return true; // never triggered
+      return new Date(r.lastTriggeredAt).getTime() < threeHoursAgo;
+    });
+
+    // 6. Cron heartbeats
+    const heartbeats = await ctx.db.query("cronHeartbeats").collect();
+    const heartbeatSummary = heartbeats.map((h) => ({
+      name: h.name,
+      startedAt: new Date(h.startedAt).toISOString(),
+      finishedAt: h.finishedAt ? new Date(h.finishedAt).toISOString() : null,
+      status: h.status,
+      error: h.error ?? null,
+    }));
+
+    // 7. Today's metrics summary per account
+    const todayMetrics = await ctx.db.query("metricsDaily")
+      .withIndex("by_accountId_date")
+      .collect();
+    const todayOnly = todayMetrics.filter((m) => m.date === today);
+    const accountMetrics: Record<string, { ads: number; totalSpent: number; totalLeads: number; totalClicks: number }> = {};
+    for (const m of todayOnly) {
+      const key = m.accountId as string;
+      if (!accountMetrics[key]) accountMetrics[key] = { ads: 0, totalSpent: 0, totalLeads: 0, totalClicks: 0 };
+      accountMetrics[key].ads++;
+      accountMetrics[key].totalSpent += m.spent ?? 0;
+      accountMetrics[key].totalLeads += m.leads ?? 0;
+      accountMetrics[key].totalClicks += m.clicks ?? 0;
+    }
+
+    // 8. UZ budget rules analysis
+    const uzRules = rules.filter((r) => r.type === "uz_budget_manage" && r.isActive);
+    const uzRulesSummary = uzRules.map((r) => ({
+      id: r._id,
+      name: r.name,
+      userId: r.userId,
+      initialBudget: r.conditions.initialBudget,
+      budgetStep: r.conditions.budgetStep,
+      maxDailyBudget: r.conditions.maxDailyBudget,
+      targetAccounts: r.targetAccountIds.length,
+      targetCampaigns: (r.targetCampaignIds ?? []).length,
+      triggerCount: r.triggerCount ?? 0,
+      lastTriggeredAt: r.lastTriggeredAt
+        ? new Date(r.lastTriggeredAt).toISOString()
+        : null,
+    }));
+
+    // 9. Budget increase logs (last 100)
+    const budgetLogs = logs
+      .filter((l) => l.actionType === "budget_increased" || l.actionType === "budget_reset")
+      .slice(0, 100)
+      .map((l) => ({
+        ruleId: l.ruleId,
+        adId: l.adId,
+        adName: l.adName,
+        actionType: l.actionType,
+        reason: l.reason,
+        createdAt: new Date(l.createdAt).toISOString(),
+        status: l.status,
+        errorMessage: l.errorMessage ?? null,
+      }));
+
+    return {
+      timestamp: new Date(now).toISOString(),
+      usersSummary,
+      accountsSummary,
+      rulesSummary,
+      staleRules,
+      heartbeatSummary,
+      accountMetrics,
+      uzRulesSummary,
+      budgetLogs,
+      recentLogs: logsSummary.slice(0, 50),
+      stats: {
+        totalUsers: users.length,
+        totalAccounts: accounts.length,
+        totalRules: rules.length,
+        activeRules: rules.filter((r) => r.isActive).length,
+        uzActiveRules: uzRules.length,
+        totalLogsToday: logs.filter((l) => new Date(l.createdAt).toISOString().slice(0, 10) === today).length,
+        staleRulesCount: staleRules.length,
+      },
+    };
+  },
+});
+
 // TEMP diagnostic — remove after debugging
 export const debugMetrics = query({
   args: {},
