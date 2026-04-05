@@ -444,17 +444,29 @@ export const initializeUzBudgets = action({
     userId: v.id("users"),
   },
   handler: async (ctx, args) => {
-    const rule = await ctx.runQuery(internal.rules.getRule, { ruleId: args.ruleId });
-    if (!rule || rule.type !== "uz_budget_manage" || !rule.isActive) return;
-    if (rule.userId !== args.userId) return;
+    const rule: Awaited<ReturnType<typeof ctx.runQuery>> = await ctx.runQuery(internal.rules.getRule, { ruleId: args.ruleId });
+    if (!rule || rule.type !== "uz_budget_manage") {
+      throw new Error("Правило не найдено или имеет неверный тип");
+    }
+    if (!rule.isActive) {
+      throw new Error("Правило неактивно — бюджеты не установлены");
+    }
+    if (rule.userId !== args.userId) {
+      throw new Error("Нет доступа к этому правилу");
+    }
 
     const { initialBudget } = rule.conditions as { initialBudget?: number };
-    if (!initialBudget) return;
+    if (!initialBudget) {
+      throw new Error("Начальный бюджет не задан в правиле");
+    }
 
     const targetIds = rule.targetCampaignIds || [];
-    if (targetIds.length === 0) return;
+    if (targetIds.length === 0) {
+      throw new Error("Нет целевых кампаний в правиле");
+    }
 
     let initialized = 0;
+    const errors: string[] = [];
     for (const accountId of rule.targetAccountIds) {
       let accessToken: string;
       try {
@@ -463,6 +475,7 @@ export const initializeUzBudgets = action({
           { accountId }
         );
       } catch {
+        errors.push(`Не удалось получить токен для аккаунта ${accountId}`);
         continue;
       }
 
@@ -486,12 +499,18 @@ export const initializeUzBudgets = action({
           });
           initialized++;
         } catch (err) {
-          console.error(`[initializeUzBudgets] Failed for campaign ${campaignId}:`, err);
+          const msg = err instanceof Error ? err.message : String(err);
+          errors.push(`Кампания ${campaignId}: ${msg}`);
         }
       }
     }
 
-    console.log(`[initializeUzBudgets] Rule ${args.ruleId}: initialized ${initialized} campaigns to ${initialBudget}₽`);
-    return { initialized, initialBudget };
+    console.log(`[initializeUzBudgets] Rule ${args.ruleId}: initialized ${initialized}/${targetIds.length} campaigns to ${initialBudget}₽`);
+
+    if (initialized === 0) {
+      throw new Error(`Не удалось установить бюджет ни для одной кампании. ${errors[0] || ""}`);
+    }
+
+    return { initialized, total: targetIds.length, initialBudget };
   },
 });
