@@ -1692,3 +1692,167 @@ export const saveAgencyRefreshToken = mutation({
     return { success: true, accountName: account.name };
   },
 });
+
+// TEMP: audit agency advertiser IDs — check which clients the token sees and match with rules
+export const auditAgencyAdvertiserIds = action({
+  args: {},
+  handler: async (ctx): Promise<Array<Record<string, unknown>>> => {
+    const allAccounts: Array<{
+      _id: string; name: string; vkAccountId: string; userId: string;
+      userName: string; accessToken: string; mtAdvertiserId?: string; status: string;
+    }> = await ctx.runQuery(internal.adAccounts.getAllAccountsInternal, {});
+    const agencyAccounts = allAccounts.filter((a) => a.vkAccountId.startsWith("agency_"));
+
+    const allRules: Array<{
+      _id: string; name: string; type: string; targetAccountIds: string[]; targetCampaignIds: string[];
+    }> = await ctx.runQuery(internal.adAccounts.getAllActiveRulesInternal, {});
+
+    const results = [];
+
+    for (const acc of agencyAccounts) {
+      const accountRules = allRules.filter((r: { targetAccountIds: string[] }) =>
+        r.targetAccountIds.includes(acc._id)
+      );
+
+      const ruleInfo = accountRules.map((r: { _id: string; name: string; type: string; targetCampaignIds?: string[] }) => ({
+        ruleId: r._id,
+        name: r.name,
+        type: r.type,
+        targetCampaignIds: r.targetCampaignIds || [],
+      }));
+
+      // Collect all targeted campaign IDs from rules
+      const allTargetCampaignIds = new Set<string>();
+      for (const r of ruleInfo) {
+        for (const cid of r.targetCampaignIds) {
+          allTargetCampaignIds.add(String(cid));
+        }
+      }
+
+      let agencyClients: Array<{ id: number; username: string; status: string }> = [];
+      let campaignsNoFilter: Array<{ id: number; name: string; status: string }> = [];
+      let clientCampaignMatch: Array<{ clientId: number; clientUsername: string; matchedCampaigns: number[] }> = [];
+      let tokenError = "";
+
+      try {
+        // 1. Get campaigns without advertiser_id
+        const campResp = await fetch(
+          `https://target.my.com/api/v2/campaigns.json?fields=id,name,status&limit=250`,
+          { headers: { Authorization: `Bearer ${acc.accessToken}` } }
+        );
+        if (campResp.ok) {
+          const campData = await campResp.json();
+          campaignsNoFilter = (campData.items || campData || []).map((c: { id: number; name: string; status: string }) => ({
+            id: c.id, name: c.name, status: c.status,
+          }));
+        } else {
+          tokenError = `campaigns.json: ${campResp.status}`;
+        }
+
+        // 2. Get agency clients
+        const clientsResp = await fetch(
+          `https://target.my.com/api/v2/agency/clients.json`,
+          { headers: { Authorization: `Bearer ${acc.accessToken}` } }
+        );
+        if (clientsResp.ok) {
+          const clientsData = await clientsResp.json();
+          if (Array.isArray(clientsData)) {
+            agencyClients = clientsData.map((c: { id: number; username: string; status: string }) => ({
+              id: c.id, username: c.username || "", status: c.status || "",
+            }));
+          }
+        }
+
+        // 3. For each client, check if targeted campaigns belong to them
+        if (allTargetCampaignIds.size > 0 && agencyClients.length > 0) {
+          for (const client of agencyClients.slice(0, 10)) {
+            try {
+              const cResp = await fetch(
+                `https://target.my.com/api/v2/campaigns.json?fields=id,name,status&limit=250&_user_id=${client.id}`,
+                { headers: { Authorization: `Bearer ${acc.accessToken}` } }
+              );
+              if (cResp.ok) {
+                const cData = await cResp.json();
+                const clientCamps = (cData.items || cData || []) as Array<{ id: number }>;
+                const matched = clientCamps
+                  .filter((c) => allTargetCampaignIds.has(String(c.id)))
+                  .map((c) => c.id);
+                if (matched.length > 0) {
+                  clientCampaignMatch.push({
+                    clientId: client.id,
+                    clientUsername: client.username,
+                    matchedCampaigns: matched,
+                  });
+                }
+              }
+            } catch {
+              // skip client
+            }
+          }
+        }
+      } catch (err) {
+        tokenError = String(err);
+      }
+
+      // Check if default campaigns contain targeted ones
+      const defaultCampaignIds = new Set(campaignsNoFilter.map((c) => String(c.id)));
+      const targetedFoundInDefault = [...allTargetCampaignIds].filter((id) => defaultCampaignIds.has(id));
+
+      results.push({
+        accountId: acc._id,
+        accountName: acc.name,
+        userId: acc.userId,
+        userName: acc.userName,
+        storedMtAdvertiserId: acc.mtAdvertiserId || "MISSING",
+        status: acc.status,
+        tokenError: tokenError || null,
+        agencyClientsCount: agencyClients.length,
+        agencyClients: agencyClients.slice(0, 10),
+        campaignsWithoutFilter: campaignsNoFilter.length,
+        campaignsSample: campaignsNoFilter.slice(0, 5),
+        activeRules: ruleInfo,
+        targetCampaignIds: [...allTargetCampaignIds],
+        targetedFoundInDefault: targetedFoundInDefault,
+        targetedMissedInDefault: [...allTargetCampaignIds].filter((id) => !defaultCampaignIds.has(id)),
+        clientCampaignMatch,
+      });
+    }
+
+    return results;
+  },
+});
+
+// Internal helpers for audit
+export const getAllAccountsInternal = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const accounts = await ctx.db.query("adAccounts").collect();
+    return accounts.map((a) => ({
+      _id: a._id,
+      name: a.name,
+      vkAccountId: a.vkAccountId,
+      userId: a.userId,
+      userName: "",
+      accessToken: a.accessToken,
+      mtAdvertiserId: (a as Record<string, unknown>).mtAdvertiserId as string | undefined,
+      status: a.status,
+    }));
+  },
+});
+
+export const getAllActiveRulesInternal = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const rules = await ctx.db.query("rules").collect();
+    return rules
+      .filter((r) => r.isActive)
+      .map((r) => ({
+        _id: r._id,
+        name: r.name,
+        type: r.type,
+        targetAccountIds: r.targetAccountIds,
+        targetCampaignIds: r.targetCampaignIds || [],
+      }));
+  },
+});
+
