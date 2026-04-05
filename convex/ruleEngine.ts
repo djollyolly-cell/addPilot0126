@@ -1654,6 +1654,17 @@ export const logBudgetAction = internalMutation({
       errorMessage: args.error,
       createdAt: Date.now(),
     });
+
+    // Update triggerCount and lastTriggeredAt on the rule
+    if (!args.error) {
+      const rule = await ctx.db.get(args.ruleId);
+      if (rule) {
+        await ctx.db.patch(args.ruleId, {
+          triggerCount: (rule.triggerCount ?? 0) + 1,
+          lastTriggeredAt: Date.now(),
+        });
+      }
+    }
   },
 });
 
