@@ -480,6 +480,26 @@ export const connectSelectedAccounts = action({
   },
 });
 
+// Rename an ad account
+export const rename = mutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    userId: v.id("users"),
+    name: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const name = args.name.trim();
+    if (!name) throw new Error("Введите название кабинета");
+
+    const account = await ctx.db.get(args.accountId);
+    if (!account || account.userId !== args.userId) {
+      throw new Error("Кабинет не найден");
+    }
+
+    await ctx.db.patch(args.accountId, { name });
+  },
+});
+
 // Connect an agency account with a manually provided API key
 export const connectAgencyAccount = action({
   args: {

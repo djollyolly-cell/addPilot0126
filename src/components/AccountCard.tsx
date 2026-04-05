@@ -1,5 +1,5 @@
 import { useState, memo } from 'react';
-import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Trash2, ChevronDown, ChevronRight, Pencil, Check, X } from 'lucide-react';
 import { useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
@@ -50,7 +50,38 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
   const [showProfile, setShowProfile] = useState(false);
   const [advId, setAdvId] = useState(account.mtAdvertiserId || '');
   const [advSaving, setAdvSaving] = useState(false);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const [editName, setEditName] = useState(account.name);
+  const [nameSaving, setNameSaving] = useState(false);
   const setAdvertiserId = useMutation(api.videos.setAdvertiserId);
+  const renameAccount = useMutation(api.adAccounts.rename);
+
+  const handleSaveName = async () => {
+    const trimmed = editName.trim();
+    if (!trimmed || trimmed === account.name) {
+      setEditName(account.name);
+      setIsEditingName(false);
+      return;
+    }
+    setNameSaving(true);
+    try {
+      await renameAccount({
+        accountId: account._id as Id<"adAccounts">,
+        userId: userId as Id<"users">,
+        name: trimmed,
+      });
+      setIsEditingName(false);
+    } catch {
+      setEditName(account.name);
+    } finally {
+      setNameSaving(false);
+    }
+  };
+
+  const handleCancelName = () => {
+    setEditName(account.name);
+    setIsEditingName(false);
+  };
   const status = statusConfig[account.status];
   const StatusIcon = status.icon;
 
@@ -64,9 +95,54 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
               <Building2 className="w-5 h-5 text-primary" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-medium text-sm truncate" data-testid="account-name">
-                {account.name}
-              </h3>
+              {isEditingName ? (
+                <div className="flex items-center gap-1" data-testid="account-name-edit">
+                  <input
+                    type="text"
+                    className="h-7 px-2 text-sm font-medium rounded border border-primary bg-background w-48"
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSaveName();
+                      if (e.key === 'Escape') handleCancelName();
+                    }}
+                    onClick={(e) => e.stopPropagation()}
+                    disabled={nameSaving}
+                    autoFocus
+                    data-testid="account-name-input"
+                  />
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleSaveName(); }}
+                    disabled={nameSaving}
+                    className="p-1 rounded text-green-600 hover:bg-green-50 transition-colors disabled:opacity-50"
+                    title="Сохранить"
+                  >
+                    <Check className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); handleCancelName(); }}
+                    className="p-1 rounded text-muted-foreground hover:bg-muted transition-colors"
+                    title="Отменить"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 group" data-testid="account-name">
+                  <h3 className="font-medium text-sm truncate">{account.name}</h3>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); setEditName(account.name); setIsEditingName(true); }}
+                    className="p-0.5 rounded text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-primary transition-all"
+                    title="Переименовать"
+                    data-testid="rename-button"
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                </div>
+              )}
               <p className="text-xs text-muted-foreground">
                 ID: {account.vkAccountId}
               </p>
