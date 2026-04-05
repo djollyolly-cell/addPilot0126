@@ -142,17 +142,16 @@ export const syncAll = internalAction({
             const vkResult = vkData ? (Number(vkData.result) || 0) : 0;
             const vkGoals = vkData ? (Number(vkData.goals) || 0) : 0;
 
-            // Count leads from events (VK lead forms report here, not in base.goals)
+            // Count leads from events.sending_form only (lead form submissions)
+            // Other events (moving_into_group, clicks_on_external_url, likes, etc.) are NOT leads
             let eventsGoals = 0;
             const events = row.events;
             if (events && typeof events === "object") {
-              for (const [, eventData] of Object.entries(events)) {
-                const ed = eventData as { count?: number | string } | number | undefined;
-                if (typeof ed === "number") {
-                  eventsGoals += ed;
-                } else if (ed && typeof ed === "object" && ed.count !== undefined) {
-                  eventsGoals += Number(ed.count) || 0;
-                }
+              const sendingForm = (events as Record<string, unknown>).sending_form;
+              if (typeof sendingForm === "number") {
+                eventsGoals = sendingForm;
+              } else if (sendingForm && typeof sendingForm === "object") {
+                eventsGoals = Number((sendingForm as { count?: number | string }).count) || 0;
               }
             }
 

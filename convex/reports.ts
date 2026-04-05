@@ -185,14 +185,15 @@ function countLeadsFromRow(row: MtStatRow): number {
   const vk = base.vk;
   const vkResult = vk ? (Number(vk.result) || 0) : 0;
   const vkGoals = vk ? (Number(vk.goals) || 0) : 0;
+  // Count only sending_form from events (lead form submissions)
+  // Other events (moving_into_group, clicks_on_external_url, likes, etc.) are NOT leads
   let eventsGoals = 0;
   if (row.events && typeof row.events === "object") {
-    for (const eventData of Object.values(row.events)) {
-      if (typeof eventData === "number") {
-        eventsGoals += eventData;
-      } else if (eventData && typeof eventData === "object" && eventData.count !== undefined) {
-        eventsGoals += Number(eventData.count) || 0;
-      }
+    const sendingForm = (row.events as Record<string, unknown>).sending_form;
+    if (typeof sendingForm === "number") {
+      eventsGoals = sendingForm;
+    } else if (sendingForm && typeof sendingForm === "object") {
+      eventsGoals = Number((sendingForm as { count?: number | string }).count) || 0;
     }
   }
   return Math.max(baseGoals, vkResult, vkGoals, eventsGoals);
