@@ -1725,20 +1725,24 @@ export const auditAgencyAdvertiserIds = action({
       let tokenError = "";
 
       try {
-        // 1. Get campaigns without advertiser_id
-        const campResp = await fetch(
-          `https://target.my.com/api/v2/campaigns.json?fields=id,name,status&limit=250`,
-          { headers: { Authorization: `Bearer ${acc.accessToken}` } }
-        );
-        if (campResp.ok) {
+        // 1. Get ALL campaigns with pagination
+        let offset = 0;
+        const LIMIT = 250;
+        while (true) {
+          const campResp = await fetch(
+            `https://target.my.com/api/v2/campaigns.json?fields=id,name,status&limit=${LIMIT}&offset=${offset}`,
+            { headers: { Authorization: `Bearer ${acc.accessToken}` } }
+          );
+          if (!campResp.ok) {
+            tokenError = `campaigns.json: ${campResp.status}`;
+            break;
+          }
           const campData = await campResp.json();
-          campaignsNoFilter = (campData.items || campData || []).map((c: { id: number; name: string; status: string }) => ({
-            id: c.id, name: c.name, status: c.status,
-          }));
-        } else {
-          tokenError = `campaigns.json: ${campResp.status}`;
+          const items = (campData.items || campData || []) as Array<{ id: number; name: string; status: string }>;
+          campaignsNoFilter.push(...items.map((c) => ({ id: c.id, name: c.name, status: c.status })));
+          if (items.length < LIMIT) break;
+          offset += LIMIT;
         }
-
         // 2. Get agency clients
         const clientsResp = await fetch(
           `https://target.my.com/api/v2/agency/clients.json`,
