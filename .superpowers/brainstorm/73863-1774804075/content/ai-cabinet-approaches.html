@@ -1,0 +1,67 @@
+<h2>AI Кабинет — Архитектура страницы</h2>
+<p class="subtitle">3 подхода к организации полного хаба</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Одна страница с табами</h3>
+      <p><code>/ai-cabinet</code> — единая страница с табами: <strong>Создать</strong> | <strong>Кампании</strong> | <strong>Аналитика</strong></p>
+      <p>Выбор кабинета — dropdown сверху. Всё на одной странице, переключение между разделами через табы.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Плюсы</h4><ul>
+          <li>Всё в одном месте, быстрая навигация</li>
+          <li>Один пункт в сайдбаре</li>
+          <li>Проще переключаться между созданием и списком</li>
+        </ul></div>
+        <div class="cons"><h4>Минусы</h4><ul>
+          <li>Страница может стать перегруженной</li>
+          <li>Табы внутри табов если детали кампании тоже с табами</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Хаб + отдельные страницы деталей</h3>
+      <p><code>/ai-cabinet</code> — список кампаний + кнопка "Создать". Клик по кампании → <code>/ai-cabinet/:id</code> — детали с метриками, креативами, управлением.</p>
+      <p>Как у конкурента: дашборд со списком → детали кампании.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Плюсы</h4><ul>
+          <li>Чистый UI, каждая страница фокусирована</li>
+          <li>Детали кампании не перегружают список</li>
+          <li>Масштабируется — легко добавлять секции</li>
+        </ul></div>
+        <div class="cons"><h4>Минусы</h4><ul>
+          <li>Больше навигации (назад-вперёд)</li>
+          <li>Создание — отдельная модалка или страница</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Двухколоночный layout</h3>
+      <p>Левая колонка: список кампаний (узкий). Правая: детали выбранной кампании или форма создания.</p>
+      <p>Master-detail паттерн — как почтовый клиент.</p>
+      <div class="pros-cons">
+        <div class="pros"><h4>Плюсы</h4><ul>
+          <li>Список и детали видны одновременно</li>
+          <li>Быстрое переключение между кампаниями</li>
+          <li>Модный паттерн (Slack, email клиенты)</li>
+        </ul></div>
+        <div class="cons"><h4>Минусы</h4><ul>
+          <li>Не работает на мобильных</li>
+          <li>Мало места для деталей кампании</li>
+          <li>Сложнее показать полную аналитику</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top: 2rem;">💡 <strong>Рекомендация: B</strong> — хаб + отдельные страницы. Масштабируется лучше всего, чистый UI, как у конкурента.</p>

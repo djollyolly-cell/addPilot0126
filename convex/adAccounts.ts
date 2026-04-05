@@ -1720,8 +1720,8 @@ export const auditAgencyAdvertiserIds = action({
       }
 
       let agencyClients: Array<{ id: number; username: string; status: string }> = [];
-      let campaignsNoFilter: Array<{ id: number; name: string; status: string }> = [];
-      let clientCampaignMatch: Array<{ clientId: number; clientUsername: string; matchedCampaigns: number[] }> = [];
+      const campaignsNoFilter: Array<{ id: number; name: string; status: string }> = [];
+      const clientCampaignMatch: Array<{ clientId: number; clientUsername: string; matchedCampaigns: number[] }> = [];
       let tokenError = "";
 
       try {

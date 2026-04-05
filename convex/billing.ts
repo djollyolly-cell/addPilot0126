@@ -979,3 +979,51 @@ export const migrateLockOldPrices = internalMutation({
     return { locked, total: users.length };
   },
 });
+
+// One-time: notify freemium & start users about price change
+export const notifyPriceChange = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    const targets = users.filter(
+      (u) => !u.subscriptionTier || u.subscriptionTier === "freemium" || u.subscriptionTier === "start"
+    );
+
+    const message = `Спасибо, что вы с нами!
+
+Вы — одни из первых пользователей AddPilot, и мы это ценим.
+
+За последние недели количество пользователей сервиса выросло в несколько раз. Чтобы обеспечить стабильную работу — быструю синхронизацию, моментальные уведомления и надёжную автоостановку — мы масштабируем серверные мощности. Это требует затрат, поэтому с завтрашнего дня стоимость тарифов изменится:
+
+— Start: 990 → 1 290 ₽/мес
+— Pro: 2 490 → 2 990 ₽/мес
+
+Но для вас — особые условия. Если вы оформите подписку сегодня до 23:59, старая цена сохранится на весь период непрерывной подписки. Не на месяц — навсегда, пока подписка активна.
+
+👉 Start за 990 ₽/мес: https://aipilot.by/pricing?plan=start
+👉 Pro за 2 490 ₽/мес: https://aipilot.by/pricing?plan=pro
+
+Вопросы? Пишите @Addpilot_bot — ответим лично.`;
+
+    let sent = 0;
+    for (const user of targets) {
+      await ctx.db.insert("userNotifications", {
+        userId: user._id,
+        title: "Цены меняются с 5 апреля",
+        message,
+        type: "info" as const,
+        direction: "admin_to_user" as const,
+        isRead: false,
+        createdAt: Date.now(),
+      });
+      sent++;
+    }
+
+    // Collect Telegram chatIds for broadcast
+    const telegramChatIds = targets
+      .filter((u) => u.telegramChatId)
+      .map((u) => u.telegramChatId!);
+
+    return { sent, telegramChatIds };
+  },
+});

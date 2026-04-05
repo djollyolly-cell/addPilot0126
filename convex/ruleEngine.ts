@@ -1694,7 +1694,7 @@ export const checkUzBudgetRules = internalAction({
 
     let totalActions = 0;
     // Skip-reason counters for diagnostics
-    let skipped = { blocked: 0, noBudget: 0, delivering: 0, dedup: 0, maxReached: 0, tokenErr: 0 };
+    const skipped = { blocked: 0, noBudget: 0, delivering: 0, dedup: 0, maxReached: 0, tokenErr: 0 };
 
     for (const rule of uzRules) {
       try {

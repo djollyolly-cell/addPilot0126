@@ -1,0 +1,130 @@
+<h2>AI Кабинет — Главная страница (хаб)</h2>
+<p class="subtitle">Мокап основного экрана <code>/ai-cabinet</code></p>
+
+<div class="mockup">
+  <div class="mockup-header">AI Кабинет</div>
+  <div class="mockup-body" style="padding: 0;">
+
+    <!-- Header -->
+    <div style="display: flex; justify-content: space-between; align-items: center; padding: 20px 24px; border-bottom: 1px solid rgba(255,255,255,0.1);">
+      <div>
+        <h3 style="margin: 0; font-size: 1.3rem;">🤖 AI Кабинет</h3>
+        <p style="margin: 4px 0 0; opacity: 0.6; font-size: 0.85rem;">Создавайте и управляйте рекламой с помощью AI</p>
+      </div>
+      <div style="display: flex; gap: 12px; align-items: center;">
+        <select style="background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); color: white; padding: 8px 12px; border-radius: 6px; font-size: 0.85rem;">
+          <option>🏢 Мой кабинет (ID: 12345)</option>
+          <option>🏢 Клиент "Стоматология"</option>
+        </select>
+        <button style="background: #3B82F6; color: white; border: none; padding: 10px 20px; border-radius: 8px; font-size: 0.9rem; cursor: pointer;">+ Создать кампанию</button>
+      </div>
+    </div>
+
+    <!-- Stats row -->
+    <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.1);">
+      <div style="padding: 16px 24px; background: #1a1a2e;">
+        <p style="margin: 0; font-size: 0.75rem; opacity: 0.5;">Расход сегодня</p>
+        <p style="margin: 4px 0 0; font-size: 1.3rem; font-weight: 700;">4 250 ₽</p>
+      </div>
+      <div style="padding: 16px 24px; background: #1a1a2e;">
+        <p style="margin: 0; font-size: 0.75rem; opacity: 0.5;">Лиды сегодня</p>
+        <p style="margin: 4px 0 0; font-size: 1.3rem; font-weight: 700; color: #22c55e;">12</p>
+      </div>
+      <div style="padding: 16px 24px; background: #1a1a2e;">
+        <p style="margin: 0; font-size: 0.75rem; opacity: 0.5;">Средний CPL</p>
+        <p style="margin: 4px 0 0; font-size: 1.3rem; font-weight: 700;">354 ₽</p>
+      </div>
+      <div style="padding: 16px 24px; background: #1a1a2e;">
+        <p style="margin: 0; font-size: 0.75rem; opacity: 0.5;">Активных кампаний</p>
+        <p style="margin: 4px 0 0; font-size: 1.3rem; font-weight: 700;">3 / 5</p>
+      </div>
+    </div>
+
+    <!-- Campaign list -->
+    <div style="padding: 20px 24px;">
+      <h4 style="margin: 0 0 16px; font-size: 0.9rem; opacity: 0.6;">Кампании</h4>
+
+      <!-- Campaign 1 - active -->
+      <div style="border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 16px 20px; margin-bottom: 12px; cursor: pointer; background: rgba(59,130,246,0.05);">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 10px; height: 10px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 6px #22c55e;"></div>
+            <div>
+              <p style="margin: 0; font-weight: 600;">Стоматология — Имплантация</p>
+              <p style="margin: 4px 0 0; font-size: 0.8rem; opacity: 0.5;">Цель: Сообщения · Гео: Алматы · Создана 25.03.2026</p>
+            </div>
+          </div>
+          <div style="display: flex; gap: 24px; align-items: center; font-size: 0.85rem;">
+            <div style="text-align: center;"><span style="opacity: 0.5;">Расход</span><br><strong>1 850 ₽</strong></div>
+            <div style="text-align: center;"><span style="opacity: 0.5;">Лиды</span><br><strong style="color: #22c55e;">7</strong></div>
+            <div style="text-align: center;"><span style="opacity: 0.5;">CPL</span><br><strong>264 ₽</strong></div>
+            <div style="text-align: center;"><span style="opacity: 0.5;">CTR</span><br><strong>1.8%</strong></div>
+            <label style="position: relative; width: 44px; height: 24px; cursor: pointer;">
+              <input type="checkbox" checked style="display:none;">
+              <div style="width: 44px; height: 24px; background: #22c55e; border-radius: 12px; position: relative;">
+                <div style="width: 20px; height: 20px; background: white; border-radius: 50%; position: absolute; top: 2px; right: 2px;"></div>
+              </div>
+            </label>
+            <span style="opacity: 0.4; font-size: 1.2rem;">→</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Campaign 2 - active -->
+      <div style="border: 1px solid rgba(255,255,255,0.15); border-radius: 10px; padding: 16px 20px; margin-bottom: 12px; cursor: pointer;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 10px; height: 10px; background: #22c55e; border-radius: 50%; box-shadow: 0 0 6px #22c55e;"></div>
+            <div>
+              <p style="margin: 0; font-weight: 600;">Стоматология — Виниры</p>
+              <p style="margin: 4px 0 0; font-size: 0.8rem; opacity: 0.5;">Цель: Сообщения · Гео: Астана · Создана 20.03.2026</p>
+            </div>
+          </div>
+          <div style="display: flex; gap: 24px; align-items: center; font-size: 0.85rem;">
+            <div style="text-align: center;"><span style="opacity: 0.5;">Расход</span><br><strong>1 200 ₽</strong></div>
+            <div style="text-align: center;"><span style="opacity: 0.5;">Лиды</span><br><strong style="color: #22c55e;">3</strong></div>
+            <div style="text-align: center;"><span style="opacity: 0.5;">CPL</span><br><strong>400 ₽</strong></div>
+            <div style="text-align: center;"><span style="opacity: 0.5;">CTR</span><br><strong>1.2%</strong></div>
+            <label style="position: relative; width: 44px; height: 24px; cursor: pointer;">
+              <input type="checkbox" checked style="display:none;">
+              <div style="width: 44px; height: 24px; background: #22c55e; border-radius: 12px; position: relative;">
+                <div style="width: 20px; height: 20px; background: white; border-radius: 50%; position: absolute; top: 2px; right: 2px;"></div>
+              </div>
+            </label>
+            <span style="opacity: 0.4; font-size: 1.2rem;">→</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Campaign 3 - paused -->
+      <div style="border: 1px solid rgba(255,255,255,0.1); border-radius: 10px; padding: 16px 20px; margin-bottom: 12px; cursor: pointer; opacity: 0.6;">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <div style="display: flex; align-items: center; gap: 12px;">
+            <div style="width: 10px; height: 10px; background: #f59e0b; border-radius: 50%;"></div>
+            <div>
+              <p style="margin: 0; font-weight: 600;">Стоматология — Брекеты</p>
+              <p style="margin: 4px 0 0; font-size: 0.8rem; opacity: 0.5;">Цель: Подписка · Гео: Алматы · Остановлена правилом CPL</p>
+            </div>
+          </div>
+          <div style="display: flex; gap: 24px; align-items: center; font-size: 0.85rem;">
+            <div style="text-align: center;"><span style="opacity: 0.5;">Расход</span><br><strong>1 200 ₽</strong></div>
+            <div style="text-align: center;"><span style="opacity: 0.5;">Лиды</span><br><strong>2</strong></div>
+            <div style="text-align: center;"><span style="opacity: 0.5;">CPL</span><br><strong style="color: #ef4444;">600 ₽</strong></div>
+            <div style="text-align: center;"><span style="opacity: 0.5;">CTR</span><br><strong>0.8%</strong></div>
+            <label style="position: relative; width: 44px; height: 24px; cursor: pointer;">
+              <input type="checkbox" style="display:none;">
+              <div style="width: 44px; height: 24px; background: rgba(255,255,255,0.2); border-radius: 12px; position: relative;">
+                <div style="width: 20px; height: 20px; background: white; border-radius: 50%; position: absolute; top: 2px; left: 2px;"></div>
+              </div>
+            </label>
+            <span style="opacity: 0.4; font-size: 1.2rem;">→</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<p class="subtitle" style="margin-top: 1.5rem;">Клик по кампании → страница деталей. Toggle вкл/выкл прямо из списка. Выбор кабинета — dropdown сверху.</p>
+<p class="subtitle">Нравится такой layout? Что изменить?</p>
