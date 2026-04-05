@@ -1,5 +1,6 @@
 import { v } from "convex/values";
-import { mutation, query } from "./_generated/server";
+import { mutation, query, action, internalQuery } from "./_generated/server";
+import { internal } from "./_generated/api";
 
 // Default metric/operator per rule type
 const RULE_TYPE_DEFAULTS: Record<
@@ -422,5 +423,73 @@ export const remove = mutation({
 
     await ctx.db.delete(args.ruleId);
     return { success: true };
+  },
+});
+
+// Internal query to get rule by ID (used by initializeUzBudgets action)
+export const getRule = internalQuery({
+  args: { ruleId: v.id("rules") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.ruleId);
+  },
+});
+
+/**
+ * Initialize budgets for a uz_budget_manage rule immediately after creation.
+ * Sets budget_limit_day to initialBudget for all target campaigns.
+ */
+export const initializeUzBudgets = action({
+  args: {
+    ruleId: v.id("rules"),
+  },
+  handler: async (ctx, args) => {
+    const rule = await ctx.runQuery(internal.rules.getRule, { ruleId: args.ruleId });
+    if (!rule || rule.type !== "uz_budget_manage" || !rule.isActive) return;
+
+    const { initialBudget } = rule.conditions as { initialBudget?: number };
+    if (!initialBudget) return;
+
+    const targetIds = rule.targetCampaignIds || [];
+    if (targetIds.length === 0) return;
+
+    let initialized = 0;
+    for (const accountId of rule.targetAccountIds) {
+      let accessToken: string;
+      try {
+        accessToken = await ctx.runAction(
+          internal.auth.getValidTokenForAccount,
+          { accountId }
+        );
+      } catch {
+        continue;
+      }
+
+      // Get campaigns from VK API
+      const campaigns = await ctx.runAction(
+        internal.vkApi.getCampaignsForAccount,
+        { accessToken }
+      ) as Array<{ id: number; name: string; status: string }>;
+      const nameMap = new Map(campaigns.map((c) => [String(c.id), c.name]));
+
+      for (const campaignIdStr of targetIds) {
+        if (!nameMap.has(campaignIdStr)) continue;
+        const campaignId = parseInt(campaignIdStr);
+        if (isNaN(campaignId)) continue;
+
+        try {
+          await ctx.runAction(internal.vkApi.setCampaignBudget, {
+            accessToken,
+            campaignId,
+            newLimitRubles: initialBudget,
+          });
+          initialized++;
+        } catch (err) {
+          console.error(`[initializeUzBudgets] Failed for campaign ${campaignId}:`, err);
+        }
+      }
+    }
+
+    console.log(`[initializeUzBudgets] Rule ${args.ruleId}: initialized ${initialized} campaigns to ${initialBudget}₽`);
+    return { initialized, initialBudget };
   },
 });

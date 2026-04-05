@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery, useMutation } from 'convex/react';
+import { useQuery, useMutation, useAction } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
@@ -93,6 +93,7 @@ export function RulesPage() {
   const updateRule = useMutation(api.rules.update);
   const toggleActive = useMutation(api.rules.toggleActive);
   const removeRule = useMutation(api.rules.remove);
+  const initializeUzBudgets = useAction(api.rules.initializeUzBudgets);
 
   // Map account IDs to names for display in rule cards
   const accountNameMap = new Map<string, string>();
@@ -368,7 +369,7 @@ export function RulesPage() {
                     });
                     setSuccess('Правило обновлено!');
                   } else {
-                    await createRule({
+                    const newRuleId = await createRule({
                       userId: user.userId as Id<"users">,
                       name: data.name,
                       type: data.type,
@@ -383,6 +384,12 @@ export function RulesPage() {
                       ...(data.maxDailyBudget !== undefined ? { maxDailyBudget: data.maxDailyBudget } : {}),
                       ...(data.resetDaily !== undefined ? { resetDaily: data.resetDaily } : {}),
                     });
+                    // For UZ rules: immediately set budgets to initialBudget
+                    if (data.type === 'uz_budget_manage' && newRuleId) {
+                      initializeUzBudgets({ ruleId: newRuleId }).catch((err) => {
+                        console.error('[initializeUzBudgets] Failed:', err);
+                      });
+                    }
                     setSuccess('Правило создано!');
                   }
                   setShowEditor(false);

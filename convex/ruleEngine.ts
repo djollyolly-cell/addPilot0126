@@ -1796,7 +1796,11 @@ export const checkUzBudgetRules = internalAction({
             }
 
             // Calculate new limit
-            let newLimit = dailyLimitRubles + budgetStep;
+            // If spentToday exceeds current budget (e.g. after midnight reset),
+            // catch up to spent + step in one jump, then normal step afterwards
+            const gap = spentToday - dailyLimitRubles;
+            const effectiveStep = gap > 0 ? gap + budgetStep : budgetStep;
+            let newLimit = dailyLimitRubles + effectiveStep;
             if (maxDailyBudget) {
               newLimit = Math.min(newLimit, maxDailyBudget);
             }
