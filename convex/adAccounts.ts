@@ -233,16 +233,6 @@ export const connect = mutation({
       createdAt: Date.now(),
     });
 
-    // First ad account connected — grant 3-day trial subscription
-    if (accounts.length === 0) {
-      const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
-      const currentExpiry = user.subscriptionExpiresAt ?? Date.now();
-      const baseTime = currentExpiry > Date.now() ? currentExpiry : Date.now();
-      await ctx.db.patch(args.userId, {
-        subscriptionExpiresAt: baseTime + THREE_DAYS_MS,
-        updatedAt: Date.now(),
-      });
-    }
 
     return accountId;
   },
