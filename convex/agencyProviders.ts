@@ -26,19 +26,33 @@ export const getByName = internalQuery({
   },
 });
 
-/** Get credentials for a user + provider */
+/** Get credentials for a user + provider (secrets filtered) */
 export const getCredentials = query({
   args: {
     userId: v.id("users"),
     providerId: v.id("agencyProviders"),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const creds = await ctx.db
       .query("agencyCredentials")
       .withIndex("by_userId_provider", (q) =>
         q.eq("userId", args.userId).eq("providerId", args.providerId)
       )
       .first();
+    if (!creds) return null;
+    // Never expose secrets to frontend
+    return {
+      _id: creds._id,
+      userId: creds.userId,
+      providerId: creds.providerId,
+      isActive: creds.isActive,
+      hasApiKey: !!creds.apiKey,
+      hasOauthClientId: !!creds.oauthClientId,
+      hasOauthToken: !!creds.oauthAccessToken,
+      oauthTokenExpiresAt: creds.oauthTokenExpiresAt,
+      createdAt: creds.createdAt,
+      lastUsedAt: (creds as Record<string, unknown>).lastUsedAt as number | undefined,
+    };
   },
 });
 

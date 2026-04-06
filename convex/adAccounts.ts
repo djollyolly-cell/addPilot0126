@@ -506,6 +506,7 @@ export const connectAgencyAccount = action({
     userId: v.id("users"),
     accessToken: v.string(),
     name: v.string(),
+    agencyProviderId: v.optional(v.id("agencyProviders")),
   },
   handler: async (ctx, args): Promise<{ accountId: string }> => {
     const token = args.accessToken.trim();
@@ -534,6 +535,14 @@ export const connectAgencyAccount = action({
       name,
       accessToken: token,
     });
+
+    // Set agency provider link if provided
+    if (accountId && args.agencyProviderId) {
+      await ctx.runMutation(internal.adAccounts.patchAccount, {
+        accountId,
+        agencyProviderId: args.agencyProviderId,
+      });
+    }
 
     // Auto-discover advertiser ID for agency token
     if (accountId) {

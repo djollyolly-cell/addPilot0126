@@ -240,6 +240,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
           userId: typedUserId,
           accessToken: fieldValues.accessToken.trim(),
           name: accountName,
+          agencyProviderId: providerId,
         });
 
         await saveCredentials({
