@@ -67,6 +67,8 @@ export default defineSchema({
     // myTarget advertiser ID (e.g. 292358) — different from user ID in vkAccountId
     // Required for content upload API (?account= param)
     mtAdvertiserId: v.optional(v.string()),
+    // Vitamin.tools cabinet ID — for auto-refreshing agency_client tokens
+    vitaminCabinetId: v.optional(v.string()),
     // Business profile
     companyName: v.optional(v.string()),
     industry: v.optional(v.string()),

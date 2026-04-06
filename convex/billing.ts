@@ -1027,3 +1027,107 @@ export const notifyPriceChange = internalMutation({
     return { sent, telegramChatIds };
   },
 });
+
+// ─── TEMP: One-time checkout link generator ─────────────────────────
+// Run from Convex dashboard to create a payment link for any user
+export const createOneTimeCheckout = internalAction({
+  args: {
+    email: v.string(),
+    tier: v.union(v.literal("start"), v.literal("pro")),
+    amountRUB: v.number(), // Price in RUB (e.g. 2490)
+    returnUrl: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ redirectUrl?: string; error?: string; amountBYN?: number }> => {
+    // 1. Find user by email
+    const user = await ctx.runQuery(internal.billing.getUserByEmailInternal, { email: args.email });
+    if (!user) return { error: `Пользователь ${args.email} не найден` };
+
+    // 2. Get NBRB rate RUB → BYN
+    const nbrbResp = await fetch("https://api.nbrb.by/exrates/rates/456");
+    if (!nbrbResp.ok) return { error: "Не удалось получить курс НБРБ" };
+    const nbrbData = await nbrbResp.json();
+    const rate = nbrbData.Cur_OfficialRate; // per 100 RUB
+    const scale = nbrbData.Cur_Scale || 100;
+    const amountBYN = Math.round((args.amountRUB / scale) * rate * 100) / 100;
+
+    // 3. Create bePaid checkout
+    const shopId = process.env.BEPAID_SHOP_ID;
+    const secretKey = process.env.BEPAID_SECRET_KEY;
+    const isTestMode = process.env.BEPAID_TEST_MODE === "true";
+    const siteUrl = process.env.CONVEX_SITE_URL;
+
+    if (!shopId || !secretKey) return { error: "bePaid не настроен" };
+
+    const returnUrl = args.returnUrl || "https://aipilot.by/pricing";
+    const tierInfo = TIERS[args.tier];
+    const orderId = `order_${user._id}_${args.tier}_${Date.now()}`;
+
+    const checkoutRequest = {
+      checkout: {
+        test: isTestMode,
+        transaction_type: "payment",
+        attempts: 3,
+        settings: {
+          success_url: `${returnUrl}?status=success&tier=${args.tier}`,
+          fail_url: `${returnUrl}?status=failed`,
+          notification_url: siteUrl ? `${siteUrl}/api/bepaid-webhook` : undefined,
+          language: "ru",
+        },
+        order: {
+          amount: Math.round(amountBYN * 100),
+          currency: "BYN",
+          description: `AddPilot ${tierInfo.name} (${args.amountRUB} ₽)`,
+          tracking_id: orderId,
+        },
+        customer: {
+          email: user.email,
+        },
+      },
+    };
+
+    const response = await fetch(BEPAID_CHECKOUT_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "X-API-Version": "2",
+        "Authorization": `Basic ${btoa(`${shopId}:${secretKey}`)}`,
+      },
+      body: JSON.stringify(checkoutRequest),
+    });
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const data: any = await response.json();
+
+    if (!response.ok || data.errors) {
+      console.error("bePaid checkout error:", data);
+      return { error: data.message || data.errors?.[0]?.message || "Ошибка bePaid" };
+    }
+
+    // Save pending payment
+    await ctx.runMutation(internal.billing.savePendingPayment, {
+      userId: user._id,
+      tier: args.tier,
+      orderId,
+      token: data.checkout.token,
+      amount: amountBYN,
+      currency: "BYN",
+    });
+
+    const redirectUrl = data.checkout.redirect_url as string;
+    console.log(`[billing] One-time checkout created: ${args.email}, ${args.tier}, ${args.amountRUB} RUB = ${amountBYN} BYN, URL: ${redirectUrl}`);
+
+    return { redirectUrl, amountBYN };
+  },
+});
+
+// Internal helper: get user by email (for createOneTimeCheckout)
+export const getUserByEmailInternal = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .first();
+  },
+});

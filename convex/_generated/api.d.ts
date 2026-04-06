@@ -38,6 +38,7 @@ import type * as userNotifications from "../userNotifications.js";
 import type * as userSettings from "../userSettings.js";
 import type * as users from "../users.js";
 import type * as uzBudgetCron from "../uzBudgetCron.js";
+import type * as uzBudgetHelpers from "../uzBudgetHelpers.js";
 import type * as videos from "../videos.js";
 import type * as vkApi from "../vkApi.js";
 
@@ -78,6 +79,7 @@ declare const fullApi: ApiFromModules<{
   userSettings: typeof userSettings;
   users: typeof users;
   uzBudgetCron: typeof uzBudgetCron;
+  uzBudgetHelpers: typeof uzBudgetHelpers;
   videos: typeof videos;
   vkApi: typeof vkApi;
 }>;

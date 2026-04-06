@@ -582,19 +582,24 @@ export const serviceDiagnostic = query({
       error: h.error ?? null,
     }));
 
-    // 7. Today's metrics summary per account
-    const todayMetrics = await ctx.db.query("metricsDaily")
-      .withIndex("by_accountId_date")
-      .collect();
-    const todayOnly = todayMetrics.filter((m) => m.date === today);
+    // 7. Today's metrics summary per account (lightweight — query per account)
+    const todayOnly: Array<{ accountId: string; spent: number; leads: number; clicks: number }> = [];
+    for (const acc of accounts) {
+      const rows = await ctx.db.query("metricsDaily")
+        .withIndex("by_accountId_date", (q) => q.eq("accountId", acc._id).eq("date", today))
+        .collect();
+      for (const m of rows) {
+        todayOnly.push({ accountId: m.accountId as string, spent: m.spent ?? 0, leads: m.leads ?? 0, clicks: m.clicks ?? 0 });
+      }
+    }
     const accountMetrics: Record<string, { ads: number; totalSpent: number; totalLeads: number; totalClicks: number }> = {};
     for (const m of todayOnly) {
-      const key = m.accountId as string;
+      const key = m.accountId;
       if (!accountMetrics[key]) accountMetrics[key] = { ads: 0, totalSpent: 0, totalLeads: 0, totalClicks: 0 };
       accountMetrics[key].ads++;
-      accountMetrics[key].totalSpent += m.spent ?? 0;
-      accountMetrics[key].totalLeads += m.leads ?? 0;
-      accountMetrics[key].totalClicks += m.clicks ?? 0;
+      accountMetrics[key].totalSpent += m.spent;
+      accountMetrics[key].totalLeads += m.leads;
+      accountMetrics[key].totalClicks += m.clicks;
     }
 
     // 8. UZ budget rules analysis

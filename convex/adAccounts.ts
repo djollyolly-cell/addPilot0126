@@ -1870,3 +1870,35 @@ export const getAllActiveRulesInternal = internalQuery({
   },
 });
 
+/**
+ * TEMP — Clear stale OAuth credentials from an agency account
+ * that was reconnected with a different token (different VK user).
+ */
+export const clearAgencyCredentials = internalMutation({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) throw new Error("Account not found");
+    await ctx.db.patch(args.accountId, {
+      clientId: undefined,
+      clientSecret: undefined,
+      refreshToken: undefined,
+      tokenExpiresAt: undefined,
+    });
+  },
+});
+
+// Set vitaminCabinetId for agency_client accounts (Vitamin.tools token refresh)
+export const setVitaminCabinetId = mutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    vitaminCabinetId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) throw new Error("Аккаунт не найден");
+    await ctx.db.patch(args.accountId, {
+      vitaminCabinetId: args.vitaminCabinetId,
+    });
+  },
+});

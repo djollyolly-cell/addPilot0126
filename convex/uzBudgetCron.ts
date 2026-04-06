@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { internalAction, internalQuery } from "./_generated/server";
+import { action, internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
@@ -178,5 +178,109 @@ export const hasResetToday = internalQuery({
       )
       .first();
     return log !== null;
+  },
+});
+
+/**
+ * TEMP — One-time emergency budget reset after server outage.
+ * Processes ONE rule at a time (by index) to avoid timeout.
+ * For each campaign in the rule:
+ *   - Gets current spent from VK API
+ *   - Sets budget = max(spent, initialBudget)
+ * Remove after use.
+ */
+export const emergencyBudgetReset = action({
+  args: { ruleIndex: v.number() },
+  handler: async (ctx, args): Promise<Record<string, unknown>> => {
+    const uzRules: UzRule[] = await ctx.runQuery(internal.ruleEngine.getActiveUzRules) as UzRule[];
+    const resetRules: UzRule[] = uzRules.filter(
+      (r) => r.conditions.resetDaily
+    );
+
+    if (args.ruleIndex >= resetRules.length) {
+      return { done: true, totalRules: resetRules.length, message: "All rules processed" };
+    }
+
+    const rule = resetRules[args.ruleIndex];
+    let processed = 0;
+    let reset = 0;
+    let errors = 0;
+    const details: string[] = [];
+
+    for (const accountId of rule.targetAccountIds) {
+      let accessToken: string;
+      try {
+        accessToken = await ctx.runAction(
+          internal.auth.getValidTokenForAccount,
+          { accountId }
+        );
+      } catch {
+        errors++;
+        details.push(`No token for account ${accountId}`);
+        continue;
+      }
+
+      const campaigns = await ctx.runAction(
+        internal.vkApi.getCampaignsForAccount,
+        { accessToken }
+      ) as Array<{ id: number; name: string; budget_limit_day?: string }>;
+      const nameMap = new Map(campaigns.map((c) => [String(c.id), c]));
+
+      const targetIds = rule.targetCampaignIds || [];
+
+      for (const campaignIdStr of targetIds) {
+        if (!nameMap.has(campaignIdStr)) continue;
+        const camp = nameMap.get(campaignIdStr)!;
+        const currentLimit = Number(camp.budget_limit_day || "0");
+        if (currentLimit <= 0) continue;
+        processed++;
+
+        try {
+          const spentToday = await ctx.runAction(
+            internal.vkApi.getCampaignSpentToday,
+            { accessToken, campaignId: campaignIdStr }
+          );
+
+          const initialBudget = rule.conditions.initialBudget || 100;
+          const newBudget = Math.max(Math.ceil(spentToday), initialBudget);
+
+          if (currentLimit > newBudget + 5) {
+            await ctx.runAction(internal.vkApi.setCampaignBudget, {
+              accessToken,
+              campaignId: parseInt(campaignIdStr),
+              newLimitRubles: newBudget,
+            });
+
+            await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+              userId: rule.userId,
+              ruleId: rule._id,
+              accountId,
+              campaignId: campaignIdStr,
+              campaignName: camp.name,
+              actionType: "budget_reset" as const,
+              oldBudget: currentLimit,
+              newBudget,
+              step: 0,
+            });
+            reset++;
+            details.push(`${camp.name}: ${currentLimit} -> ${newBudget} (spent=${Math.ceil(spentToday)})`);
+          }
+        } catch (err) {
+          errors++;
+          details.push(`FAIL ${campaignIdStr}: ${err}`);
+        }
+      }
+    }
+
+    return {
+      done: false,
+      ruleIndex: args.ruleIndex,
+      ruleName: (rule as unknown as { name?: string }).name || rule._id,
+      totalRules: resetRules.length,
+      campaignsProcessed: processed,
+      campaignsReset: reset,
+      errors,
+      details,
+    };
   },
 });

@@ -623,6 +623,32 @@ export const getValidVkAdsToken = internalAction({
 
 // ─── PER-ACCOUNT TOKEN MANAGEMENT ────────────────────────────────
 
+// Helper: try refreshing token via Vitamin API (last-resort fallback for agency_client accounts)
+async function tryVitaminRefresh(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any,
+  accountId: Id<"adAccounts">,
+  account: { vitaminCabinetId?: string; name?: string },
+): Promise<string | null> {
+  if (!account.vitaminCabinetId) return null;
+  try {
+    console.log(
+      `[getValidTokenForAccount] «${account.name}» (${accountId}): trying Vitamin API fallback`
+    );
+    const result = await ctx.runAction(internal.auth.refreshViaVitamin, {
+      accountId,
+      vitaminCabinetId: account.vitaminCabinetId,
+    });
+    return result.accessToken;
+  } catch (vitErr) {
+    const vitMsg = vitErr instanceof Error ? vitErr.message : String(vitErr);
+    console.log(
+      `[getValidTokenForAccount] «${account.name}» (${accountId}): Vitamin fallback failed: ${vitMsg}`
+    );
+    return null;
+  }
+}
+
 // Get a valid token for a specific adAccount (per-account credentials)
 // Falls back to user-level credentials if per-account ones are missing
 export const getValidTokenForAccount = internalAction({
@@ -691,6 +717,10 @@ export const getValidTokenForAccount = internalAction({
           );
         }
       }
+      // Last resort: try Vitamin API
+      const vitaminToken1 = await tryVitaminRefresh(ctx, args.accountId, account);
+      if (vitaminToken1) return vitaminToken1;
+
       throw new Error(
         "TOKEN_EXPIRED: Токен VK Ads истёк, а clientId/clientSecret отсутствуют. Подключите кабинет заново."
       );
@@ -749,6 +779,9 @@ export const getValidTokenForAccount = internalAction({
       // No refresh token — try agency_client_credentials before giving up
       const agencyToken = await tryAgencyFallback();
       if (agencyToken) return agencyToken;
+      // Last resort: try Vitamin API
+      const vitaminToken2 = await tryVitaminRefresh(ctx, args.accountId, account);
+      if (vitaminToken2) return vitaminToken2;
       throw new Error("Токен VK Ads истёк, refreshToken отсутствует. Подключите кабинет заново.");
     }
 
@@ -781,6 +814,9 @@ export const getValidTokenForAccount = internalAction({
       // Refresh failed — try agency_client_credentials as last resort
       const agencyToken = await tryAgencyFallback();
       if (agencyToken) return agencyToken;
+      // Last resort: try Vitamin API
+      const vitaminToken3 = await tryVitaminRefresh(ctx, args.accountId, account);
+      if (vitaminToken3) return vitaminToken3;
 
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(`Не удалось обновить токен VK Ads: ${msg}. Подключите кабинет заново.`);
@@ -803,7 +839,85 @@ export const getAccountWithCredentials = internalQuery({
       userId: account.userId,
       vkAccountId: account.vkAccountId,
       name: account.name,
+      vitaminCabinetId: (account as Record<string, unknown>).vitaminCabinetId as string | undefined,
     };
+  },
+});
+
+// Refresh token via Vitamin.tools API (for agency_client accounts)
+export const refreshViaVitamin = internalAction({
+  args: {
+    accountId: v.id("adAccounts"),
+    vitaminCabinetId: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ accessToken: string }> => {
+    const apiKey = process.env.VITAMIN_API_KEY;
+    if (!apiKey) {
+      throw new Error("VITAMIN_API_KEY not configured");
+    }
+
+    const resp = await fetch(
+      "https://app.vitamin.tools/ext/api/v1/external_account/account/get-token-list-by-clients",
+      {
+        method: "POST",
+        headers: {
+          "X-API-KEY": apiKey,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ id: [parseInt(args.vitaminCabinetId)] }),
+      }
+    );
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Vitamin API error ${resp.status}: ${text}`);
+    }
+
+    const data = await resp.json();
+    // Response format: extract token from response
+    // Vitamin returns array of tokens or object with tokens
+    let newToken: string | null = null;
+    if (Array.isArray(data)) {
+      // [{id, token, ...}]
+      newToken = data[0]?.token || data[0]?.access_token || null;
+    } else if (data.data && Array.isArray(data.data)) {
+      newToken = data.data[0]?.token || data.data[0]?.access_token || null;
+    } else if (data.token) {
+      newToken = data.token;
+    } else if (data.access_token) {
+      newToken = data.access_token;
+    }
+
+    if (!newToken) {
+      throw new Error(`Vitamin API: no token in response: ${JSON.stringify(data).slice(0, 200)}`);
+    }
+
+    // Save new token to account
+    await ctx.runMutation(internal.auth.updateVitaminToken, {
+      accountId: args.accountId,
+      accessToken: newToken,
+    });
+
+    console.log(
+      `[refreshViaVitamin] Account ${args.accountId}: got new token from Vitamin API`
+    );
+
+    return { accessToken: newToken };
+  },
+});
+
+// Save token obtained from Vitamin API
+export const updateVitaminToken = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    accessToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.accountId, {
+      accessToken: args.accessToken,
+      status: "active" as const,
+      lastError: undefined,
+    });
   },
 });
 
