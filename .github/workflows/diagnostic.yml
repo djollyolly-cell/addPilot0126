@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Generate admin key and deploy + run diagnostic
+      - name: Generate admin key and run diagnostic
         run: |
           # Generate ephemeral admin key
           ADMIN_KEY=$(node -e "
@@ -45,31 +45,9 @@ jobs:
             console.log(name + '|' + Buffer.concat([ver, nonce, Buffer.from(ct)]).toString('hex'));
           ")
 
-          # Deploy first (to ensure serviceDiagnostic query exists)
-          echo "--- Deploying Convex functions ---"
-          CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY" npx convex deploy --yes
-
-          # Re-generate key (old one might expire)
-          ADMIN_KEY2=$(node -e "
-            const crypto = require('crypto');
-            const name = process.env.CONVEX_INSTANCE_NAME;
-            const secret = Buffer.from(process.env.CONVEX_INSTANCE_SECRET, 'hex');
-            const counter = Buffer.alloc(4); counter.writeUInt32BE(1, 0);
-            const aesKey = crypto.createHmac('sha256', secret).update(Buffer.concat([counter, Buffer.from('admin key')])).digest().subarray(0, 16);
-            const now = Math.floor(Date.now() / 1000);
-            const bn = BigInt(now); const vb = []; let v = bn;
-            while (v > 0x7fn) { vb.push(Number((v & 0x7fn) | 0x80n)); v >>= 7n; } vb.push(Number(v & 0x7fn));
-            const payload = Buffer.concat([Buffer.from([0x10]), Buffer.from(vb), Buffer.from([0x18, 0x00])]);
-            const nonce = crypto.randomBytes(12);
-            const ver = Buffer.from([0x01]);
-            const { gcmsiv } = require('@noble/ciphers/aes.js');
-            const ct = gcmsiv(aesKey, nonce, ver).encrypt(payload);
-            console.log(name + '|' + Buffer.concat([ver, nonce, Buffer.from(ct)]).toString('hex'));
-          ")
-
-          # Run diagnostic query
+          # Run diagnostic query (no deploy needed — query already exists on server)
           echo "--- Running diagnostic query ---"
-          CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY2" npx convex run syncMetrics:serviceDiagnostic --no-push 2>&1 | tee diagnostic_output.json
+          CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY" npx convex run syncMetrics:serviceDiagnostic --no-push 2>&1 | tee diagnostic_output.json
           echo "--- Diagnostic complete ---"
         env:
           CONVEX_SELF_HOSTED_URL: ${{ secrets.CONVEX_SELF_HOSTED_URL }}
