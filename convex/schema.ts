@@ -69,6 +69,9 @@ export default defineSchema({
     mtAdvertiserId: v.optional(v.string()),
     // Vitamin.tools cabinet ID — for auto-refreshing agency_client tokens
     vitaminCabinetId: v.optional(v.string()),
+    // Universal agency provider link
+    agencyProviderId: v.optional(v.id("agencyProviders")),
+    agencyCabinetId: v.optional(v.string()),
     // Business profile
     companyName: v.optional(v.string()),
     industry: v.optional(v.string()),
@@ -594,6 +597,45 @@ export default defineSchema({
     .index("by_userId_unread", ["userId", "isRead"])
     .index("by_direction", ["direction", "isRead"])
     .index("by_threadId", ["threadId"]),
+
+  // Agency service providers (Витамин, GetUNIQ, TargetHunter, Церебро)
+  agencyProviders: defineTable({
+    name: v.string(),              // "vitamin" | "getuniq" | "targethunter" | "cerebro"
+    displayName: v.string(),       // "Витамин" | "GetUNIQ" | "TargetHunter" | "Церебро"
+    hasApi: v.boolean(),           // true = auto-refresh, false = manual token
+    authMethod: v.optional(v.string()),   // "api_key" | "oauth2"
+    // Fields the user needs to provide when connecting through this provider
+    requiredFields: v.optional(v.array(v.object({
+      key: v.string(),            // field identifier: "apiKey", "cabinetId", "clientId", "clientSecret", "accessToken"
+      label: v.string(),          // Russian label for UI
+      placeholder: v.optional(v.string()),
+      type: v.optional(v.string()),  // "text" | "password" | "textarea"
+    }))),
+    notes: v.optional(v.string()),
+    docsUrl: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_name", ["name"]),
+
+  // Per-user credentials for each agency provider
+  agencyCredentials: defineTable({
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+    // API key auth (Витамин)
+    apiKey: v.optional(v.string()),
+    // OAuth2 auth (GetUNIQ)
+    oauthClientId: v.optional(v.string()),
+    oauthClientSecret: v.optional(v.string()),
+    oauthAccessToken: v.optional(v.string()),
+    oauthRefreshToken: v.optional(v.string()),
+    oauthTokenExpiresAt: v.optional(v.number()),
+    isActive: v.boolean(),
+    lastUsedAt: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_userId_provider", ["userId", "providerId"]),
 
   // Cron heartbeats — detect stuck/zombie cron runs
   cronHeartbeats: defineTable({
