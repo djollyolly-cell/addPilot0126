@@ -913,14 +913,16 @@ export const fetchLiveCampaigns = action({
     }
 
     return {
-      campaigns: adPlans.map((plan) => ({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      campaigns: adPlans.map((plan: any) => ({
         id: plan.id,
         name: plan.name,
         status: plan.status,
         objective: plan.objective,
         dailyLimit: plan.budget_limit_day,
         allLimit: plan.budget_limit,
-        banners: (bannersByCampaign.get(plan.id) || []).map((b) => ({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        banners: (bannersByCampaign.get(plan.id) || []).map((b: any) => ({
           id: b.id,
           name: b.textblocks?.title?.text || `Баннер ${b.id}`,
           status: b.status,

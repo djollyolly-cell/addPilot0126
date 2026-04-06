@@ -313,7 +313,7 @@ export const getuniqConnectAccount = action({
     getuniqAccountId: v.string(),
     accountName: v.string(),
   },
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<{ accountId: string }> => {
     let creds = await ctx.runQuery(selfInternal.agencyProviders.getCredentialsInternal, {
       userId: args.userId,
       providerId: args.providerId,
@@ -355,7 +355,7 @@ export const getuniqConnectAccount = action({
     if (!vkToken) throw new Error("GetUNIQ не вернул токен VK Ads");
 
     // Connect via existing connectAgencyAccount flow
-    const result = await ctx.runAction(internal.adAccounts.connectAgencyAccountInternal, {
+    const result: { accountId: string } = await ctx.runAction(internal.adAccounts.connectAgencyAccountInternal, {
       userId: args.userId,
       accessToken: vkToken,
       name: args.accountName,

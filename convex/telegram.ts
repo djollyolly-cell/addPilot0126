@@ -1652,7 +1652,7 @@ export const collectDigestData = internalAction({
       // Previous period metrics (aggregate by ad_plan using same mapping)
       let prevMetrics: DigestMetrics | undefined;
       if (prevAccountMetrics) {
-        const prevAcc = prevAccountMetrics.find((a) => a.accountId === accMetrics.accountId);
+        const prevAcc = prevAccountMetrics.find((a: { accountId: string }) => a.accountId === accMetrics.accountId);
         if (prevAcc) {
           const prevByType = { lead: { sp: 0, r: 0 }, message: { sp: 0, r: 0 }, subscription: { sp: 0, r: 0 }, awareness: { sp: 0, r: 0 } };
           let prevImp = 0, prevCl = 0, prevSp = 0;
@@ -1690,7 +1690,7 @@ export const collectDigestData = internalAction({
       }
 
       // Rule events for this account
-      const accRules = accountRuleEvents.find((a) => a.accountId === accMetrics.accountId);
+      const accRules = accountRuleEvents.find((a: { accountId: string }) => a.accountId === accMetrics.accountId);
 
       accounts.push({
         name: accMetrics.accountName,
