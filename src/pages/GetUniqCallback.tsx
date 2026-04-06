@@ -21,10 +21,10 @@ export default function GetUniqCallback() {
     const code = params.get('code');
     const error = params.get('error');
 
-    // Read saved state from sessionStorage (set before redirect)
-    const userId = sessionStorage.getItem('getuniq_userId');
-    const providerId = sessionStorage.getItem('getuniq_providerId');
-    const redirectUri = sessionStorage.getItem('getuniq_redirectUri');
+    // Read saved state from localStorage (shared across windows, set by parent before redirect)
+    const userId = localStorage.getItem('getuniq_userId');
+    const providerId = localStorage.getItem('getuniq_providerId');
+    const redirectUri = localStorage.getItem('getuniq_redirectUri');
 
     if (error) {
       setStatus('error');
@@ -49,6 +49,10 @@ export default function GetUniqCallback() {
         setStatus('success');
         setMessage('Авторизация успешна! Окно закроется автоматически.');
         localStorage.setItem('getuniq_result', JSON.stringify({ success: true }));
+        // Clean up state params
+        localStorage.removeItem('getuniq_userId');
+        localStorage.removeItem('getuniq_providerId');
+        localStorage.removeItem('getuniq_redirectUri');
         // Close popup after short delay
         setTimeout(() => window.close(), 1500);
       })

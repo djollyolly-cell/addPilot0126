@@ -157,10 +157,10 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
         redirectUri,
       });
 
-      // Save state for the callback page
-      sessionStorage.setItem('getuniq_userId', typedUserId);
-      sessionStorage.setItem('getuniq_providerId', selectedProvider._id);
-      sessionStorage.setItem('getuniq_redirectUri', redirectUri);
+      // Save state for the callback page (localStorage — shared across windows, unlike sessionStorage)
+      localStorage.setItem('getuniq_userId', typedUserId);
+      localStorage.setItem('getuniq_providerId', selectedProvider._id);
+      localStorage.setItem('getuniq_redirectUri', redirectUri);
 
       // Clear any old result
       localStorage.removeItem('getuniq_result');
@@ -169,11 +169,15 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
       const w = 600, h = 700;
       const left = window.screenX + (window.outerWidth - w) / 2;
       const top = window.screenY + (window.outerHeight - h) / 2;
-      window.open(
+      const popup = window.open(
         result.authUrl,
         'getuniq_oauth',
         `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no`
       );
+
+      if (!popup) {
+        setError('Браузер заблокировал всплывающее окно. Разрешите попапы для этого сайта.');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
     } finally {

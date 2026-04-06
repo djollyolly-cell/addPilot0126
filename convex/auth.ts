@@ -649,6 +649,87 @@ async function tryVitaminRefresh(
   }
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const selfInternalAgency = internal as any;
+
+/** Try refreshing VK Ads token via GetUNIQ API (for agency accounts linked to GetUNIQ provider) */
+async function tryGetuniqRefresh(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any,
+  accountId: Id<"adAccounts">,
+  account: { agencyProviderId?: string; agencyCabinetId?: string; userId: string; name?: string },
+): Promise<string | null> {
+  if (!account.agencyProviderId || !account.agencyCabinetId) return null;
+
+  try {
+    // Check if this provider is GetUNIQ
+    const provider = await ctx.runQuery(selfInternalAgency.agencyProviders.getCredentialsInternal, {
+      userId: account.userId,
+      providerId: account.agencyProviderId,
+    });
+    if (!provider?.oauthAccessToken) return null;
+
+    console.log(
+      `[getValidTokenForAccount] «${account.name}» (${accountId}): trying GetUNIQ API fallback`
+    );
+
+    // Refresh GetUNIQ token if needed, then get VK token
+    const GETUNIQ_TOKEN_URL = "https://getuniq.me/oauth/v2/token";
+    const GETUNIQ_API_BASE = "https://getuniq.me/api/v1";
+
+    let accessToken = provider.oauthAccessToken;
+
+    // Refresh GetUNIQ token if expired
+    if (provider.oauthTokenExpiresAt && provider.oauthTokenExpiresAt < Date.now() + 60000) {
+      if (!provider.oauthClientId || !provider.oauthClientSecret || !provider.oauthRefreshToken) return null;
+      const params = new URLSearchParams({
+        client_id: provider.oauthClientId,
+        client_secret: provider.oauthClientSecret,
+        grant_type: "refresh_token",
+        refresh_token: provider.oauthRefreshToken,
+      });
+      const refreshResp = await fetch(`${GETUNIQ_TOKEN_URL}?${params.toString()}`);
+      if (!refreshResp.ok) return null;
+      const refreshData = await refreshResp.json();
+      accessToken = refreshData.access_token;
+
+      // Save refreshed tokens
+      await ctx.runMutation(selfInternalAgency.agencyProviders.updateCredentialsTokens, {
+        userId: account.userId,
+        providerId: account.agencyProviderId,
+        oauthAccessToken: refreshData.access_token,
+        oauthRefreshToken: refreshData.refresh_token,
+        oauthTokenExpiresAt: Date.now() + (refreshData.expires_in || 3600) * 1000,
+      });
+    }
+
+    // Fetch VK Ads token for the cabinet
+    const tokenResp = await fetch(
+      `${GETUNIQ_API_BASE}/accounts/vk-ads/${account.agencyCabinetId}/token`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    );
+    if (!tokenResp.ok) return null;
+
+    const tokenData = await tokenResp.json();
+    const vkToken = tokenData.token || tokenData.access_token;
+    if (!vkToken) return null;
+
+    // Save new VK token to account
+    await ctx.runMutation(internal.auth.updateAccountToken, {
+      accountId,
+      accessToken: vkToken,
+    });
+
+    return vkToken;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(
+      `[getValidTokenForAccount] «${account.name}» (${accountId}): GetUNIQ fallback failed: ${msg}`
+    );
+    return null;
+  }
+}
+
 // Get a valid token for a specific adAccount (per-account credentials)
 // Falls back to user-level credentials if per-account ones are missing
 export const getValidTokenForAccount = internalAction({
@@ -717,6 +798,9 @@ export const getValidTokenForAccount = internalAction({
           );
         }
       }
+      // Try GetUNIQ API
+      const getuniqToken1 = await tryGetuniqRefresh(ctx, args.accountId, account);
+      if (getuniqToken1) return getuniqToken1;
       // Last resort: try Vitamin API
       const vitaminToken1 = await tryVitaminRefresh(ctx, args.accountId, account);
       if (vitaminToken1) return vitaminToken1;
@@ -779,6 +863,9 @@ export const getValidTokenForAccount = internalAction({
       // No refresh token — try agency_client_credentials before giving up
       const agencyToken = await tryAgencyFallback();
       if (agencyToken) return agencyToken;
+      // Try GetUNIQ API
+      const getuniqToken2 = await tryGetuniqRefresh(ctx, args.accountId, account);
+      if (getuniqToken2) return getuniqToken2;
       // Last resort: try Vitamin API
       const vitaminToken2 = await tryVitaminRefresh(ctx, args.accountId, account);
       if (vitaminToken2) return vitaminToken2;
@@ -814,6 +901,9 @@ export const getValidTokenForAccount = internalAction({
       // Refresh failed — try agency_client_credentials as last resort
       const agencyToken = await tryAgencyFallback();
       if (agencyToken) return agencyToken;
+      // Try GetUNIQ API
+      const getuniqToken3 = await tryGetuniqRefresh(ctx, args.accountId, account);
+      if (getuniqToken3) return getuniqToken3;
       // Last resort: try Vitamin API
       const vitaminToken3 = await tryVitaminRefresh(ctx, args.accountId, account);
       if (vitaminToken3) return vitaminToken3;
@@ -840,6 +930,8 @@ export const getAccountWithCredentials = internalQuery({
       vkAccountId: account.vkAccountId,
       name: account.name,
       vitaminCabinetId: (account as Record<string, unknown>).vitaminCabinetId as string | undefined,
+      agencyProviderId: (account as Record<string, unknown>).agencyProviderId as string | undefined,
+      agencyCabinetId: (account as Record<string, unknown>).agencyCabinetId as string | undefined,
     };
   },
 });
@@ -1037,6 +1129,22 @@ export const updateAgencyAccountTokens = internalMutation({
       tokenExpiresAt: args.tokenExpiresAt,
       clientId: args.clientId,
       clientSecret: args.clientSecret,
+      status: "active",
+      lastError: undefined,
+    });
+  },
+});
+
+// Update only accessToken for a single account (used by GetUNIQ refresh)
+export const updateAccountToken = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    accessToken: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.accountId, {
+      accessToken: args.accessToken,
+      tokenExpiresAt: Date.now() + 86400 * 1000, // 24h default
       status: "active",
       lastError: undefined,
     });
