@@ -1,5 +1,9 @@
-import { query, mutation, internalMutation, internalQuery } from "./_generated/server";
+import { query, mutation, action, internalMutation, internalQuery } from "./_generated/server";
 import { v } from "convex/values";
+import { internal } from "./_generated/api";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const selfInternal = internal as any;
 
 // ---- Queries ----
 
@@ -155,6 +159,270 @@ export const saveCredentialsInternal = internalMutation({
   },
 });
 
+// ---- GetUNIQ OAuth2 flow ----
+
+const GETUNIQ_AUTH_URL = "https://getuniq.me/oauth/v2/auth";
+const GETUNIQ_TOKEN_URL = "https://getuniq.me/oauth/v2/token";
+const GETUNIQ_API_BASE = "https://getuniq.me/api/v1";
+
+/** Build GetUNIQ OAuth URL for user to authorize */
+export const getuniqStartAuth = action({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+    redirectUri: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const creds = await ctx.runQuery(selfInternal.agencyProviders.getCredentialsInternal, {
+      userId: args.userId,
+      providerId: args.providerId,
+    });
+    if (!creds?.oauthClientId) {
+      throw new Error("Сначала сохраните Client ID и Client Secret");
+    }
+
+    const params = new URLSearchParams({
+      client_id: creds.oauthClientId,
+      redirect_uri: args.redirectUri,
+      response_type: "code",
+      scope: "user_accounts",
+    });
+
+    return { authUrl: `${GETUNIQ_AUTH_URL}?${params.toString()}` };
+  },
+});
+
+/** Exchange GetUNIQ authorization code for access_token + refresh_token */
+export const getuniqExchangeCode = action({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+    code: v.string(),
+    redirectUri: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const creds = await ctx.runQuery(selfInternal.agencyProviders.getCredentialsInternal, {
+      userId: args.userId,
+      providerId: args.providerId,
+    });
+    if (!creds?.oauthClientId || !creds?.oauthClientSecret) {
+      throw new Error("Нет Client ID / Client Secret для GetUNIQ");
+    }
+
+    const params = new URLSearchParams({
+      client_id: creds.oauthClientId,
+      client_secret: creds.oauthClientSecret,
+      grant_type: "authorization_code",
+      code: args.code,
+      redirect_uri: args.redirectUri,
+    });
+
+    const resp = await fetch(`${GETUNIQ_TOKEN_URL}?${params.toString()}`);
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`GetUNIQ token exchange failed: ${resp.status} ${text}`);
+    }
+
+    const data = await resp.json();
+    // data: { access_token, refresh_token, expires_in, token_type }
+    const expiresAt = Date.now() + (data.expires_in || 3600) * 1000;
+
+    await ctx.runMutation(selfInternal.agencyProviders.updateCredentialsTokens, {
+      userId: args.userId,
+      providerId: args.providerId,
+      oauthAccessToken: data.access_token,
+      oauthRefreshToken: data.refresh_token,
+      oauthTokenExpiresAt: expiresAt,
+    });
+
+    return { success: true };
+  },
+});
+
+/** Refresh GetUNIQ access_token using refresh_token */
+async function refreshGetuniqToken(
+  creds: { oauthClientId?: string; oauthClientSecret?: string; oauthRefreshToken?: string },
+): Promise<{ access_token: string; refresh_token: string; expires_in: number } | null> {
+  if (!creds.oauthClientId || !creds.oauthClientSecret || !creds.oauthRefreshToken) return null;
+
+  const params = new URLSearchParams({
+    client_id: creds.oauthClientId,
+    client_secret: creds.oauthClientSecret,
+    grant_type: "refresh_token",
+    refresh_token: creds.oauthRefreshToken,
+  });
+
+  const resp = await fetch(`${GETUNIQ_TOKEN_URL}?${params.toString()}`);
+  if (!resp.ok) return null;
+  return await resp.json();
+}
+
+/** List available accounts from GetUNIQ (auto-refreshes token if needed) */
+export const getuniqListAccounts = action({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+  },
+  handler: async (ctx, args) => {
+    let creds = await ctx.runQuery(selfInternal.agencyProviders.getCredentialsInternal, {
+      userId: args.userId,
+      providerId: args.providerId,
+    });
+
+    if (!creds?.oauthAccessToken) {
+      throw new Error("Необходима авторизация в GetUNIQ");
+    }
+
+    // Refresh if expired
+    if (creds.oauthTokenExpiresAt && creds.oauthTokenExpiresAt < Date.now() + 60000) {
+      const refreshed = await refreshGetuniqToken(creds);
+      if (!refreshed) throw new Error("Не удалось обновить токен GetUNIQ. Авторизуйтесь заново.");
+
+      const expiresAt = Date.now() + (refreshed.expires_in || 3600) * 1000;
+      await ctx.runMutation(selfInternal.agencyProviders.updateCredentialsTokens, {
+        userId: args.userId,
+        providerId: args.providerId,
+        oauthAccessToken: refreshed.access_token,
+        oauthRefreshToken: refreshed.refresh_token,
+        oauthTokenExpiresAt: expiresAt,
+      });
+      creds = { ...creds, oauthAccessToken: refreshed.access_token };
+    }
+
+    const resp = await fetch(`${GETUNIQ_API_BASE}/accounts?status=verified`, {
+      headers: { Authorization: `Bearer ${creds.oauthAccessToken}` },
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`GetUNIQ accounts fetch failed: ${resp.status} ${text}`);
+    }
+
+    const data = await resp.json();
+    // Expect array of accounts with id, name, status, type, etc.
+    const accounts = Array.isArray(data) ? data : data.data || data.items || [];
+    return { accounts };
+  },
+});
+
+/** Get VK Ads token for a specific GetUNIQ account and connect it */
+export const getuniqConnectAccount = action({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+    getuniqAccountId: v.string(),
+    accountName: v.string(),
+  },
+  handler: async (ctx, args) => {
+    let creds = await ctx.runQuery(selfInternal.agencyProviders.getCredentialsInternal, {
+      userId: args.userId,
+      providerId: args.providerId,
+    });
+
+    if (!creds?.oauthAccessToken) {
+      throw new Error("Необходима авторизация в GetUNIQ");
+    }
+
+    // Refresh if expired
+    if (creds.oauthTokenExpiresAt && creds.oauthTokenExpiresAt < Date.now() + 60000) {
+      const refreshed = await refreshGetuniqToken(creds);
+      if (!refreshed) throw new Error("Не удалось обновить токен GetUNIQ");
+
+      const expiresAt = Date.now() + (refreshed.expires_in || 3600) * 1000;
+      await ctx.runMutation(selfInternal.agencyProviders.updateCredentialsTokens, {
+        userId: args.userId,
+        providerId: args.providerId,
+        oauthAccessToken: refreshed.access_token,
+        oauthRefreshToken: refreshed.refresh_token,
+        oauthTokenExpiresAt: expiresAt,
+      });
+      creds = { ...creds, oauthAccessToken: refreshed.access_token };
+    }
+
+    // Fetch VK Ads token for this account
+    const tokenResp = await fetch(
+      `${GETUNIQ_API_BASE}/accounts/vk-ads/${args.getuniqAccountId}/token`,
+      { headers: { Authorization: `Bearer ${creds.oauthAccessToken}` } },
+    );
+
+    if (!tokenResp.ok) {
+      const text = await tokenResp.text();
+      throw new Error(`Не удалось получить токен VK Ads: ${tokenResp.status} ${text}`);
+    }
+
+    const tokenData = await tokenResp.json();
+    const vkToken = tokenData.token || tokenData.access_token;
+    if (!vkToken) throw new Error("GetUNIQ не вернул токен VK Ads");
+
+    // Connect via existing connectAgencyAccount flow
+    const result = await ctx.runAction(internal.adAccounts.connectAgencyAccountInternal, {
+      userId: args.userId,
+      accessToken: vkToken,
+      name: args.accountName,
+      agencyProviderId: args.providerId,
+      agencyCabinetId: args.getuniqAccountId,
+    });
+
+    return result;
+  },
+});
+
+/** Internal mutation to update OAuth tokens in credentials */
+export const updateCredentialsTokens = internalMutation({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+    oauthAccessToken: v.string(),
+    oauthRefreshToken: v.optional(v.string()),
+    oauthTokenExpiresAt: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("agencyCredentials")
+      .withIndex("by_userId_provider", (q) =>
+        q.eq("userId", args.userId).eq("providerId", args.providerId)
+      )
+      .first();
+
+    if (!existing) throw new Error("Credentials not found");
+
+    await ctx.db.patch(existing._id, {
+      oauthAccessToken: args.oauthAccessToken,
+      ...(args.oauthRefreshToken !== undefined && { oauthRefreshToken: args.oauthRefreshToken }),
+      ...(args.oauthTokenExpiresAt !== undefined && { oauthTokenExpiresAt: args.oauthTokenExpiresAt }),
+      lastUsedAt: Date.now(),
+    });
+  },
+});
+
+/** Update provider record in DB (for fixing seed data) */
+export const updateProvider = internalMutation({
+  args: {
+    name: v.string(),
+    requiredFields: v.optional(v.array(v.object({
+      key: v.string(),
+      label: v.string(),
+      placeholder: v.optional(v.string()),
+      type: v.optional(v.string()),
+    }))),
+    notes: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const provider = await ctx.db
+      .query("agencyProviders")
+      .withIndex("by_name", (q) => q.eq("name", args.name))
+      .first();
+    if (!provider) throw new Error(`Provider ${args.name} not found`);
+
+    const patch: Record<string, unknown> = {};
+    if (args.requiredFields !== undefined) patch.requiredFields = args.requiredFields;
+    if (args.notes !== undefined) patch.notes = args.notes;
+
+    await ctx.db.patch(provider._id, patch);
+    return provider._id;
+  },
+});
+
 // ---- Seed providers ----
 
 /** Seed all 4 agency providers. Safe to run multiple times — skips existing. */
@@ -181,9 +449,8 @@ export const seedProviders = internalMutation({
         requiredFields: [
           { key: "clientId", label: "Client ID", placeholder: "70_...", type: "text" },
           { key: "clientSecret", label: "Client Secret", placeholder: "Секретный ключ приложения", type: "password" },
-          { key: "cabinetId", label: "ID кабинета в GetUNIQ", placeholder: "Внутренний ID из GetUNIQ", type: "text" },
         ],
-        notes: "OAuth2 приложение из ЛК GetUNIQ. Токен живёт 1 час, обновляется автоматически.",
+        notes: "Введите данные приложения GetUNIQ, затем авторизуйтесь для получения списка кабинетов.",
         docsUrl: "https://dev.getuniq.me/",
       },
       {

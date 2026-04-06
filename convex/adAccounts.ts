@@ -596,6 +596,92 @@ export const connectAgencyAccount = action({
   },
 });
 
+/** Internal version of connectAgencyAccount — callable from other actions (e.g. getuniqConnectAccount) */
+export const connectAgencyAccountInternal = internalAction({
+  args: {
+    userId: v.id("users"),
+    accessToken: v.string(),
+    name: v.string(),
+    agencyProviderId: v.optional(v.id("agencyProviders")),
+    agencyCabinetId: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ accountId: string }> => {
+    const token = args.accessToken.trim();
+    const name = args.name.trim();
+
+    if (!token) throw new Error("Пустой токен");
+    if (!name) throw new Error("Пустое название");
+
+    // Validate token
+    try {
+      await ctx.runAction(api.vkApi.getMtCampaigns, { accessToken: token });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "";
+      if (msg.includes("TOKEN_EXPIRED") || msg.includes("401")) {
+        throw new Error("Токен VK Ads недействителен или истёк.");
+      }
+      throw new Error("Не удалось проверить токен: " + msg);
+    }
+
+    const vkAccountId = `agency_${token.slice(0, 16)}`;
+
+    const accountId = await ctx.runMutation(api.adAccounts.connect, {
+      userId: args.userId,
+      vkAccountId,
+      name,
+      accessToken: token,
+    });
+
+    // Set agency provider link if provided
+    if (accountId && (args.agencyProviderId || args.agencyCabinetId)) {
+      await ctx.runMutation(internal.adAccounts.patchAccount, {
+        accountId,
+        agencyProviderId: args.agencyProviderId,
+        agencyCabinetId: args.agencyCabinetId,
+      });
+    }
+
+    // Auto-discover mtAdvertiserId
+    if (accountId) {
+      try {
+        const clientsResp = await fetch("https://target.my.com/api/v2/agency/clients.json", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (clientsResp.ok) {
+          const clients = await clientsResp.json();
+          if (Array.isArray(clients) && clients.length > 0) {
+            await ctx.runMutation(internal.adAccounts.setMtAdvertiserId, {
+              accountId,
+              mtAdvertiserId: String(clients[0].id),
+            });
+          }
+        }
+      } catch (e) {
+        console.log(`[connectAgencyInternal] Advertiser ID discovery failed: ${e}`);
+      }
+    }
+
+    return { accountId: accountId as string };
+  },
+});
+
+/** Internal mutation: patch adAccount fields */
+export const patchAccount = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    agencyProviderId: v.optional(v.id("agencyProviders")),
+    agencyCabinetId: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const patch: Record<string, unknown> = {};
+    if (args.agencyProviderId) patch.agencyProviderId = args.agencyProviderId;
+    if (args.agencyCabinetId) patch.agencyCabinetId = args.agencyCabinetId;
+    if (Object.keys(patch).length > 0) {
+      await ctx.db.patch(args.accountId, patch);
+    }
+  },
+});
+
 // Internal mutation: schedule OAuth reminder via scheduler
 export const scheduleOAuthReminder = internalMutation({
   args: { userId: v.id("users") },

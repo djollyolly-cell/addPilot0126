@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useAction, useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
@@ -30,39 +30,183 @@ interface AgencyProvider {
   docsUrl?: string;
 }
 
+interface GetUniqAccount {
+  id: number | string;
+  name?: string;
+  login?: string;
+  status?: string;
+  type?: string;
+}
+
+type Step = 'select' | 'fields' | 'getuniq_auth' | 'getuniq_accounts';
+
 export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConnectModalProps) {
   const typedUserId = userId as Id<"users">;
   const connectAgency = useAction(api.adAccounts.connectAgencyAccount);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const saveCredentials = useMutation((api as any).agencyProviders.saveCredentials);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getuniqStartAuth = useAction((api as any).agencyProviders.getuniqStartAuth);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getuniqListAccounts = useAction((api as any).agencyProviders.getuniqListAccounts);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getuniqConnect = useAction((api as any).agencyProviders.getuniqConnectAccount);
 
-  // Load all providers
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const providers = useQuery((api as any).agencyProviders.list) as AgencyProvider[] | undefined;
 
-  const [selectedProvider, setSelectedProvider] = useState<string | null>(null);
+  const [step, setStep] = useState<Step>('select');
+  const [selectedProvider, setSelectedProvider] = useState<AgencyProvider | null>(null);
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-
-  const selectedProviderData = providers?.find((p: AgencyProvider) => p._id === selectedProvider);
+  const [getuniqAccounts, setGetuniqAccounts] = useState<GetUniqAccount[]>([]);
 
   const handleFieldChange = (key: string, value: string) => {
     setFieldValues((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleBack = () => {
-    setSelectedProvider(null);
-    setFieldValues({});
+    if (step === 'getuniq_accounts') {
+      setStep('getuniq_auth');
+    } else if (step === 'getuniq_auth' || step === 'fields') {
+      setStep('select');
+      setSelectedProvider(null);
+      setFieldValues({});
+    }
     setError(null);
   };
 
+  // Listen for GetUNIQ OAuth popup result
+  const handleStorageEvent = useCallback((e: StorageEvent) => {
+    if (e.key === 'getuniq_result' && e.newValue) {
+      try {
+        const result = JSON.parse(e.newValue);
+        localStorage.removeItem('getuniq_result');
+        if (result.success) {
+          // OAuth done — fetch accounts
+          loadGetuniqAccounts();
+        } else if (result.error) {
+          setError(`Ошибка авторизации: ${result.error}`);
+        }
+      } catch { /* ignore */ }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProvider]);
+
+  useEffect(() => {
+    window.addEventListener('storage', handleStorageEvent);
+    return () => window.removeEventListener('storage', handleStorageEvent);
+  }, [handleStorageEvent]);
+
+  const loadGetuniqAccounts = async () => {
+    if (!selectedProvider) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await getuniqListAccounts({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+      });
+      setGetuniqAccounts(result.accounts || []);
+      setStep('getuniq_accounts');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка загрузки кабинетов');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Step: save GetUNIQ credentials and show OAuth button
+  const handleGetuniqCredentialsSave = async () => {
+    if (!selectedProvider) return;
+    if (!fieldValues.clientId?.trim() || !fieldValues.clientSecret?.trim()) {
+      setError('Заполните Client ID и Client Secret');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      await saveCredentials({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+        oauthClientId: fieldValues.clientId.trim(),
+        oauthClientSecret: fieldValues.clientSecret.trim(),
+      });
+      setStep('getuniq_auth');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка сохранения');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Open GetUNIQ OAuth popup
+  const handleGetuniqAuth = async () => {
+    if (!selectedProvider) return;
+    setLoading(true);
+    setError(null);
+
+    const redirectUri = `${window.location.origin}/auth/getuniq-callback`;
+
+    try {
+      const result = await getuniqStartAuth({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+        redirectUri,
+      });
+
+      // Save state for the callback page
+      sessionStorage.setItem('getuniq_userId', typedUserId);
+      sessionStorage.setItem('getuniq_providerId', selectedProvider._id);
+      sessionStorage.setItem('getuniq_redirectUri', redirectUri);
+
+      // Clear any old result
+      localStorage.removeItem('getuniq_result');
+
+      // Open popup
+      const w = 600, h = 700;
+      const left = window.screenX + (window.outerWidth - w) / 2;
+      const top = window.screenY + (window.outerHeight - h) / 2;
+      window.open(
+        result.authUrl,
+        'getuniq_oauth',
+        `width=${w},height=${h},left=${left},top=${top},menubar=no,toolbar=no`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Connect a selected GetUNIQ account
+  const handleGetuniqConnect = async (account: GetUniqAccount) => {
+    if (!selectedProvider) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      await getuniqConnect({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+        getuniqAccountId: String(account.id),
+        accountName: account.name || account.login || `GetUNIQ #${account.id}`,
+      });
+      onConnected();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка подключения');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Submit for non-GetUNIQ providers
   const handleSubmit = async () => {
-    if (!selectedProviderData) return;
+    if (!selectedProvider) return;
 
-    const fields = (selectedProviderData.requiredFields ?? []) as ProviderField[];
-
-    // Validate all required fields
+    const fields = (selectedProvider.requiredFields ?? []) as ProviderField[];
     for (const field of fields) {
       if (!fieldValues[field.key]?.trim()) {
         setError(`Заполните поле: ${field.label}`);
@@ -74,36 +218,19 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
     setError(null);
 
     try {
-      const providerName = selectedProviderData.name;
-      const providerId = selectedProviderData._id as Id<"agencyProviders">;
+      const providerName = selectedProvider.name;
+      const providerId = selectedProvider._id;
 
       if (providerName === "vitamin") {
-        // Save API key as credential, then connect account with token from Vitamin API
         await saveCredentials({
           userId: typedUserId,
           providerId,
           apiKey: fieldValues.apiKey.trim(),
         });
-
-        // For now, connect as agency account — token refresh will use the saved credentials
-        // The user still needs to provide initial token or we fetch it via Vitamin API
-        // TODO: auto-fetch token via Vitamin API using apiKey + cabinetId
-        // For now: show success that credentials are saved
-        onConnected();
-      } else if (providerName === "getuniq") {
-        // Save OAuth credentials
-        await saveCredentials({
-          userId: typedUserId,
-          providerId,
-          oauthClientId: fieldValues.clientId.trim(),
-          oauthClientSecret: fieldValues.clientSecret.trim(),
-        });
-        // TODO: trigger OAuth flow to get access token, then fetch cabinet token
         onConnected();
       } else if (providerName === "targethunter" || providerName === "cerebro") {
-        // Manual token — connect directly via existing connectAgencyAccount
         const accountName = fieldValues.accountName?.trim() ||
-          `${selectedProviderData.displayName} кабинет`;
+          `${selectedProvider.displayName} кабинет`;
 
         await connectAgency({
           userId: typedUserId,
@@ -111,7 +238,6 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
           name: accountName,
         });
 
-        // Save credential record for tracking
         await saveCredentials({
           userId: typedUserId,
           providerId,
@@ -126,7 +252,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
     }
   };
 
-  // Loading state
+  // Loading providers
   if (providers === undefined) {
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
@@ -138,6 +264,21 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
       </div>
     );
   }
+
+  const showBack = step !== 'select';
+  const title = step === 'select'
+    ? 'Агентский кабинет'
+    : step === 'getuniq_accounts'
+      ? 'Выберите кабинет'
+      : selectedProvider?.displayName || '';
+
+  const description = step === 'select'
+    ? 'Выберите сервис, через который работает ваш рекламный кабинет'
+    : step === 'getuniq_auth'
+      ? 'Авторизуйтесь в GetUNIQ для получения списка кабинетов'
+      : step === 'getuniq_accounts'
+        ? 'Выберите кабинет для подключения'
+        : selectedProvider?.notes || 'Заполните данные для подключения';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" data-testid="agency-connect-modal">
@@ -152,7 +293,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
 
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            {selectedProvider && (
+            {showBack && (
               <button
                 type="button"
                 onClick={handleBack}
@@ -162,18 +303,12 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
               </button>
             )}
             <KeyRound className="w-5 h-5 text-primary" />
-            {selectedProvider ? selectedProviderData?.displayName : 'Агентский кабинет'}
+            {title}
           </CardTitle>
-          <CardDescription>
-            {selectedProvider
-              ? selectedProviderData?.notes || 'Заполните данные для подключения'
-              : 'Выберите сервис, через который работает ваш рекламный кабинет'
-            }
-          </CardDescription>
+          <CardDescription>{description}</CardDescription>
         </CardHeader>
 
         <CardContent className="space-y-4">
-          {/* Error */}
           {error && (
             <div className="flex items-center gap-2 p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
               <AlertCircle className="h-4 w-4 shrink-0" />
@@ -181,15 +316,16 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
             </div>
           )}
 
-          {!selectedProvider ? (
-            // Step 1: Provider selection
+          {/* Step 1: Provider selection */}
+          {step === 'select' && (
             <div className="space-y-2" data-testid="provider-list">
               {providers.map((provider: AgencyProvider) => (
                 <button
                   key={provider._id}
                   type="button"
                   onClick={() => {
-                    setSelectedProvider(provider._id);
+                    setSelectedProvider(provider);
+                    setStep(provider.name === 'getuniq' ? 'fields' : 'fields');
                     setError(null);
                   }}
                   className={cn(
@@ -218,10 +354,12 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
                 </button>
               ))}
             </div>
-          ) : (
-            // Step 2: Provider-specific fields
+          )}
+
+          {/* Step 2: Provider fields */}
+          {step === 'fields' && selectedProvider && (
             <div className="space-y-4" data-testid="provider-fields">
-              {((selectedProviderData?.requiredFields ?? []) as ProviderField[]).map((field) => (
+              {((selectedProvider.requiredFields ?? []) as ProviderField[]).map((field) => (
                 <div key={field.key}>
                   <label className="block text-sm font-medium mb-1">{field.label}</label>
                   {field.type === 'textarea' ? (
@@ -246,10 +384,9 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
                 </div>
               ))}
 
-              {/* Docs link */}
-              {selectedProviderData?.docsUrl && (
+              {selectedProvider.docsUrl && (
                 <a
-                  href={selectedProviderData.docsUrl}
+                  href={selectedProvider.docsUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1.5 text-xs text-primary hover:underline"
@@ -261,7 +398,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
 
               <button
                 type="button"
-                onClick={handleSubmit}
+                onClick={selectedProvider.name === 'getuniq' ? handleGetuniqCredentialsSave : handleSubmit}
                 disabled={loading}
                 className={cn(
                   'w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all',
@@ -273,12 +410,85 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    Подключение...
+                    {selectedProvider.name === 'getuniq' ? 'Сохранение...' : 'Подключение...'}
                   </>
                 ) : (
-                  'Подключить'
+                  selectedProvider.name === 'getuniq' ? 'Далее' : 'Подключить'
                 )}
               </button>
+            </div>
+          )}
+
+          {/* Step 3 (GetUNIQ): OAuth authorization button */}
+          {step === 'getuniq_auth' && selectedProvider && (
+            <div className="space-y-4">
+              <div className="p-4 rounded-lg bg-muted text-sm text-muted-foreground">
+                Credentials сохранены. Нажмите кнопку ниже — откроется окно авторизации GetUNIQ.
+                После подтверждения доступа список ваших кабинетов загрузится автоматически.
+              </div>
+
+              <button
+                type="button"
+                onClick={handleGetuniqAuth}
+                disabled={loading}
+                className={cn(
+                  'w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all',
+                  'bg-primary text-primary-foreground hover:bg-primary/90',
+                  'disabled:opacity-50 disabled:cursor-not-allowed'
+                )}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Загрузка...
+                  </>
+                ) : (
+                  <>
+                    <ExternalLink className="w-4 h-4" />
+                    Авторизоваться в GetUNIQ
+                  </>
+                )}
+              </button>
+            </div>
+          )}
+
+          {/* Step 4 (GetUNIQ): Account picker */}
+          {step === 'getuniq_accounts' && (
+            <div className="space-y-2" data-testid="getuniq-account-list">
+              {getuniqAccounts.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground text-sm">
+                  Нет подтверждённых кабинетов в GetUNIQ
+                </div>
+              ) : (
+                getuniqAccounts.map((account) => (
+                  <button
+                    key={account.id}
+                    type="button"
+                    onClick={() => handleGetuniqConnect(account)}
+                    disabled={loading}
+                    className={cn(
+                      'w-full flex items-center justify-between p-4 rounded-lg border transition-all text-left',
+                      'hover:border-primary hover:bg-primary/5',
+                      'disabled:opacity-50'
+                    )}
+                  >
+                    <div>
+                      <div className="font-medium">
+                        {account.name || account.login || `Кабинет #${account.id}`}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        ID: {account.id}
+                        {account.status && ` · ${account.status}`}
+                      </div>
+                    </div>
+                    {loading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                    ) : (
+                      <span className="text-xs text-primary">Подключить</span>
+                    )}
+                  </button>
+                ))
+              )}
             </div>
           )}
         </CardContent>

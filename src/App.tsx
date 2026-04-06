@@ -12,6 +12,7 @@ const RulesPage = lazy(() => import('./pages/RulesPage').then(m => ({ default: m
 const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
 const AuthCallback = lazy(() => import('./pages/AuthCallback').then(m => ({ default: m.AuthCallback })));
 const AdsCallback = lazy(() => import('./pages/AdsCallback').then(m => ({ default: m.AdsCallback })));
+const GetUniqCallback = lazy(() => import('./pages/GetUniqCallback'));
 const TelegramSettingsPage = lazy(() => import('./pages/TelegramSettingsPage').then(m => ({ default: m.TelegramSettingsPage })));
 const ReportsPage = lazy(() => import('./pages/ReportsPage').then(m => ({ default: m.ReportsPage })));
 const LogsPage = lazy(() => import('./pages/LogsPage').then(m => ({ default: m.LogsPage })));
@@ -115,6 +116,7 @@ function App() {
       />
       <Route path="/auth/callback" element={<AuthCallback />} />
       <Route path="/auth/ads-callback" element={<AdsCallback />} />
+      <Route path="/auth/getuniq-callback" element={<GetUniqCallback />} />
       <Route path="/privacy" element={<PrivacyPage />} />
       <Route path="/terms" element={<TermsPage />} />
 
