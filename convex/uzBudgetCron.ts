@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { action, internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
+import { filterCampaignsForRule, VkCampaign } from "./uzBudgetHelpers";
 
 interface UzRule {
   _id: Id<"rules">;
@@ -84,22 +85,20 @@ export const resetBudgets = internalAction({
             continue;
           }
 
-          const targetIds = rule.targetCampaignIds || [];
-
-          // Fetch campaign names from VK API
+          // Fetch campaigns from VK API
           const campaigns = await ctx.runAction(
             internal.vkApi.getCampaignsForAccount,
             { accessToken }
-          ) as Array<{ id: number; name: string }>;
-          const nameMap = new Map(campaigns.map((c) => [String(c.id), c.name]));
+          ) as VkCampaign[];
+
+          // Use filterCampaignsForRule to resolve ad_plan_id matches
+          const matchedCampaigns = filterCampaignsForRule(campaigns, rule);
 
           const resetNames: string[] = [];
-          for (const campaignIdStr of targetIds) {
-            const campaignId = parseInt(campaignIdStr);
-            if (isNaN(campaignId)) continue;
-            // Only process campaigns that belong to this account
-            if (!nameMap.has(campaignIdStr)) continue;
-            const campaignName = nameMap.get(campaignIdStr) || `Группа #${campaignIdStr}`;
+          for (const campaign of matchedCampaigns) {
+            const campaignId = campaign.id;
+            const campaignIdStr = String(campaignId);
+            const campaignName = campaign.name || `Группа #${campaignIdStr}`;
 
             try {
               await ctx.runAction(internal.vkApi.setCampaignBudget, {
@@ -223,14 +222,13 @@ export const emergencyBudgetReset = action({
       const campaigns = await ctx.runAction(
         internal.vkApi.getCampaignsForAccount,
         { accessToken }
-      ) as Array<{ id: number; name: string; budget_limit_day?: string }>;
-      const nameMap = new Map(campaigns.map((c) => [String(c.id), c]));
+      ) as VkCampaign[];
 
-      const targetIds = rule.targetCampaignIds || [];
+      // Use filterCampaignsForRule to resolve ad_plan_id matches
+      const matchedCampaigns = filterCampaignsForRule(campaigns, rule);
 
-      for (const campaignIdStr of targetIds) {
-        if (!nameMap.has(campaignIdStr)) continue;
-        const camp = nameMap.get(campaignIdStr)!;
+      for (const camp of matchedCampaigns) {
+        const campaignIdStr = String(camp.id);
         const currentLimit = Number(camp.budget_limit_day || "0");
         if (currentLimit <= 0) continue;
         processed++;
@@ -247,7 +245,7 @@ export const emergencyBudgetReset = action({
           if (currentLimit > newBudget + 5) {
             await ctx.runAction(internal.vkApi.setCampaignBudget, {
               accessToken,
-              campaignId: parseInt(campaignIdStr),
+              campaignId: camp.id,
               newLimitRubles: newBudget,
             });
 
