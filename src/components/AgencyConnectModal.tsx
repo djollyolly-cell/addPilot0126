@@ -30,7 +30,7 @@ interface AgencyProvider {
   docsUrl?: string;
 }
 
-interface GetUniqAccount {
+interface AgencyAccount {
   id: number | string;
   name?: string;
   login?: string;
@@ -38,7 +38,7 @@ interface GetUniqAccount {
   type?: string;
 }
 
-type Step = 'select' | 'fields' | 'getuniq_auth' | 'getuniq_accounts';
+type Step = 'select' | 'fields' | 'getuniq_auth' | 'getuniq_accounts' | 'clickru_accounts';
 
 export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConnectModalProps) {
   const typedUserId = userId as Id<"users">;
@@ -53,6 +53,10 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
   const getuniqConnect = useAction((api as any).agencyProviders.getuniqConnectAccount);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const vitaminConnect = useAction((api as any).agencyProviders.vitaminConnectAccount);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const clickruListAccounts = useAction((api as any).agencyProviders.clickruListAccounts);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const clickruConnect = useAction((api as any).agencyProviders.clickruConnectAccount);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const providers = useQuery((api as any).agencyProviders.list) as AgencyProvider[] | undefined;
@@ -62,7 +66,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [getuniqAccounts, setGetuniqAccounts] = useState<GetUniqAccount[]>([]);
+  const [agencyAccounts, setAgencyAccounts] = useState<AgencyAccount[]>([]);
 
   const handleFieldChange = (key: string, value: string) => {
     setFieldValues((prev) => ({ ...prev, [key]: value }));
@@ -71,6 +75,8 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
   const handleBack = () => {
     if (step === 'getuniq_accounts') {
       setStep('getuniq_auth');
+    } else if (step === 'clickru_accounts') {
+      setStep('fields');
     } else if (step === 'getuniq_auth' || step === 'fields') {
       setStep('select');
       setSelectedProvider(null);
@@ -110,10 +116,61 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
         userId: typedUserId,
         providerId: selectedProvider._id,
       });
-      setGetuniqAccounts(result.accounts || []);
+      setAgencyAccounts(result.accounts || []);
       setStep('getuniq_accounts');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка загрузки кабинетов');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Click.ru: save API token, then load accounts
+  const handleClickruSaveAndLoad = async () => {
+    if (!selectedProvider) return;
+    if (!fieldValues.apiKey?.trim()) {
+      setError('Введите API-токен Click.ru');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      await saveCredentials({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+        apiKey: fieldValues.apiKey.trim(),
+      });
+
+      const result = await clickruListAccounts({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+      });
+      setAgencyAccounts(result.accounts || []);
+      setStep('clickru_accounts');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка загрузки кабинетов');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Click.ru: connect selected account
+  const handleClickruConnect = async (account: AgencyAccount) => {
+    if (!selectedProvider) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      await clickruConnect({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+        clickruAccountId: String(account.id),
+        accountName: account.name || account.login || `Click.ru #${account.id}`,
+      });
+      onConnected();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка подключения');
     } finally {
       setLoading(false);
     }
@@ -188,7 +245,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
   };
 
   // Connect a selected GetUNIQ account
-  const handleGetuniqConnect = async (account: GetUniqAccount) => {
+  const handleGetuniqConnect = async (account: AgencyAccount) => {
     if (!selectedProvider) return;
     setLoading(true);
     setError(null);
@@ -276,7 +333,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
   const showBack = step !== 'select';
   const title = step === 'select'
     ? 'Агентский кабинет'
-    : step === 'getuniq_accounts'
+    : (step === 'getuniq_accounts' || step === 'clickru_accounts')
       ? 'Выберите кабинет'
       : selectedProvider?.displayName || '';
 
@@ -284,7 +341,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
     ? 'Выберите сервис, через который работает ваш рекламный кабинет'
     : step === 'getuniq_auth'
       ? 'Авторизуйтесь в GetUNIQ для получения списка кабинетов'
-      : step === 'getuniq_accounts'
+      : (step === 'getuniq_accounts' || step === 'clickru_accounts')
         ? 'Выберите кабинет для подключения'
         : selectedProvider?.notes || 'Заполните данные для подключения';
 
@@ -406,7 +463,11 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
 
               <button
                 type="button"
-                onClick={selectedProvider.name === 'getuniq' ? handleGetuniqCredentialsSave : handleSubmit}
+                onClick={
+                  selectedProvider.name === 'getuniq' ? handleGetuniqCredentialsSave
+                  : selectedProvider.name === 'clickru' ? handleClickruSaveAndLoad
+                  : handleSubmit
+                }
                 disabled={loading}
                 className={cn(
                   'w-full inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-all',
@@ -418,10 +479,10 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    {selectedProvider.name === 'getuniq' ? 'Сохранение...' : 'Подключение...'}
+                    {(selectedProvider.name === 'getuniq' || selectedProvider.name === 'clickru') ? 'Загрузка кабинетов...' : 'Подключение...'}
                   </>
                 ) : (
-                  selectedProvider.name === 'getuniq' ? 'Далее' : 'Подключить'
+                  (selectedProvider.name === 'getuniq' || selectedProvider.name === 'clickru') ? 'Далее' : 'Подключить'
                 )}
               </button>
             </div>
@@ -463,16 +524,55 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
           {/* Step 4 (GetUNIQ): Account picker */}
           {step === 'getuniq_accounts' && (
             <div className="space-y-2" data-testid="getuniq-account-list">
-              {getuniqAccounts.length === 0 ? (
+              {agencyAccounts.length === 0 ? (
                 <div className="text-center py-8 text-muted-foreground text-sm">
                   Нет подтверждённых кабинетов в GetUNIQ
                 </div>
               ) : (
-                getuniqAccounts.map((account) => (
+                agencyAccounts.map((account) => (
                   <button
                     key={account.id}
                     type="button"
                     onClick={() => handleGetuniqConnect(account)}
+                    disabled={loading}
+                    className={cn(
+                      'w-full flex items-center justify-between p-4 rounded-lg border transition-all text-left',
+                      'hover:border-primary hover:bg-primary/5',
+                      'disabled:opacity-50'
+                    )}
+                  >
+                    <div>
+                      <div className="font-medium">
+                        {account.name || account.login || `Кабинет #${account.id}`}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        ID: {account.id}
+                        {account.status && ` · ${account.status}`}
+                      </div>
+                    </div>
+                    {loading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                    ) : (
+                      <span className="text-xs text-primary">Подключить</span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+          {/* Click.ru: Account picker */}
+          {step === 'clickru_accounts' && (
+            <div className="space-y-2" data-testid="clickru-account-list">
+              {agencyAccounts.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground text-sm">
+                  Нет кабинетов в Click.ru
+                </div>
+              ) : (
+                agencyAccounts.map((account) => (
+                  <button
+                    key={account.id}
+                    type="button"
+                    onClick={() => handleClickruConnect(account)}
                     disabled={loading}
                     className={cn(
                       'w-full flex items-center justify-between p-4 rounded-lg border transition-all text-left',

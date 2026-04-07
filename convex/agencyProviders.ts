@@ -381,6 +381,97 @@ export const getuniqConnectAccount = action({
   },
 });
 
+// ---- Click.ru flow ----
+
+const CLICKRU_API_BASE = "https://api.click.ru/V0";
+
+/** List available accounts from Click.ru */
+export const clickruListAccounts = action({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+  },
+  handler: async (ctx, args) => {
+    const creds = await ctx.runQuery(selfInternal.agencyProviders.getCredentialsInternal, {
+      userId: args.userId,
+      providerId: args.providerId,
+    });
+
+    if (!creds?.apiKey) {
+      throw new Error("Сначала сохраните API-токен Click.ru");
+    }
+
+    const resp = await fetch(`${CLICKRU_API_BASE}/accounts`, {
+      headers: {
+        "Accept": "application/json",
+        "X-Auth-Token": creds.apiKey,
+      },
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      if (resp.status === 401 || resp.status === 403) {
+        throw new Error("API-токен Click.ru недействителен. Проверьте токен в профиле Click.ru.");
+      }
+      throw new Error(`Click.ru API: ${resp.status} ${text}`);
+    }
+
+    const data = await resp.json();
+    const accounts = Array.isArray(data) ? data : data.data || data.items || [];
+    return { accounts };
+  },
+});
+
+/** Get VK Ads token for a Click.ru account and connect it */
+export const clickruConnectAccount = action({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+    clickruAccountId: v.string(),
+    accountName: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ accountId: string }> => {
+    const creds = await ctx.runQuery(selfInternal.agencyProviders.getCredentialsInternal, {
+      userId: args.userId,
+      providerId: args.providerId,
+    });
+
+    if (!creds?.apiKey) {
+      throw new Error("Нет API-токена Click.ru");
+    }
+
+    // Get VK Ads token for this account
+    const tokenResp = await fetch(
+      `${CLICKRU_API_BASE}/accounts/${args.clickruAccountId}/access_token/vk_ads/`,
+      {
+        headers: {
+          "Accept": "application/json",
+          "X-Auth-Token": creds.apiKey,
+        },
+      },
+    );
+
+    if (!tokenResp.ok) {
+      const text = await tokenResp.text();
+      throw new Error(`Не удалось получить VK-токен: ${tokenResp.status} ${text}`);
+    }
+
+    const tokenData = await tokenResp.json();
+    const vkToken = tokenData.token || tokenData.access_token || tokenData.data?.token || tokenData.data?.access_token;
+    if (!vkToken) throw new Error("Click.ru не вернул VK-токен");
+
+    const result: { accountId: string } = await ctx.runAction(internal.adAccounts.connectAgencyAccountInternal, {
+      userId: args.userId,
+      accessToken: vkToken,
+      name: args.accountName,
+      agencyProviderId: args.providerId,
+      agencyCabinetId: args.clickruAccountId,
+    });
+
+    return result;
+  },
+});
+
 // ---- Vitamin flow ----
 
 /** Connect a Vitamin cabinet: user provides VK token from Vitamin support + cabinet ID */
@@ -513,6 +604,17 @@ export const seedProviders = internalMutation({
         ],
         notes: "Введите данные приложения GetUNIQ, затем авторизуйтесь для получения списка кабинетов.",
         docsUrl: "https://dev.getuniq.me/",
+      },
+      {
+        name: "clickru",
+        displayName: "Click.ru",
+        hasApi: true,
+        authMethod: "api_key",
+        requiredFields: [
+          { key: "apiKey", label: "API-токен Click.ru", placeholder: "Токен из профиля Click.ru", type: "password" },
+        ],
+        notes: "Токен получить в профиле Click.ru → раздел API Token. После ввода загрузится список кабинетов.",
+        docsUrl: "https://api.click.ru/",
       },
       {
         name: "targethunter",

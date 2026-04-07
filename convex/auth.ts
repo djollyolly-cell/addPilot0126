@@ -730,6 +730,59 @@ async function tryGetuniqRefresh(
   }
 }
 
+/** Try refreshing VK Ads token via Click.ru API (for agency accounts linked to Click.ru provider) */
+async function tryClickruRefresh(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: any,
+  accountId: Id<"adAccounts">,
+  account: { agencyProviderId?: string; agencyCabinetId?: string; userId: string; name?: string },
+): Promise<string | null> {
+  if (!account.agencyProviderId || !account.agencyCabinetId) return null;
+
+  try {
+    const creds = await ctx.runQuery(selfInternalAgency.agencyProviders.getCredentialsInternal, {
+      userId: account.userId,
+      providerId: account.agencyProviderId,
+    });
+    if (!creds?.apiKey) return null;
+
+    // Check if this is a Click.ru provider by trying the Click.ru API
+    const CLICKRU_API_BASE = "https://api.click.ru/V0";
+
+    console.log(
+      `[getValidTokenForAccount] «${account.name}» (${accountId}): trying Click.ru API fallback`
+    );
+
+    const tokenResp = await fetch(
+      `${CLICKRU_API_BASE}/accounts/${account.agencyCabinetId}/access_token/vk_ads/`,
+      {
+        headers: {
+          "Accept": "application/json",
+          "X-Auth-Token": creds.apiKey,
+        },
+      },
+    );
+    if (!tokenResp.ok) return null;
+
+    const tokenData = await tokenResp.json();
+    const vkToken = tokenData.token || tokenData.access_token || tokenData.data?.token || tokenData.data?.access_token;
+    if (!vkToken) return null;
+
+    await ctx.runMutation(internal.auth.updateAccountToken, {
+      accountId,
+      accessToken: vkToken,
+    });
+
+    return vkToken;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.log(
+      `[getValidTokenForAccount] «${account.name}» (${accountId}): Click.ru fallback failed: ${msg}`
+    );
+    return null;
+  }
+}
+
 // Get a valid token for a specific adAccount (per-account credentials)
 // Falls back to user-level credentials if per-account ones are missing
 export const getValidTokenForAccount = internalAction({
@@ -801,6 +854,8 @@ export const getValidTokenForAccount = internalAction({
       // Try GetUNIQ API
       const getuniqToken1 = await tryGetuniqRefresh(ctx, args.accountId, account);
       if (getuniqToken1) return getuniqToken1;
+      const clickruToken1 = await tryClickruRefresh(ctx, args.accountId, account);
+      if (clickruToken1) return clickruToken1;
       // Last resort: try Vitamin API
       const vitaminToken1 = await tryVitaminRefresh(ctx, args.accountId, account);
       if (vitaminToken1) return vitaminToken1;
@@ -866,6 +921,8 @@ export const getValidTokenForAccount = internalAction({
       // Try GetUNIQ API
       const getuniqToken2 = await tryGetuniqRefresh(ctx, args.accountId, account);
       if (getuniqToken2) return getuniqToken2;
+      const clickruToken2 = await tryClickruRefresh(ctx, args.accountId, account);
+      if (clickruToken2) return clickruToken2;
       // Last resort: try Vitamin API
       const vitaminToken2 = await tryVitaminRefresh(ctx, args.accountId, account);
       if (vitaminToken2) return vitaminToken2;
@@ -904,6 +961,9 @@ export const getValidTokenForAccount = internalAction({
       // Try GetUNIQ API
       const getuniqToken3 = await tryGetuniqRefresh(ctx, args.accountId, account);
       if (getuniqToken3) return getuniqToken3;
+      // Try Click.ru API
+      const clickruToken3 = await tryClickruRefresh(ctx, args.accountId, account);
+      if (clickruToken3) return clickruToken3;
       // Last resort: try Vitamin API
       const vitaminToken3 = await tryVitaminRefresh(ctx, args.accountId, account);
       if (vitaminToken3) return vitaminToken3;
