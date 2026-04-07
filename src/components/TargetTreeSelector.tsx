@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useQuery, useAction } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
-import { ChevronDown, ChevronRight, Loader2, Monitor, Megaphone, ImageIcon } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, Monitor, Megaphone, ImageIcon, FolderOpen, Layers } from 'lucide-react';
 import { cn } from '../lib/utils';
 
 export interface TargetSelection {
@@ -212,7 +212,6 @@ function UzAccountNode({ account, value, onChange }: {
     }
   }, [value, onChange, account._id, allCampaignIds]);
 
-  const totalCampaigns = allCampaignIds.length;
   const hasData = data && (data.adPlans.length > 0 || data.ungrouped.length > 0);
 
   return (
@@ -245,10 +244,14 @@ function UzAccountNode({ account, value, onChange }: {
             <p className="text-xs text-destructive py-1 pl-6">{error}</p>
           ) : !hasData ? (
             <p className="text-xs text-muted-foreground py-1 pl-6">
-              Нет активных групп ({totalCampaigns})
+              Нет активных кампаний
             </p>
           ) : (
             <>
+              <div className="flex items-center gap-3 px-1 py-1 mb-1 text-[10px] text-muted-foreground">
+                <span className="flex items-center gap-1"><FolderOpen className="w-3 h-3" />Кампания</span>
+                <span className="flex items-center gap-1"><Layers className="w-3 h-3" />Группа</span>
+              </div>
               {data.adPlans.map((plan) => (
                 <UzAdPlanNode
                   key={plan.id}
@@ -270,7 +273,7 @@ function UzAccountNode({ account, value, onChange }: {
                       disabled={isWholeAccount}
                       className={cn('rounded shrink-0 ml-5', isWholeAccount && 'opacity-50')}
                     />
-                    <Megaphone className="w-3.5 h-3.5 text-primary shrink-0" />
+                    <Layers className="w-3.5 h-3.5 text-primary/70 shrink-0" />
                     <span className="text-xs truncate">{c.name}</span>
                     {c.budgetLimitDay > 0 && (
                       <span className="text-[10px] text-muted-foreground shrink-0">
@@ -312,7 +315,7 @@ function UzAdPlanNode({ plan, isWholeAccount, value, onCampaignToggle, onPlanTog
 
   return (
     <div>
-      <div className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted/50">
+      <div className="flex items-center gap-2 py-1.5 px-1 rounded hover:bg-muted/50">
         <button type="button" onClick={() => setExpanded(!expanded)} className="shrink-0 p-0.5">
           {expanded
             ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
@@ -326,17 +329,17 @@ function UzAdPlanNode({ plan, isWholeAccount, value, onCampaignToggle, onPlanTog
           disabled={isWholeAccount}
           className={cn('rounded shrink-0', isWholeAccount && 'opacity-50')}
         />
-        <Megaphone className="w-3.5 h-3.5 text-primary/60 shrink-0" />
+        <FolderOpen className="w-4 h-4 text-primary shrink-0" />
         <button type="button" onClick={() => setExpanded(!expanded)} className="flex items-center gap-1 min-w-0 flex-1">
           <span className="text-xs truncate font-medium text-left">{plan.name}</span>
         </button>
-        <span className="text-[10px] text-muted-foreground shrink-0">
-          {selectedCount > 0 && !isWholeAccount ? `${selectedCount}/${plan.campaigns.length}` : plan.campaigns.length} групп
+        <span className="text-[10px] text-muted-foreground shrink-0 bg-muted px-1.5 py-0.5 rounded">
+          {selectedCount > 0 && !isWholeAccount ? `${selectedCount}/` : ''}{plan.campaigns.length} {plan.campaigns.length === 1 ? 'группа' : 'групп'}
         </span>
         <StatusBadge status={plan.status} />
       </div>
       {expanded && (
-        <div className="pl-6">
+        <div className="pl-6 border-l border-border/50 ml-3">
           {plan.campaigns.map((c) => {
             const isChecked = isWholeAccount || value.campaignIds.includes(c.id);
             return (
@@ -346,9 +349,9 @@ function UzAdPlanNode({ plan, isWholeAccount, value, onCampaignToggle, onPlanTog
                   checked={isChecked}
                   onChange={() => onCampaignToggle(c.id, plan.id)}
                   disabled={isWholeAccount}
-                  className={cn('rounded shrink-0 ml-5', isWholeAccount && 'opacity-50')}
+                  className={cn('rounded shrink-0 ml-2', isWholeAccount && 'opacity-50')}
                 />
-                <Megaphone className="w-3 h-3 text-muted-foreground shrink-0" />
+                <Layers className="w-3.5 h-3.5 text-primary/70 shrink-0" />
                 <span className="text-xs truncate">{c.name}</span>
                 {c.budgetLimitDay > 0 && (
                   <span className="text-[10px] text-muted-foreground shrink-0">
