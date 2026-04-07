@@ -180,6 +180,38 @@ function UzAccountNode({ account, value, onChange }: {
     }
   }, [value, onChange, account._id, allCampaignIds, data]);
 
+  // Toggle all campaigns in an ad_plan at once
+  const handlePlanToggleAll = useCallback((planId: string, planCampaignIds: string[], selectAll: boolean) => {
+    const newAccountIds = value.accountIds.includes(account._id)
+      ? value.accountIds
+      : [...value.accountIds, account._id];
+
+    if (selectAll) {
+      // Add all campaigns from this plan that aren't already selected
+      const toAdd = planCampaignIds.filter((id) => !value.campaignIds.includes(id));
+      const newAdPlanIds = !value.adPlanIds.includes(planId)
+        ? [...value.adPlanIds, planId]
+        : value.adPlanIds;
+      onChange({
+        ...value,
+        accountIds: newAccountIds,
+        campaignIds: [...value.campaignIds, ...toAdd],
+        adPlanIds: newAdPlanIds,
+      });
+    } else {
+      // Remove all campaigns from this plan
+      const toRemove = new Set(planCampaignIds);
+      const remaining = value.campaignIds.filter((id) => !toRemove.has(id));
+      const stillHas = remaining.some((id) => allCampaignIds.includes(id));
+      onChange({
+        ...value,
+        accountIds: stillHas ? value.accountIds : value.accountIds.filter((id) => id !== account._id),
+        campaignIds: remaining,
+        adPlanIds: value.adPlanIds.filter((id) => id !== planId),
+      });
+    }
+  }, [value, onChange, account._id, allCampaignIds]);
+
   const totalCampaigns = allCampaignIds.length;
   const hasData = data && (data.adPlans.length > 0 || data.ungrouped.length > 0);
 
@@ -224,6 +256,7 @@ function UzAccountNode({ account, value, onChange }: {
                   isWholeAccount={isWholeAccount}
                   value={value}
                   onCampaignToggle={handleCampaignToggle}
+                  onPlanToggleAll={handlePlanToggleAll}
                 />
               ))}
               {data.ungrouped.map((c) => {
@@ -258,15 +291,24 @@ function UzAccountNode({ account, value, onChange }: {
 
 // ─── УЗ AdPlan node (collapsible group of campaigns) ──
 
-function UzAdPlanNode({ plan, isWholeAccount, value, onCampaignToggle }: {
+function UzAdPlanNode({ plan, isWholeAccount, value, onCampaignToggle, onPlanToggleAll }: {
   plan: UzAdPlan;
   isWholeAccount: boolean;
   value: TargetSelection;
   onCampaignToggle: (campaignId: string, adPlanId?: string) => void;
+  onPlanToggleAll: (planId: string, campaignIds: string[], selectAll: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const planCampaignIds = plan.campaigns.map((c) => c.id);
+  const [expanded, setExpanded] = useState(true);
+  const planCampaignIds = useMemo(() => plan.campaigns.map((c) => c.id), [plan.campaigns]);
   const selectedCount = value.campaignIds.filter((id) => planCampaignIds.includes(id)).length;
+  const allSelected = selectedCount === plan.campaigns.length && plan.campaigns.length > 0;
+  const someSelected = selectedCount > 0 && !allSelected;
+
+  const handlePlanCheckbox = useCallback(() => {
+    if (isWholeAccount) return;
+    // If any are selected → deselect all; if none → select all
+    onPlanToggleAll(plan.id, planCampaignIds, !allSelected && !someSelected);
+  }, [isWholeAccount, allSelected, someSelected, plan.id, planCampaignIds, onPlanToggleAll]);
 
   return (
     <div>
@@ -276,11 +318,20 @@ function UzAdPlanNode({ plan, isWholeAccount, value, onCampaignToggle }: {
             ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
             : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
         </button>
+        <input
+          type="checkbox"
+          checked={isWholeAccount || allSelected}
+          ref={(el) => { if (el) el.indeterminate = !isWholeAccount && someSelected; }}
+          onChange={handlePlanCheckbox}
+          disabled={isWholeAccount}
+          className={cn('rounded shrink-0', isWholeAccount && 'opacity-50')}
+        />
         <Megaphone className="w-3.5 h-3.5 text-primary/60 shrink-0" />
-        <span className="text-xs truncate font-medium">{plan.name}</span>
+        <button type="button" onClick={() => setExpanded(!expanded)} className="flex items-center gap-1 min-w-0 flex-1">
+          <span className="text-xs truncate font-medium text-left">{plan.name}</span>
+        </button>
         <span className="text-[10px] text-muted-foreground shrink-0">
-          {plan.campaigns.length} групп{plan.campaigns.length === 1 ? 'а' : plan.campaigns.length < 5 ? 'ы' : ''}
-          {selectedCount > 0 && !isWholeAccount && ` · ${selectedCount} выбр.`}
+          {selectedCount > 0 && !isWholeAccount ? `${selectedCount}/${plan.campaigns.length}` : plan.campaigns.length} групп
         </span>
         <StatusBadge status={plan.status} />
       </div>
