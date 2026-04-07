@@ -231,7 +231,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
         await vitaminConnect({
           userId: typedUserId,
           providerId,
-          apiKey: fieldValues.apiKey.trim(),
+          accessToken: fieldValues.accessToken.trim(),
           cabinetId: fieldValues.cabinetId.trim(),
         });
         onConnected();

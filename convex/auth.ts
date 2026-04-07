@@ -966,6 +966,13 @@ export const refreshViaVitamin = internalAction({
     }
 
     const data = await resp.json();
+
+    // Check for API-level errors (Vitamin returns 200 with is_ok:false)
+    if (data.is_ok === false || data.error) {
+      const errMsg = data.error?.message || JSON.stringify(data.error) || "Неизвестная ошибка";
+      throw new Error(`Vitamin API: ${errMsg}`);
+    }
+
     // Response format: extract token from response
     // Vitamin returns array of tokens or object with tokens
     let newToken: string | null = null;
