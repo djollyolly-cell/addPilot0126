@@ -2161,7 +2161,7 @@ export const sendReferralNotification = internalAction({
     if (!chatId) return;
 
     // Base message: new referral bonus
-    let message = `🎁 <b>По вашему промокоду подключился новый пользователь!</b>\nВам начислено +${args.bonusDays} дней к подписке.\nВсего рефералов: ${args.totalReferrals}.`;
+    const message = `🎁 <b>По вашему промокоду подключился новый пользователь!</b>\nВам начислено +${args.bonusDays} дней к подписке.\nВсего рефералов: ${args.totalReferrals}.`;
 
     await ctx.runAction(internal.telegram.sendMessage, { chatId, text: message });
 
