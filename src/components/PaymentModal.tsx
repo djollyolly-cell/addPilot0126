@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { X, CreditCard, Lock, CheckCircle, AlertCircle, Loader2, ExternalLink, ChevronLeft, Tag } from 'lucide-react';
+import { X, CreditCard, Lock, CheckCircle, AlertCircle, Loader2, ExternalLink, ChevronLeft, Tag, Gift } from 'lucide-react';
 import { useAuth } from '@/lib/useAuth';
 import { cn } from '@/lib/utils';
 
@@ -51,6 +51,9 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
   const [promoCode, setPromoCode] = useState('');
   const [promoApplied, setPromoApplied] = useState<{ bonusDays: number; description: string } | null>(null);
   const [promoError, setPromoError] = useState<string | null>(null);
+  const [referralCode, setReferralCode] = useState('');
+  const [referralApplied, setReferralApplied] = useState<{ discount: number; referrerName: string } | null>(null);
+  const [referralError, setReferralError] = useState<string | null>(null);
 
   const createBepaidCheckout = useAction(api.billing.createBepaidCheckout);
   const upgradeInfo = useQuery(
@@ -60,6 +63,12 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
   const promoValidation = useQuery(
     api.billing.validatePromoCode,
     promoCode.trim().length >= 3 ? { code: promoCode.trim() } : "skip"
+  );
+  const referralValidation = useQuery(
+    api.referrals.validateReferralCode,
+    referralCode.trim().length >= 4
+      ? { code: referralCode.trim(), userId: user?.userId as Id<"users"> }
+      : "skip"
   );
 
   // Fetch exchange rate from NBRB API on mount
@@ -116,16 +125,46 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
     if (!promoCode.trim()) return;
     setPromoError(null);
     if (!promoValidation) {
-      // Query still loading — shouldn't happen since button is disabled, but guard anyway
       setPromoError('Подождите, идёт проверка...');
       return;
     }
     if (promoValidation.valid) {
       setPromoApplied({ bonusDays: promoValidation.bonusDays!, description: promoValidation.description! });
       setPromoError(null);
+      // Mutual exclusion: clear referral code
+      if (referralApplied) {
+        setReferralApplied(null);
+        setReferralCode('');
+        setReferralError(null);
+      }
     } else {
       setPromoError(promoValidation.error || 'Промокод недействителен');
       setPromoApplied(null);
+    }
+  };
+
+  const handleApplyReferral = () => {
+    if (!referralCode.trim()) return;
+    setReferralError(null);
+    if (!referralValidation) {
+      setReferralError('Подождите, идёт проверка...');
+      return;
+    }
+    if (referralValidation.valid) {
+      setReferralApplied({
+        discount: referralValidation.discount ?? 0,
+        referrerName: referralValidation.referrerName ?? 'Пользователь',
+      });
+      setReferralError(null);
+      // Mutual exclusion: clear promo code
+      if (promoApplied) {
+        setPromoApplied(null);
+        setPromoCode('');
+        setPromoError(null);
+      }
+    } else {
+      setReferralError(referralValidation.error || 'Неверный код');
+      setReferralApplied(null);
     }
   };
 
@@ -158,6 +197,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
         returnUrl,
         amountBYN: finalAmountBYN,
         promoCode: promoApplied ? promoCode.trim().toUpperCase() : undefined,
+        referralCode: referralApplied ? referralCode.trim().toUpperCase() : undefined,
         isUpgrade: isUpgrade || undefined,
         creditAmount: isUpgrade ? upgradeCredit : undefined,
       });
@@ -415,6 +455,73 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
               )}
             </div>
 
+            {/* Реферальный код */}
+            <div className="space-y-2">
+              <Label className="flex items-center gap-1.5 text-sm">
+                <Gift className="h-3.5 w-3.5" />
+                Реферальный код
+              </Label>
+              <div className="flex gap-2">
+                <Input
+                  placeholder="REF-XXXXXX"
+                  value={referralCode}
+                  onChange={(e) => {
+                    setReferralCode(e.target.value.toUpperCase());
+                    setReferralApplied(null);
+                    setReferralError(null);
+                  }}
+                  disabled={!!referralApplied || !!promoApplied}
+                  className="font-mono"
+                  data-testid="referral-input"
+                />
+                {referralApplied ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={() => {
+                      setReferralCode('');
+                      setReferralApplied(null);
+                      setReferralError(null);
+                    }}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="shrink-0"
+                    onClick={handleApplyReferral}
+                    disabled={referralCode.trim().length < 4 || referralValidation === undefined || !!promoApplied}
+                    data-testid="referral-apply"
+                  >
+                    {referralValidation === undefined && referralCode.trim().length >= 4
+                      ? <Loader2 className="h-4 w-4 animate-spin" />
+                      : 'Применить'}
+                  </Button>
+                )}
+              </div>
+              {referralApplied && (
+                <div className="flex items-center gap-2 p-2 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
+                  <CheckCircle className="h-4 w-4 shrink-0" />
+                  <span>
+                    {referralApplied.discount > 0
+                      ? `Скидка ${referralApplied.discount}% применена`
+                      : 'Код принят'}
+                  </span>
+                </div>
+              )}
+              {referralError && (
+                <p className="text-sm text-destructive">{referralError}</p>
+              )}
+              {promoApplied && !referralApplied && (
+                <p className="text-xs text-muted-foreground">Промокод и реферальный код нельзя использовать вместе</p>
+              )}
+            </div>
+
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Lock className="h-3 w-3" />
               <span>Безопасная оплата через bePaid</span>
@@ -438,6 +545,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
                   <ExternalLink className="h-4 w-4 mr-2" />
                   Перейти к оплате {finalAmountBYN} BYN
                   {promoApplied && ` + ${promoApplied.bonusDays} дней`}
+                  {referralApplied && referralApplied.discount > 0 && ` (−${referralApplied.discount}%)`}
                 </>
               )}
             </Button>
@@ -580,6 +688,73 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
             )}
           </div>
 
+          {/* Реферальный код */}
+          <div className="space-y-2">
+            <Label className="flex items-center gap-1.5 text-sm">
+              <Gift className="h-3.5 w-3.5" />
+              Реферальный код
+            </Label>
+            <div className="flex gap-2">
+              <Input
+                placeholder="REF-XXXXXX"
+                value={referralCode}
+                onChange={(e) => {
+                  setReferralCode(e.target.value.toUpperCase());
+                  setReferralApplied(null);
+                  setReferralError(null);
+                }}
+                disabled={!!referralApplied || !!promoApplied}
+                className="font-mono"
+                data-testid="referral-input"
+              />
+              {referralApplied ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={() => {
+                    setReferralCode('');
+                    setReferralApplied(null);
+                    setReferralError(null);
+                  }}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="shrink-0"
+                  onClick={handleApplyReferral}
+                  disabled={referralCode.trim().length < 4 || referralValidation === undefined || !!promoApplied}
+                  data-testid="referral-apply"
+                >
+                  {referralValidation === undefined && referralCode.trim().length >= 4
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : 'Применить'}
+                </Button>
+              )}
+            </div>
+            {referralApplied && (
+              <div className="flex items-center gap-2 p-2 rounded-md bg-green-500/10 text-green-700 dark:text-green-400 text-sm">
+                <CheckCircle className="h-4 w-4 shrink-0" />
+                <span>
+                  {referralApplied.discount > 0
+                    ? `Скидка ${referralApplied.discount}% применена`
+                    : 'Код принят'}
+                </span>
+              </div>
+            )}
+            {referralError && (
+              <p className="text-sm text-destructive">{referralError}</p>
+            )}
+            {promoApplied && !referralApplied && (
+              <p className="text-xs text-muted-foreground">Промокод и реферальный код нельзя использовать вместе</p>
+            )}
+          </div>
+
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Lock className="h-3 w-3" />
             <span>Безопасная оплата через bePaid</span>
@@ -603,6 +778,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
                 <ExternalLink className="h-4 w-4 mr-2" />
                 Перейти к оплате {finalAmountBYN} BYN
                 {promoApplied && ` + ${promoApplied.bonusDays} дней`}
+                {referralApplied && referralApplied.discount > 0 && ` (−${referralApplied.discount}%)`}
               </>
             )}
           </Button>

@@ -31,6 +31,7 @@ import {
   Briefcase,
   Send,
   AlertCircle,
+  Gift,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
@@ -53,7 +54,7 @@ export function SettingsPage() {
   const { user } = useAuth();
   const location = useLocation();
   const initialTab = (location.state as any)?.tab || 'profile';
-  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral'>(initialTab);
 
   if (!user) {
     return (
@@ -125,6 +126,19 @@ export function SettingsPage() {
           >
             Бизнес
           </button>
+          <button
+            data-testid="tab-referral"
+            onClick={() => setActiveTab('referral')}
+            className={cn(
+              'pb-3 px-1 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5',
+              activeTab === 'referral'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Gift className="w-4 h-4" />
+            Рефералы
+          </button>
         </nav>
       </div>
 
@@ -135,6 +149,8 @@ export function SettingsPage() {
         <TelegramTab userId={user.userId as Id<'users'>} />
       ) : activeTab === 'api' ? (
         <ApiTab userId={user.userId as Id<'users'>} />
+      ) : activeTab === 'referral' ? (
+        <ReferralTab userId={user.userId} />
       ) : (
         <BusinessTab userId={user.userId} />
       )}
@@ -1075,5 +1091,156 @@ function SecurityInfoCard() {
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Referral Tab
+   ═══════════════════════════════════════════════════════════ */
+
+function ReferralTab({ userId }: { userId: string }) {
+  const stats = useQuery(
+    api.referrals.getMyReferralStats,
+    { userId: userId as Id<'users'> }
+  );
+  const [copied, setCopied] = useState(false);
+
+  if (stats === undefined) {
+    return (
+      <div className="flex justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  if (!stats || !stats.referralCode) {
+    return <p className="text-sm text-muted-foreground py-4">Реферальный код не найден</p>;
+  }
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(stats.referralCode!);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <div data-testid="referral-tab" className="space-y-6 max-w-2xl">
+      {/* Code */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Ваш реферальный код</CardTitle>
+          <CardDescription>
+            Поделитесь кодом — получайте бонусные дни за каждого оплатившего пользователя
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center gap-3">
+            <code className="text-lg font-mono bg-muted px-4 py-2 rounded-lg">
+              {stats.referralCode}
+            </code>
+            <Button variant="outline" size="sm" onClick={handleCopy}>
+              {copied ? <CheckCircle2 className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+              <span className="ml-1.5">{copied ? 'Скопировано' : 'Копировать'}</span>
+            </Button>
+          </div>
+          {stats.referralType === 'discount' && (
+            <p className="text-sm text-muted-foreground mt-3">
+              Тип ссылки: <span className="font-medium text-foreground">со скидкой {stats.referralDiscount}%</span> для приглашённых
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-2xl font-bold">{stats.paid}</div>
+            <p className="text-sm text-muted-foreground">Оплативших рефералов</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-2xl font-bold">+{stats.bonusDays} дн.</div>
+            <p className="text-sm text-muted-foreground">Дней заработано</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <div className="text-2xl font-bold">{stats.registered}</div>
+            <p className="text-sm text-muted-foreground">Всего приглашённых</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Progress bars */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Прогресс бонусов</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <div className="flex justify-between text-sm mb-1">
+              <span>Бесплатный месяц (+30 дней)</span>
+              <span className={stats.milestone3Claimed ? 'text-green-600' : ''}>
+                {Math.min(stats.paid, 3)}/3
+              </span>
+            </div>
+            <div className="w-full bg-muted rounded-full h-2">
+              <div
+                className={cn('h-2 rounded-full transition-all', stats.milestone3Claimed ? 'bg-green-500' : 'bg-primary')}
+                style={{ width: `${Math.min(100, (stats.paid / 3) * 100)}%` }}
+              />
+            </div>
+            {stats.milestone3Claimed && (
+              <p className="text-xs text-green-600 mt-1">Получено!</p>
+            )}
+          </div>
+          <div>
+            <div className="flex justify-between text-sm mb-1">
+              <span>Скидка 15% на оплату</span>
+              <span className={stats.milestone10Reached ? 'text-green-600' : ''}>
+                {Math.min(stats.paid, 10)}/10
+              </span>
+            </div>
+            <div className="w-full bg-muted rounded-full h-2">
+              <div
+                className={cn('h-2 rounded-full transition-all', stats.milestone10Reached ? 'bg-green-500' : 'bg-primary')}
+                style={{ width: `${Math.min(100, (stats.paid / 10) * 100)}%` }}
+              />
+            </div>
+            {stats.milestone10Reached && (
+              <p className="text-xs text-green-600 mt-1">Активна!</p>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Referral list */}
+      {stats.referrals.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Приглашённые</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {stats.referrals.map((r, i) => (
+                <div key={i} className="flex items-center justify-between text-sm py-1.5 border-b last:border-0">
+                  <span className="text-muted-foreground">
+                    {new Date(r.createdAt).toLocaleDateString('ru-RU')}
+                  </span>
+                  <Badge variant={r.status === 'paid' ? 'success' : 'secondary'}>
+                    {r.status === 'paid' ? 'Оплатил' : 'Зарегистрирован'}
+                  </Badge>
+                  {r.bonusDaysGranted && (
+                    <span className="text-xs text-green-600">+{r.bonusDaysGranted} дн.</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }
