@@ -347,7 +347,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
           cabinetId: fieldValues.cabinetId.trim(),
         });
         onConnected();
-      } else if (providerName === "targethunter" || providerName === "cerebro") {
+      } else if (providerName === "targethunter" || providerName === "cerebro" || providerName === "kotbot" || providerName === "elama") {
         const accountName = fieldValues.accountName?.trim() ||
           `${selectedProvider.displayName} кабинет`;
 

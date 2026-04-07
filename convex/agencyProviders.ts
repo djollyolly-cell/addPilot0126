@@ -772,6 +772,26 @@ export const seedProviders = internalMutation({
         ],
         notes: "Секретный ключ получить в профиле ZaleyCash. После ввода загрузится список кабинетов.",
       },
+      {
+        name: "kotbot",
+        displayName: "Кот Бот",
+        hasApi: false,
+        requiredFields: [
+          { key: "accessToken", label: "Токен доступа", placeholder: "access_token из JSON-файла от Кот Бот", type: "textarea" },
+          { key: "accountName", label: "Название кабинета", placeholder: "Например: Клиент Сидоров", type: "text" },
+        ],
+        notes: "Токен запросить у поддержки Кот Бот. Бессрочный, автообновление не требуется.",
+      },
+      {
+        name: "elama",
+        displayName: "eLama",
+        hasApi: false,
+        requiredFields: [
+          { key: "accessToken", label: "Токен доступа", placeholder: "Токен из eLama", type: "textarea" },
+          { key: "accountName", label: "Название кабинета", placeholder: "Например: Клиент Иванов", type: "text" },
+        ],
+        notes: "Токен получается через личный кабинет eLama.",
+      },
     ];
 
     const seeded: string[] = [];
