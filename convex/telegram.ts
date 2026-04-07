@@ -2143,6 +2143,43 @@ export const sendBudgetNotification = internalAction({
 });
 
 // ═══════════════════════════════════════════════════════════
+// Referral notifications
+// ═══════════════════════════════════════════════════════════
+
+export const sendReferralNotification = internalAction({
+  args: {
+    referrerId: v.id("users"),
+    bonusDays: v.number(),
+    totalReferrals: v.number(),
+    milestone3: v.boolean(),
+    milestone10: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const chatId = await ctx.runQuery(internal.telegram.getUserChatId, {
+      userId: args.referrerId,
+    });
+    if (!chatId) return;
+
+    // Base message: new referral bonus
+    let message = `🎁 <b>По вашему промокоду подключился новый пользователь!</b>\nВам начислено +${args.bonusDays} дней к подписке.\nВсего рефералов: ${args.totalReferrals}.`;
+
+    await ctx.runAction(internal.telegram.sendMessage, { chatId, text: message });
+
+    // Milestone 3: free month
+    if (args.milestone3) {
+      const milestoneMsg = `🎉 <b>3 реферала!</b> Вам начислен бесплатный месяц (+30 дней).`;
+      await ctx.runAction(internal.telegram.sendMessage, { chatId, text: milestoneMsg });
+    }
+
+    // Milestone 10: 15% discount
+    if (args.milestone10) {
+      const milestoneMsg = `🏆 <b>10 рефералов!</b> Теперь вы получаете скидку 15% на все оплаты.`;
+      await ctx.runAction(internal.telegram.sendMessage, { chatId, text: milestoneMsg });
+    }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
 // TEMP: Debug — send digest manually (remove after testing)
 // ═══════════════════════════════════════════════════════════
 

@@ -162,12 +162,18 @@ export const createBepaidCheckout = action({
     userId: v.id("users"),
     tier: v.union(v.literal("start"), v.literal("pro")),
     promoCode: v.optional(v.string()),
+    referralCode: v.optional(v.string()),
     returnUrl: v.string(),
     amountBYN: v.number(), // Price in BYN (calculated on frontend with NBRB rate)
     isUpgrade: v.optional(v.boolean()),
     creditAmount: v.optional(v.number()),
   },
   handler: async (ctx, args): Promise<BepaidCheckoutResult> => {
+    // Mutual exclusion: promo code and referral code cannot be used together
+    if (args.promoCode && args.referralCode) {
+      throw new Error("Нельзя использовать промокод и реферальный код одновременно");
+    }
+
     const shopId = process.env.BEPAID_SHOP_ID;
     const secretKey = process.env.BEPAID_SECRET_KEY;
     const isTestMode = process.env.BEPAID_TEST_MODE === "true";
@@ -187,8 +193,25 @@ export const createBepaidCheckout = action({
       throw new Error("Пользователь не найден");
     }
 
+    // Calculate referral discount
+    let referralDiscount = 0;
+    if (args.referralCode) {
+      const referrer = await ctx.runQuery(internal.referrals.findReferrerByCode, {
+        code: args.referralCode.toUpperCase(),
+      });
+      if (referrer && referrer.referralType === "discount") {
+        referralDiscount = referrer.referralDiscount ?? 10;
+      }
+    } else if (!args.promoCode && (user as Record<string, unknown>).referralMilestone10Reached) {
+      // Auto-apply 15% discount for users with 10+ referrals
+      referralDiscount = 15;
+    }
+
     const tierInfo = TIERS[args.tier];
-    const amountInCents = args.amountBYN * 100; // bePaid expects amount in minimal units (kopecks)
+    const discountedBYN = referralDiscount > 0
+      ? Math.round(args.amountBYN * (100 - referralDiscount) / 100 * 100) / 100
+      : args.amountBYN;
+    const amountInCents = Math.round(discountedBYN * 100); // bePaid expects amount in minimal units (kopecks)
 
     const orderId = `order_${args.userId}_${args.tier}_${Date.now()}`;
 
@@ -244,9 +267,11 @@ export const createBepaidCheckout = action({
         tier: args.tier,
         orderId,
         token: data.checkout.token as string,
-        amount: args.amountBYN,
+        amount: discountedBYN,
         currency: "BYN",
         promoCode: args.promoCode,
+        referralCode: args.referralCode?.toUpperCase(),
+        referralDiscount: referralDiscount > 0 ? referralDiscount : undefined,
         isUpgrade: args.isUpgrade,
         creditAmount: args.creditAmount,
       });
@@ -276,6 +301,8 @@ export const savePendingPayment = internalMutation({
     amount: v.number(),
     currency: v.string(),
     promoCode: v.optional(v.string()),
+    referralCode: v.optional(v.string()),
+    referralDiscount: v.optional(v.number()),
     isUpgrade: v.optional(v.boolean()),
     creditAmount: v.optional(v.number()),
   },
@@ -288,6 +315,8 @@ export const savePendingPayment = internalMutation({
       amount: args.amount,
       currency: args.currency,
       promoCode: args.promoCode?.trim().toUpperCase(),
+      referralCode: args.referralCode,
+      referralDiscount: args.referralDiscount,
       isUpgrade: args.isUpgrade,
       creditAmount: args.creditAmount,
       status: "pending",
@@ -332,6 +361,26 @@ export const handleBepaidWebhook = internalMutation({
             && (!promo.maxUses || promo.usedCount < promo.maxUses)) {
           bonusDays = promo.bonusDays;
           await ctx.db.patch(promo._id, { usedCount: promo.usedCount + 1 });
+        }
+      }
+
+      // Referral bonus
+      if (payment.referralCode) {
+        const bonusResult = await ctx.runMutation(internal.referrals.applyReferralBonus, {
+          referralCode: payment.referralCode,
+          referredUserId: payment.userId,
+          paymentId: payment._id,
+        });
+
+        if (bonusResult) {
+          // Send Telegram notification to referrer
+          await ctx.scheduler.runAfter(0, internal.telegram.sendReferralNotification, {
+            referrerId: bonusResult.referrerId,
+            bonusDays: bonusResult.bonusDays,
+            totalReferrals: bonusResult.newCount,
+            milestone3: bonusResult.milestone3,
+            milestone10: bonusResult.milestone10,
+          });
         }
       }
 
