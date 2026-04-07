@@ -680,11 +680,13 @@ export const patchAccount = internalMutation({
     accountId: v.id("adAccounts"),
     agencyProviderId: v.optional(v.id("agencyProviders")),
     agencyCabinetId: v.optional(v.string()),
+    vitaminCabinetId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const patch: Record<string, unknown> = {};
     if (args.agencyProviderId) patch.agencyProviderId = args.agencyProviderId;
     if (args.agencyCabinetId) patch.agencyCabinetId = args.agencyCabinetId;
+    if (args.vitaminCabinetId) patch.vitaminCabinetId = args.vitaminCabinetId;
     if (Object.keys(patch).length > 0) {
       await ctx.db.patch(args.accountId, patch);
     }

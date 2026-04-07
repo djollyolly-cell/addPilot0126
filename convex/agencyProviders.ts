@@ -381,6 +381,94 @@ export const getuniqConnectAccount = action({
   },
 });
 
+// ---- Vitamin flow ----
+
+const VITAMIN_API_URL = "https://app.vitamin.tools/ext/api/v1/external_account/account/get-token-list-by-clients";
+
+/** Connect a Vitamin cabinet: get VK token via Vitamin API, create adAccount */
+export const vitaminConnectAccount = action({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+    apiKey: v.string(),
+    cabinetId: v.string(),
+    accountName: v.optional(v.string()),
+  },
+  handler: async (ctx, args): Promise<{ accountId: string }> => {
+    const apiKey = args.apiKey.trim();
+    const cabinetId = args.cabinetId.trim();
+    if (!apiKey) throw new Error("Введите API-ключ Витамин");
+    if (!cabinetId) throw new Error("Введите ID кабинета");
+
+    // Call Vitamin API to get VK token for this cabinet
+    const resp = await fetch(VITAMIN_API_URL, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ id: [parseInt(cabinetId)] }),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      if (resp.status === 401 || resp.status === 403) {
+        throw new Error("API-ключ Витамин недействителен. Проверьте ключ или запросите новый.");
+      }
+      throw new Error(`Ошибка Vitamin API: ${resp.status} ${text}`);
+    }
+
+    const data = await resp.json();
+
+    // Extract VK token from response (multiple possible formats)
+    let vkToken: string | null = null;
+    if (Array.isArray(data)) {
+      vkToken = data[0]?.token || data[0]?.access_token || null;
+    } else if (data.data && Array.isArray(data.data)) {
+      vkToken = data.data[0]?.token || data.data[0]?.access_token || null;
+    } else if (data.token) {
+      vkToken = data.token;
+    } else if (data.access_token) {
+      vkToken = data.access_token;
+    }
+
+    if (!vkToken) {
+      throw new Error(
+        `Витамин не вернул токен для кабинета ${cabinetId}. Проверьте ID кабинета. Ответ: ${JSON.stringify(data).slice(0, 200)}`
+      );
+    }
+
+    const name = args.accountName?.trim() || `Витамин #${cabinetId}`;
+
+    // Create adAccount via internal action
+    const result: { accountId: string } = await ctx.runAction(
+      internal.adAccounts.connectAgencyAccountInternal,
+      {
+        userId: args.userId,
+        accessToken: vkToken,
+        name,
+        agencyProviderId: args.providerId,
+        agencyCabinetId: cabinetId,
+      }
+    );
+
+    // Set vitaminCabinetId for future token refresh
+    await ctx.runMutation(internal.adAccounts.patchAccount, {
+      accountId: result.accountId as any, // eslint-disable-line @typescript-eslint/no-explicit-any
+      vitaminCabinetId: cabinetId,
+    });
+
+    // Save credentials
+    await ctx.runMutation(selfInternal.agencyProviders.saveCredentialsInternal, {
+      userId: args.userId,
+      providerId: args.providerId,
+      apiKey,
+    });
+
+    return result;
+  },
+});
+
 /** Internal mutation to update OAuth tokens in credentials */
 export const updateCredentialsTokens = internalMutation({
   args: {

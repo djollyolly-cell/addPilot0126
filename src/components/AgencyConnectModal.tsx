@@ -51,6 +51,8 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
   const getuniqListAccounts = useAction((api as any).agencyProviders.getuniqListAccounts);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const getuniqConnect = useAction((api as any).agencyProviders.getuniqConnectAccount);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const vitaminConnect = useAction((api as any).agencyProviders.vitaminConnectAccount);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const providers = useQuery((api as any).agencyProviders.list) as AgencyProvider[] | undefined;
@@ -226,10 +228,11 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
       const providerId = selectedProvider._id;
 
       if (providerName === "vitamin") {
-        await saveCredentials({
+        await vitaminConnect({
           userId: typedUserId,
           providerId,
           apiKey: fieldValues.apiKey.trim(),
+          cabinetId: fieldValues.cabinetId.trim(),
         });
         onConnected();
       } else if (providerName === "targethunter" || providerName === "cerebro") {
