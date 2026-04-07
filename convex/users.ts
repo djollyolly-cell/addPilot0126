@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { mutation, query, internalMutation, internalQuery } from "./_generated/server";
 import type { MutationCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import { internal } from "./_generated/api";
 
 // Subscription tier limits
 export const TIER_LIMITS = {
@@ -70,6 +71,9 @@ export const create = mutation({
       createdAt: now,
       updatedAt: now,
     });
+
+    // Generate referral code for new user
+    await ctx.scheduler.runAfter(0, internal.referrals.generateCodeForUser, { userId });
 
     return userId;
   },
@@ -379,6 +383,9 @@ export const upsertFromVk = internalMutation({
       createdAt: now,
       updatedAt: now,
     });
+
+    // Generate referral code for new user
+    await ctx.scheduler.runAfter(0, internal.referrals.generateCodeForUser, { userId });
 
     return userId;
   },

@@ -42,9 +42,19 @@ export default defineSchema({
       pro: v.number(),
       until: v.number(),
     })),
+    // Referral system
+    referralCode: v.optional(v.string()),
+    referralType: v.optional(v.union(v.literal("basic"), v.literal("discount"))),
+    referralDiscount: v.optional(v.number()),
+    referralCount: v.optional(v.number()),
+    referralBonusDaysEarned: v.optional(v.number()),
+    referredBy: v.optional(v.id("users")),
+    referralMilestone3Claimed: v.optional(v.boolean()),
+    referralMilestone10Reached: v.optional(v.boolean()),
   })
     .index("by_vkId", ["vkId"])
-    .index("by_email", ["email"]),
+    .index("by_email", ["email"])
+    .index("by_referralCode", ["referralCode"]),
 
   sessions: defineTable({
     userId: v.id("users"),
@@ -333,6 +343,8 @@ export default defineSchema({
       v.literal("refunded")
     ),
     promoCode: v.optional(v.string()),
+    referralCode: v.optional(v.string()),
+    referralDiscount: v.optional(v.number()),
     bonusDays: v.optional(v.number()),
     bepaidUid: v.optional(v.string()),
     errorMessage: v.optional(v.string()),
@@ -356,6 +368,21 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_code", ["code"]),
+
+  // Referral tracking
+  referrals: defineTable({
+    referrerId: v.id("users"),
+    referredId: v.id("users"),
+    referralCode: v.string(),
+    status: v.union(v.literal("registered"), v.literal("paid")),
+    paymentId: v.optional(v.id("payments")),
+    bonusDaysGranted: v.optional(v.number()),
+    createdAt: v.number(),
+    paidAt: v.optional(v.number()),
+  })
+    .index("by_referrerId", ["referrerId"])
+    .index("by_referredId", ["referredId"])
+    .index("by_referralCode", ["referralCode"]),
 
   // AI-generated banner creatives
   creatives: defineTable({
