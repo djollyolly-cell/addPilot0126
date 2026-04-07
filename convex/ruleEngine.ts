@@ -11,7 +11,6 @@ import { Id } from "./_generated/dataModel";
 import { withTimeout } from "./vkApi";
 import {
   groupRulesByAccount,
-  collectTargetCampaignIds,
   filterCampaignsForRule,
   shouldTriggerBudgetIncrease,
   calculateNewBudget,
@@ -1739,13 +1738,18 @@ export const checkUzBudgetRules = internalAction({
             return;
           }
 
-          // 3. Collect all campaign IDs targeted by any rule in this group
-          const allTargetIds = collectTargetCampaignIds(accountRules);
+          // 3. Collect all real campaign IDs that match any rule's targets
+          // targetCampaignIds may contain ad_plan IDs, so resolve via filterCampaignsForRule
+          const allMatchedCampaignIds = new Set<string>();
+          for (const rule of accountRules) {
+            const matched = filterCampaignsForRule(campaigns, rule);
+            for (const c of matched) allMatchedCampaignIds.add(String(c.id));
+          }
 
-          // 4. Fetch spent ONCE per target campaign (not per rule)
+          // 4. Fetch spent ONCE per matched campaign (not per rule)
           // Only fetch for not_delivering/blocked campaigns — skip delivering ones
           const spentCache = new Map<string, number>();
-          for (const cid of allTargetIds) {
+          for (const cid of allMatchedCampaignIds) {
             const camp = campaigns.find((c) => String(c.id) === cid);
             if (!camp) continue;
             const dailyLimit = Number(camp.budget_limit_day || "0");

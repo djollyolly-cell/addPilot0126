@@ -35,6 +35,7 @@ export interface VkCampaign {
   budget_limit_day: string;
   package_id?: number;
   delivery?: string;
+  ad_plan_id?: number;
 }
 
 // ─── Pure functions ─────────────────────────────────────
@@ -85,7 +86,10 @@ export function filterCampaignsForRule(
 ): VkCampaign[] {
   const targetIds = rule.targetCampaignIds ?? [];
   return campaigns.filter((c) => {
-    if (!targetIds.includes(String(c.id))) return false;
+    // Match by campaign id OR by ad_plan_id (targetCampaignIds may store ad_plan IDs)
+    const matchesDirect = targetIds.includes(String(c.id));
+    const matchesAdPlan = c.ad_plan_id !== undefined && targetIds.includes(String(c.ad_plan_id));
+    if (!matchesDirect && !matchesAdPlan) return false;
     if (c.status === "deleted") return false;
     if (Number(c.budget_limit_day || "0") <= 0) return false;
     return true;
