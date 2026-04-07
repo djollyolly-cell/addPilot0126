@@ -84,6 +84,10 @@ export const listUsers = query({
           totalPaid: payments
             .filter((p) => p.status === "completed")
             .reduce((sum, p) => sum + (p.amount || 0), 0),
+          referralCode: user.referralCode ?? null,
+          referralType: (user.referralType ?? "basic") as string,
+          referralDiscount: user.referralDiscount ?? 10,
+          referralCount: user.referralCount ?? 0,
         };
       })
     );

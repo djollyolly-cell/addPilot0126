@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useAction } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
@@ -74,6 +74,7 @@ function AdminDashboard() {
   const updateExpiry = useMutation(api.admin.updateUserExpiry);
   const toggleAdmin = useMutation(api.admin.toggleAdmin);
   const sendNotification = useMutation(api.admin.sendUserNotification);
+  const adminUpdateReferral = useMutation(api.referrals.adminUpdateReferral);
 
   const [search, setSearch] = useState('');
   const [tierFilter, setTierFilter] = useState<string>('all');
@@ -82,6 +83,7 @@ function AdminDashboard() {
   const [expiryInput, setExpiryInput] = useState('');
   const [togglingAdmin, setTogglingAdmin] = useState<string | null>(null);
   const [notifyUserId, setNotifyUserId] = useState<string | null>(null);
+  const [expandedReferralUserId, setExpandedReferralUserId] = useState<string | null>(null);
   const [notifyTitle, setNotifyTitle] = useState('');
   const [notifyMessage, setNotifyMessage] = useState('');
   const [notifyType, setNotifyType] = useState<'info' | 'warning' | 'payment'>('info');
@@ -371,6 +373,8 @@ function AdminDashboard() {
                     <th className="pb-3 font-medium text-muted-foreground">Тариф</th>
                     <th className="pb-3 font-medium text-muted-foreground">Доступ до</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Промо</th>
+                    <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Рефералов</th>
+                    <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Тип ссылки</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Кабинеты</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden sm:table-cell">Правила</th>
                     <th className="pb-3 font-medium text-muted-foreground hidden md:table-cell">Telegram</th>
@@ -382,7 +386,11 @@ function AdminDashboard() {
                 </thead>
                 <tbody>
                   {filteredUsers.map((u) => (
-                    <tr key={u._id} className="border-b border-border/50 last:border-0">
+                    <React.Fragment key={u._id}>
+                    <tr
+                      className="border-b border-border/50 last:border-0 cursor-pointer hover:bg-muted/30"
+                      onClick={() => setExpandedReferralUserId(expandedReferralUserId === u._id ? null : u._id)}
+                    >
                       <td className="py-3 pr-4">
                         <div className="font-medium">{u.name || '—'}</div>
                         <div className="text-xs text-muted-foreground">{u.email}</div>
@@ -440,6 +448,28 @@ function AdminDashboard() {
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
                         )}
+                      </td>
+                      <td className="py-3 pr-4 hidden md:table-cell">
+                        {u.referralCount > 0 ? (
+                          <span className="font-medium">{u.referralCount}</span>
+                        ) : (
+                          <span className="text-muted-foreground">0</span>
+                        )}
+                      </td>
+                      <td className="py-3 pr-4 hidden md:table-cell">
+                        <select
+                          value={u.referralType ?? 'basic'}
+                          onChange={(e) => {
+                            adminUpdateReferral({
+                              userId: u._id as Id<'users'>,
+                              referralType: e.target.value as 'basic' | 'discount',
+                            });
+                          }}
+                          className="text-xs bg-transparent border border-border rounded px-1.5 py-0.5"
+                        >
+                          <option value="basic">Обычная</option>
+                          <option value="discount">Со скидкой</option>
+                        </select>
                       </td>
                       <td className="py-3 pr-4 hidden sm:table-cell">{u.accountsCount}</td>
                       <td className="py-3 pr-4 hidden sm:table-cell">{u.rulesCount}</td>
@@ -501,6 +531,14 @@ function AdminDashboard() {
                         </div>
                       </td>
                     </tr>
+                    {expandedReferralUserId === u._id && (
+                      <tr>
+                        <td colSpan={13} className="px-4 py-3 bg-muted/20">
+                          <ReferralDetailsTable userId={u._id as Id<'users'>} />
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>
@@ -1086,5 +1124,49 @@ function StatCard({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   Referral Details Table (expandable in user table)
+   ═══════════════════════════════════════════════════════════ */
+
+function ReferralDetailsTable({ userId }: { userId: Id<'users'> }) {
+  const details = useQuery(api.referrals.adminGetUserReferrals, { userId });
+
+  if (details === undefined) {
+    return <Loader2 className="h-4 w-4 animate-spin" />;
+  }
+  if (details.length === 0) {
+    return <p className="text-xs text-muted-foreground">Нет рефералов</p>;
+  }
+
+  return (
+    <table className="w-full text-xs">
+      <thead>
+        <tr className="text-muted-foreground">
+          <th className="text-left py-1 pr-4">Имя/Email</th>
+          <th className="text-left py-1 pr-4">Дата регистрации</th>
+          <th className="text-left py-1 pr-4">Дата оплаты</th>
+          <th className="text-left py-1 pr-4">Статус</th>
+          <th className="text-left py-1">Бонус</th>
+        </tr>
+      </thead>
+      <tbody>
+        {details.map((r) => (
+          <tr key={r._id} className="border-t border-border/50">
+            <td className="py-1.5 pr-4">{r.referredName}</td>
+            <td className="py-1.5 pr-4">{new Date(r.createdAt).toLocaleDateString('ru-RU')}</td>
+            <td className="py-1.5 pr-4">{r.paidAt ? new Date(r.paidAt).toLocaleDateString('ru-RU') : '—'}</td>
+            <td className="py-1.5 pr-4">
+              <Badge variant={r.status === 'paid' ? 'success' : 'secondary'} className="text-[10px]">
+                {r.status === 'paid' ? 'Оплатил' : 'Регистрация'}
+              </Badge>
+            </td>
+            <td className="py-1.5">{r.bonusDaysGranted ? `+${r.bonusDaysGranted} дн.` : '—'}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
