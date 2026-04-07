@@ -343,7 +343,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
         await vitaminConnect({
           userId: typedUserId,
           providerId,
-          accessToken: fieldValues.accessToken.trim(),
+          accessToken: fieldValues.accessToken.replace(/\s+/g, ''),
           cabinetId: fieldValues.cabinetId.trim(),
         });
         onConnected();
@@ -353,7 +353,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
 
         await connectAgency({
           userId: typedUserId,
-          accessToken: fieldValues.accessToken.trim(),
+          accessToken: fieldValues.accessToken.replace(/\s+/g, ''),
           name: accountName,
           agencyProviderId: providerId,
         });
