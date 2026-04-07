@@ -1461,95 +1461,156 @@ export const fetchUzCampaigns = action({
       { accountId: args.accountId }
     );
 
-    // Step 1: Fetch all ad_plans (VK "Кампании") — the top level
-    const allPlans: Array<{ id: number; name: string; status: string }> = [];
-    {
-      let offset = 0;
-      const LIMIT = 250;
-      while (true) {
-        const data = await callMtApi<{ items: Array<{ id: number; name: string; status: string }>; count: number }>(
-          "ad_plans.json",
-          accessToken,
-          { fields: "id,name,status", limit: String(LIMIT), offset: String(offset) }
-        );
-        const items = data.items || [];
-        allPlans.push(...items);
-        if (items.length < LIMIT) break;
-        offset += LIMIT;
-      }
-    }
-
-    // Only active and blocked ad_plans
-    const relevantPlans = allPlans.filter((p) => p.status === "active" || p.status === "blocked");
-
-    // Step 2: Fetch all campaigns (VK "Группы") — no fields restriction so ad_plan_id comes back
-    const allCampaigns: Array<Record<string, unknown>> = [];
-    {
-      let offset = 0;
-      const LIMIT = 250;
-      while (true) {
-        const data = await callMtApi<{ items: Array<Record<string, unknown>>; count: number }>(
-          "campaigns.json",
-          accessToken,
-          { limit: String(LIMIT), offset: String(offset) }
-        );
-        const items = data.items || [];
-        allCampaigns.push(...items);
-        if (items.length < LIMIT) break;
-        offset += LIMIT;
-      }
+    // Fetch all campaigns (VK "Группы") with ad_plan_id — MUST use fields param
+    const allItems: MtCampaign[] = [];
+    let offset = 0;
+    const LIMIT = 250;
+    while (true) {
+      const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
+        "campaigns.json",
+        accessToken,
+        { fields: "id,name,status,budget_limit_day,ad_plan_id", limit: String(LIMIT), offset: String(offset) }
+      );
+      const items = data.items || [];
+      allItems.push(...items);
+      if (items.length < LIMIT) break;
+      offset += LIMIT;
     }
 
     // Only active and blocked campaigns
-    const relevantCampaigns = allCampaigns.filter(
-      (c) => c.status === "active" || c.status === "blocked"
-    );
+    const relevant = allItems.filter((c) => c.status === "active" || c.status === "blocked");
 
-    // Build plan ID set for quick lookup
-    const planIdSet = new Set(relevantPlans.map((p) => p.id));
+    // Collect unique ad_plan IDs
+    const adPlanIds = [...new Set(
+      relevant.map((c) => c.ad_plan_id).filter((id): id is number => id !== undefined && id > 0)
+    )];
 
-    // Group campaigns by ad_plan_id
-    const grouped = new Map<number, Array<Record<string, unknown>>>();
-    const ungroupedCampaigns: Array<Record<string, unknown>> = [];
-
-    for (const c of relevantCampaigns) {
-      const adPlanId = c.ad_plan_id as number | undefined;
-      if (adPlanId && planIdSet.has(adPlanId)) {
-        const list = grouped.get(adPlanId) || [];
-        list.push(c);
-        grouped.set(adPlanId, list);
-      } else {
-        ungroupedCampaigns.push(c);
+    // Fetch ad_plan names — MUST use fields param (default response has no status)
+    const adPlanMap = new Map<number, { name: string; status: string }>();
+    if (adPlanIds.length > 0) {
+      for (let i = 0; i < adPlanIds.length; i += 50) {
+        const batch = adPlanIds.slice(i, i + 50);
+        try {
+          const plansData = await callMtApi<{ items: Array<{ id: number; name: string; status: string }> }>(
+            "ad_plans.json",
+            accessToken,
+            { fields: "id,name,status", _id: batch.join(",") }
+          );
+          for (const p of plansData.items || []) {
+            adPlanMap.set(p.id, { name: p.name, status: p.status });
+          }
+        } catch {
+          // If batch fetch fails, try fetching all ad_plans without _id filter
+        }
+      }
+      // Fallback: if _id filter didn't work, paginate all ad_plans
+      if (adPlanMap.size === 0) {
+        let planOffset = 0;
+        while (true) {
+          try {
+            const plansData = await callMtApi<{ items: Array<{ id: number; name: string; status: string }>; count: number }>(
+              "ad_plans.json",
+              accessToken,
+              { fields: "id,name,status", limit: "250", offset: String(planOffset) }
+            );
+            for (const p of plansData.items || []) {
+              if (adPlanIds.includes(p.id)) {
+                adPlanMap.set(p.id, { name: p.name, status: p.status });
+              }
+            }
+            if ((plansData.items || []).length < 250) break;
+            planOffset += 250;
+          } catch {
+            break;
+          }
+        }
       }
     }
 
-    // Build result
-    const adPlanResults = relevantPlans
-      .map((plan) => {
-        const planCampaigns = grouped.get(plan.id) || [];
-        return {
-          id: String(plan.id),
-          name: plan.name,
-          status: plan.status,
-          campaigns: planCampaigns.map((c) => ({
-            id: String(c.id as number),
-            name: (c.name as string) || `Группа ${c.id}`,
-            status: (c.status as string) || "unknown",
-            budgetLimitDay: Number(c.budget_limit_day || 0),
-          })),
-        };
-      })
-      // Only include plans that have campaigns
-      .filter((p) => p.campaigns.length > 0);
+    // Group campaigns by ad_plan
+    const grouped = new Map<number, MtCampaign[]>();
+    const ungroupedList: MtCampaign[] = [];
+
+    for (const c of relevant) {
+      if (c.ad_plan_id && c.ad_plan_id > 0 && adPlanMap.has(c.ad_plan_id)) {
+        const list = grouped.get(c.ad_plan_id) || [];
+        list.push(c);
+        grouped.set(c.ad_plan_id, list);
+      } else {
+        ungroupedList.push(c);
+      }
+    }
+
+    // Build result — include plans that have active/blocked campaigns
+    const adPlanResults = Array.from(grouped.entries()).map(([planId, campaigns]) => ({
+      id: String(planId),
+      name: adPlanMap.get(planId)?.name || `Кампания ${planId}`,
+      status: adPlanMap.get(planId)?.status || "active",
+      campaigns: campaigns.map((c) => ({
+        id: String(c.id),
+        name: c.name,
+        status: c.status,
+        budgetLimitDay: Number(c.budget_limit_day || "0"),
+      })),
+    }));
 
     return {
       adPlans: adPlanResults,
-      ungrouped: ungroupedCampaigns.map((c) => ({
-        id: String(c.id as number),
-        name: (c.name as string) || `Группа ${c.id}`,
-        status: (c.status as string) || "unknown",
-        budgetLimitDay: Number(c.budget_limit_day || 0),
+      ungrouped: ungroupedList.map((c) => ({
+        id: String(c.id),
+        name: c.name,
+        status: c.status,
+        budgetLimitDay: Number(c.budget_limit_day || "0"),
       })),
+    };
+  },
+});
+
+// TEMP: Diagnostic to see raw API responses for ad_plans and campaigns
+export const diagnosUzData = action({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const accessToken: string = await ctx.runAction(
+      internal.auth.getValidTokenForAccount,
+      { accountId: args.accountId }
+    );
+
+    // 1. ad_plans raw
+    const plansRaw = await callMtApi<{ items?: Record<string, unknown>[]; count?: number }>(
+      "ad_plans.json",
+      accessToken,
+      { limit: "10" }
+    );
+
+    // 2. campaigns raw (first 5)
+    const campaignsRaw = await callMtApi<{ items?: Record<string, unknown>[]; count?: number }>(
+      "campaigns.json",
+      accessToken,
+      { limit: "5" }
+    );
+
+    // 3. campaigns with explicit fields including ad_plan_id
+    const campaignsWithFields = await callMtApi<{ items?: Record<string, unknown>[]; count?: number }>(
+      "campaigns.json",
+      accessToken,
+      { fields: "id,name,status,budget_limit_day,ad_plan_id", limit: "5" }
+    );
+
+    const plansItems = plansRaw.items || [];
+    const campaignsItems = campaignsRaw.items || [];
+    const campaignsFieldsItems = campaignsWithFields.items || [];
+
+    return {
+      ad_plans_count: plansItems.length,
+      ad_plans_total: plansRaw.count,
+      ad_plans_sample: plansItems.slice(0, 3),
+      campaigns_count: campaignsItems.length,
+      campaigns_total: campaignsRaw.count,
+      campaigns_sample: campaignsItems.slice(0, 2),
+      campaigns_keys: Object.keys(campaignsItems[0] || {}),
+      campaigns_has_ad_plan_id: campaignsItems.some((c) => "ad_plan_id" in c),
+      campaigns_with_fields_sample: campaignsFieldsItems.slice(0, 2),
+      campaigns_with_fields_keys: Object.keys(campaignsFieldsItems[0] || {}),
     };
   },
 });
