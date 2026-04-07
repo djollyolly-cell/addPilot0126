@@ -361,6 +361,7 @@ export function RulesPage() {
                       actions: data.actions,
                       targetAccountIds: data.targetAccountIds,
                       targetCampaignIds: data.targetCampaignIds,
+                      targetAdPlanIds: data.targetAdPlanIds,
                       targetAdIds: data.targetAdIds,
                       ...(data.initialBudget !== undefined ? { initialBudget: data.initialBudget } : {}),
                       ...(data.budgetStep !== undefined ? { budgetStep: data.budgetStep } : {}),
@@ -385,6 +386,7 @@ export function RulesPage() {
                       actions: data.actions,
                       targetAccountIds: data.targetAccountIds,
                       targetCampaignIds: data.targetCampaignIds,
+                      targetAdPlanIds: data.targetAdPlanIds,
                       targetAdIds: data.targetAdIds,
                       ...(data.initialBudget !== undefined ? { initialBudget: data.initialBudget } : {}),
                       ...(data.budgetStep !== undefined ? { budgetStep: data.budgetStep } : {}),
@@ -454,6 +456,7 @@ interface ExistingRuleData {
   actions: { stopAd: boolean; notify: boolean; notifyOnEveryIncrease?: boolean; notifyOnKeyEvents?: boolean };
   targetAccountIds: Id<"adAccounts">[];
   targetCampaignIds?: string[];
+  targetAdPlanIds?: string[];
   targetAdIds?: string[];
   // uz_budget_manage
   initialBudget?: number;
@@ -474,6 +477,7 @@ interface RuleFormProps {
     actions: { stopAd: boolean; notify: boolean; notifyOnEveryIncrease?: boolean; notifyOnKeyEvents?: boolean };
     targetAccountIds: Id<"adAccounts">[];
     targetCampaignIds?: string[];
+    targetAdPlanIds?: string[];
     targetAdIds?: string[];
     initialBudget?: number;
     budgetStep?: number;
@@ -496,6 +500,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
   const [targets, setTargets] = useState<TargetSelection>({
     accountIds: existingRule?.targetAccountIds?.map(String) ?? [],
     campaignIds: existingRule?.targetCampaignIds ?? [],
+    adPlanIds: existingRule?.targetAdPlanIds ?? [],
     adIds: existingRule?.targetAdIds ?? [],
   });
   // uz_budget_manage specific state
@@ -559,6 +564,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
           : flags,
         targetAccountIds: targets.accountIds as Id<"adAccounts">[],
         targetCampaignIds: targets.campaignIds.length > 0 ? targets.campaignIds : undefined,
+        targetAdPlanIds: targets.adPlanIds.length > 0 ? targets.adPlanIds : undefined,
         targetAdIds: targets.adIds.length > 0 ? targets.adIds : undefined,
         ...(type === 'uz_budget_manage' ? {
           initialBudget: Number(initialBudget),

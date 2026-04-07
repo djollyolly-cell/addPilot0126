@@ -180,6 +180,7 @@ export interface MtCampaign {
   budget_limit: string;
   budget_limit_day: string;
   package_id?: number;
+  ad_plan_id?: number;
   delivery?: string;
   created: string;
   updated: string;
@@ -1436,18 +1437,31 @@ export const debugUzData = action({
  */
 export const fetchUzCampaigns = action({
   args: { accountId: v.id("adAccounts") },
-  handler: async (ctx, args): Promise<Array<{
-    id: string;
-    name: string;
-    status: string;
-    budgetLimitDay: number;
-  }>> => {
+  handler: async (ctx, args): Promise<{
+    adPlans: Array<{
+      id: string;
+      name: string;
+      status: string;
+      campaigns: Array<{
+        id: string;
+        name: string;
+        status: string;
+        budgetLimitDay: number;
+      }>;
+    }>;
+    ungrouped: Array<{
+      id: string;
+      name: string;
+      status: string;
+      budgetLimitDay: number;
+    }>;
+  }> => {
     const accessToken: string = await ctx.runAction(
       internal.auth.getValidTokenForAccount,
       { accountId: args.accountId }
     );
 
-    // Fetch all campaigns with pagination
+    // Fetch all campaigns (ad_groups) with ad_plan_id
     const allItems: MtCampaign[] = [];
     let offset = 0;
     const LIMIT = 250;
@@ -1455,7 +1469,7 @@ export const fetchUzCampaigns = action({
       const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
         "campaigns.json",
         accessToken,
-        { fields: "id,name,status,budget_limit_day", limit: String(LIMIT), offset: String(offset) }
+        { fields: "id,name,status,budget_limit_day,ad_plan_id", limit: String(LIMIT), offset: String(offset) }
       );
       const items = data.items || [];
       allItems.push(...items);
@@ -1463,14 +1477,67 @@ export const fetchUzCampaigns = action({
       offset += LIMIT;
     }
 
-    // Show only active and blocked (budget-exhausted) campaigns — rule manages these
+    // Only active and blocked campaigns
     const relevant = allItems.filter((c) => c.status === "active" || c.status === "blocked");
 
-    return relevant.map((c) => ({
-      id: String(c.id),
-      name: c.name,
-      status: c.status,
-      budgetLimitDay: Number(c.budget_limit_day || "0"),
-    }));
+    // Collect unique ad_plan IDs
+    const adPlanIds = [...new Set(
+      relevant.map((c) => c.ad_plan_id).filter((id): id is number => id !== undefined && id > 0)
+    )];
+
+    // Fetch ad_plan names
+    const adPlanMap = new Map<number, { name: string; status: string }>();
+    if (adPlanIds.length > 0) {
+      // Fetch in batches of 50 IDs
+      for (let i = 0; i < adPlanIds.length; i += 50) {
+        const batch = adPlanIds.slice(i, i + 50);
+        try {
+          const plansData = await callMtApi<{ items: Array<{ id: number; name: string; status: string }> }>(
+            "ad_plans.json",
+            accessToken,
+            { fields: "id,name,status", _id: batch.join(",") }
+          );
+          for (const p of plansData.items || []) {
+            adPlanMap.set(p.id, { name: p.name, status: p.status });
+          }
+        } catch {
+          // If batch fetch fails, skip — campaigns will be ungrouped
+        }
+      }
+    }
+
+    // Group campaigns by ad_plan
+    const grouped = new Map<number, Array<typeof relevant[0]>>();
+    const ungrouped: typeof relevant = [];
+
+    for (const c of relevant) {
+      if (c.ad_plan_id && adPlanMap.has(c.ad_plan_id)) {
+        const list = grouped.get(c.ad_plan_id) || [];
+        list.push(c);
+        grouped.set(c.ad_plan_id, list);
+      } else {
+        ungrouped.push(c);
+      }
+    }
+
+    return {
+      adPlans: Array.from(grouped.entries()).map(([planId, campaigns]) => ({
+        id: String(planId),
+        name: adPlanMap.get(planId)?.name || `Кампания ${planId}`,
+        status: adPlanMap.get(planId)?.status || "unknown",
+        campaigns: campaigns.map((c) => ({
+          id: String(c.id),
+          name: c.name,
+          status: c.status,
+          budgetLimitDay: Number(c.budget_limit_day || "0"),
+        })),
+      })),
+      ungrouped: ungrouped.map((c) => ({
+        id: String(c.id),
+        name: c.name,
+        status: c.status,
+        budgetLimitDay: Number(c.budget_limit_day || "0"),
+      })),
+    };
   },
 });

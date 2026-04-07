@@ -170,6 +170,7 @@ export default defineSchema({
     }),
     targetAccountIds: v.array(v.id("adAccounts")),
     targetCampaignIds: v.optional(v.array(v.string())),
+    targetAdPlanIds: v.optional(v.array(v.string())),
     targetAdIds: v.optional(v.array(v.string())),
     isActive: v.boolean(),
     triggerCount: v.number(),

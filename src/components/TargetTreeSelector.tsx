@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import { useQuery, useAction } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
@@ -8,6 +8,7 @@ import { cn } from '../lib/utils';
 export interface TargetSelection {
   accountIds: string[];
   campaignIds: string[];
+  adPlanIds: string[];
   adIds: string[];
 }
 
@@ -71,7 +72,7 @@ export function TargetTreeSelector({ userId, value, onChange, ruleType }: Target
   );
 }
 
-// ─── УЗ Account node (VK API, package_id=960 only) ──
+// ─── УЗ Account node (VK API, ad_plans → campaigns hierarchy) ──
 
 interface UzCampaign {
   id: string;
@@ -80,75 +81,107 @@ interface UzCampaign {
   budgetLimitDay: number;
 }
 
+interface UzAdPlan {
+  id: string;
+  name: string;
+  status: string;
+  campaigns: UzCampaign[];
+}
+
+interface UzData {
+  adPlans: UzAdPlan[];
+  ungrouped: UzCampaign[];
+}
+
 function UzAccountNode({ account, value, onChange }: {
   account: { _id: string; name: string };
   value: TargetSelection;
   onChange: (selection: TargetSelection) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [campaigns, setCampaigns] = useState<UzCampaign[] | null>(null);
+  const [data, setData] = useState<UzData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fetchUz = useAction(api.vkApi.fetchUzCampaigns);
 
   const isAccountInList = value.accountIds.includes(account._id);
-  // "Whole account" = account checkbox was explicitly checked (no individual campaigns selected for it)
-  const accountCampaignIds = (campaigns || []).map((c) => c.id);
-  const hasIndividualCampaigns = value.campaignIds.some((id) => accountCampaignIds.includes(id));
+  const allCampaignIds = useMemo(() => data
+    ? [...data.adPlans.flatMap((p) => p.campaigns.map((c) => c.id)), ...data.ungrouped.map((c) => c.id)]
+    : [], [data]);
+  const hasIndividualCampaigns = value.campaignIds.some((id) => allCampaignIds.includes(id));
   const isWholeAccount = isAccountInList && !hasIndividualCampaigns;
 
   useEffect(() => {
-    if (!expanded || campaigns !== null) return;
+    if (!expanded || data !== null) return;
     setLoading(true);
     setError(null);
     fetchUz({ accountId: account._id as Id<"adAccounts"> })
-      .then((result) => setCampaigns(result))
+      .then((result) => setData(result))
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
       .finally(() => setLoading(false));
-  }, [expanded, campaigns, fetchUz, account._id]);
+  }, [expanded, data, fetchUz, account._id]);
 
   const handleAccountToggle = useCallback(() => {
     if (isAccountInList) {
-      const campaignIdsToRemove = new Set((campaigns || []).map((c) => c.id));
+      const campaignIdsToRemove = new Set(allCampaignIds);
+      const adPlanIdsToRemove = new Set((data?.adPlans || []).map((p) => p.id));
       onChange({
         accountIds: value.accountIds.filter((id) => id !== account._id),
         campaignIds: value.campaignIds.filter((id) => !campaignIdsToRemove.has(id)),
+        adPlanIds: value.adPlanIds.filter((id) => !adPlanIdsToRemove.has(id)),
         adIds: [],
       });
     } else {
-      // Select whole account — also clear any individual campaigns for it
-      const campaignIdsToRemove = new Set((campaigns || []).map((c) => c.id));
+      const campaignIdsToRemove = new Set(allCampaignIds);
+      const adPlanIdsToRemove = new Set((data?.adPlans || []).map((p) => p.id));
       onChange({
         ...value,
         accountIds: [...value.accountIds, account._id],
         campaignIds: value.campaignIds.filter((id) => !campaignIdsToRemove.has(id)),
+        adPlanIds: value.adPlanIds.filter((id) => !adPlanIdsToRemove.has(id)),
       });
     }
-  }, [isAccountInList, account._id, campaigns, value, onChange]);
+  }, [isAccountInList, account._id, data, allCampaignIds, value, onChange]);
 
-  const handleCampaignToggle = useCallback((campaignId: string) => {
+  const handleCampaignToggle = useCallback((campaignId: string, adPlanId?: string) => {
     const isChecked = value.campaignIds.includes(campaignId);
     if (isChecked) {
       const remaining = value.campaignIds.filter((id) => id !== campaignId);
-      // If no more individual campaigns for this account, remove accountId too
-      const stillHas = remaining.some((id) => accountCampaignIds.includes(id));
+      const stillHas = remaining.some((id) => allCampaignIds.includes(id));
+      // Clean up adPlanIds if no campaigns left in that plan
+      let newAdPlanIds = value.adPlanIds;
+      if (adPlanId) {
+        const plan = data?.adPlans.find((p) => p.id === adPlanId);
+        const planCampaignIds = plan?.campaigns.map((c) => c.id) || [];
+        const stillHasInPlan = remaining.some((id) => planCampaignIds.includes(id));
+        if (!stillHasInPlan) {
+          newAdPlanIds = newAdPlanIds.filter((id) => id !== adPlanId);
+        }
+      }
       onChange({
         ...value,
         campaignIds: remaining,
+        adPlanIds: newAdPlanIds,
         accountIds: stillHas ? value.accountIds : value.accountIds.filter((id) => id !== account._id),
       });
     } else {
-      // Auto-add account (for backend), but individual campaign tracking prevents "whole account" visual
       const newAccountIds = value.accountIds.includes(account._id)
         ? value.accountIds
         : [...value.accountIds, account._id];
+      const newAdPlanIds = adPlanId && !value.adPlanIds.includes(adPlanId)
+        ? [...value.adPlanIds, adPlanId]
+        : value.adPlanIds;
       onChange({
         ...value,
         accountIds: newAccountIds,
         campaignIds: [...value.campaignIds, campaignId],
+        adPlanIds: newAdPlanIds,
       });
     }
-  }, [value, onChange, account._id, accountCampaignIds]);
+  }, [value, onChange, account._id, allCampaignIds, data]);
+
+  const totalCampaigns = allCampaignIds.length;
+  const hasData = data && (data.adPlans.length > 0 || data.ungrouped.length > 0);
 
   return (
     <div>
@@ -178,32 +211,103 @@ function UzAccountNode({ account, value, onChange }: {
             </div>
           ) : error ? (
             <p className="text-xs text-destructive py-1 pl-6">{error}</p>
-          ) : campaigns && campaigns.length === 0 ? (
-            <p className="text-xs text-muted-foreground py-1 pl-6">Нет активных кампаний</p>
-          ) : campaigns ? (
-            campaigns.map((c) => {
-              const isChecked = isWholeAccount || value.campaignIds.includes(c.id);
-              return (
-                <div key={c.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted/50">
-                  <input
-                    type="checkbox"
-                    checked={isChecked}
-                    onChange={() => handleCampaignToggle(c.id)}
-                    disabled={isWholeAccount}
-                    className={cn('rounded shrink-0 ml-5', isWholeAccount && 'opacity-50')}
-                  />
-                  <Megaphone className="w-3.5 h-3.5 text-primary shrink-0" />
-                  <span className="text-xs truncate">{c.name}</span>
-                  {c.budgetLimitDay > 0 && (
-                    <span className="text-[10px] text-muted-foreground shrink-0">
-                      {c.budgetLimitDay}₽/день
-                    </span>
-                  )}
-                  <StatusBadge status={c.status} />
-                </div>
-              );
-            })
-          ) : null}
+          ) : !hasData ? (
+            <p className="text-xs text-muted-foreground py-1 pl-6">
+              Нет активных групп ({totalCampaigns})
+            </p>
+          ) : (
+            <>
+              {data.adPlans.map((plan) => (
+                <UzAdPlanNode
+                  key={plan.id}
+                  plan={plan}
+                  isWholeAccount={isWholeAccount}
+                  value={value}
+                  onCampaignToggle={handleCampaignToggle}
+                />
+              ))}
+              {data.ungrouped.map((c) => {
+                const isChecked = isWholeAccount || value.campaignIds.includes(c.id);
+                return (
+                  <div key={c.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted/50">
+                    <input
+                      type="checkbox"
+                      checked={isChecked}
+                      onChange={() => handleCampaignToggle(c.id)}
+                      disabled={isWholeAccount}
+                      className={cn('rounded shrink-0 ml-5', isWholeAccount && 'opacity-50')}
+                    />
+                    <Megaphone className="w-3.5 h-3.5 text-primary shrink-0" />
+                    <span className="text-xs truncate">{c.name}</span>
+                    {c.budgetLimitDay > 0 && (
+                      <span className="text-[10px] text-muted-foreground shrink-0">
+                        {c.budgetLimitDay}₽/день
+                      </span>
+                    )}
+                    <StatusBadge status={c.status} />
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── УЗ AdPlan node (collapsible group of campaigns) ──
+
+function UzAdPlanNode({ plan, isWholeAccount, value, onCampaignToggle }: {
+  plan: UzAdPlan;
+  isWholeAccount: boolean;
+  value: TargetSelection;
+  onCampaignToggle: (campaignId: string, adPlanId?: string) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const planCampaignIds = plan.campaigns.map((c) => c.id);
+  const selectedCount = value.campaignIds.filter((id) => planCampaignIds.includes(id)).length;
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted/50">
+        <button type="button" onClick={() => setExpanded(!expanded)} className="shrink-0 p-0.5">
+          {expanded
+            ? <ChevronDown className="w-3.5 h-3.5 text-muted-foreground" />
+            : <ChevronRight className="w-3.5 h-3.5 text-muted-foreground" />}
+        </button>
+        <Megaphone className="w-3.5 h-3.5 text-primary/60 shrink-0" />
+        <span className="text-xs truncate font-medium">{plan.name}</span>
+        <span className="text-[10px] text-muted-foreground shrink-0">
+          {plan.campaigns.length} групп{plan.campaigns.length === 1 ? 'а' : plan.campaigns.length < 5 ? 'ы' : ''}
+          {selectedCount > 0 && !isWholeAccount && ` · ${selectedCount} выбр.`}
+        </span>
+        <StatusBadge status={plan.status} />
+      </div>
+      {expanded && (
+        <div className="pl-6">
+          {plan.campaigns.map((c) => {
+            const isChecked = isWholeAccount || value.campaignIds.includes(c.id);
+            return (
+              <div key={c.id} className="flex items-center gap-2 py-1 px-1 rounded hover:bg-muted/50">
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => onCampaignToggle(c.id, plan.id)}
+                  disabled={isWholeAccount}
+                  className={cn('rounded shrink-0 ml-5', isWholeAccount && 'opacity-50')}
+                />
+                <Megaphone className="w-3 h-3 text-muted-foreground shrink-0" />
+                <span className="text-xs truncate">{c.name}</span>
+                {c.budgetLimitDay > 0 && (
+                  <span className="text-[10px] text-muted-foreground shrink-0">
+                    {c.budgetLimitDay}₽/день
+                  </span>
+                )}
+                <StatusBadge status={c.status} />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -284,6 +388,7 @@ function LiveAccountNode({ account, value, onChange }: {
       onChange({
         accountIds: value.accountIds.filter((id) => id !== account._id),
         campaignIds: value.campaignIds.filter((id) => !cIds.has(id)),
+        adPlanIds: value.adPlanIds,
         adIds: value.adIds.filter((id) => !bIds.has(id)),
       });
     } else {
@@ -295,6 +400,7 @@ function LiveAccountNode({ account, value, onChange }: {
       onChange({
         accountIds: [...value.accountIds, account._id],
         campaignIds: value.campaignIds.filter((id) => !cIds.has(id)),
+        adPlanIds: value.adPlanIds,
         adIds: value.adIds.filter((id) => !bIds.has(id)),
       });
     }

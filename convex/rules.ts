@@ -89,6 +89,7 @@ export const create = mutation({
     }),
     targetAccountIds: v.array(v.id("adAccounts")),
     targetCampaignIds: v.optional(v.array(v.string())),
+    targetAdPlanIds: v.optional(v.array(v.string())),
     targetAdIds: v.optional(v.array(v.string())),
     // uz_budget_manage specific fields
     initialBudget: v.optional(v.number()),
@@ -212,6 +213,7 @@ export const create = mutation({
       },
       targetAccountIds: args.targetAccountIds,
       targetCampaignIds: args.targetCampaignIds,
+      targetAdPlanIds: args.targetAdPlanIds,
       targetAdIds: args.targetAdIds,
       isActive: true,
       triggerCount: 0,
@@ -247,6 +249,7 @@ export const update = mutation({
     ),
     targetAccountIds: v.optional(v.array(v.id("adAccounts"))),
     targetCampaignIds: v.optional(v.array(v.string())),
+    targetAdPlanIds: v.optional(v.array(v.string())),
     targetAdIds: v.optional(v.array(v.string())),
     // uz_budget_manage specific fields
     initialBudget: v.optional(v.number()),
@@ -344,6 +347,9 @@ export const update = mutation({
     }
     if (args.targetCampaignIds !== undefined) {
       patch.targetCampaignIds = args.targetCampaignIds;
+    }
+    if (args.targetAdPlanIds !== undefined) {
+      patch.targetAdPlanIds = args.targetAdPlanIds;
     }
     if (args.targetAdIds !== undefined) {
       patch.targetAdIds = args.targetAdIds;
