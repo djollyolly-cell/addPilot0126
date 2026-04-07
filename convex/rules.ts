@@ -485,28 +485,26 @@ export const initializeUzBudgets = action({
         continue;
       }
 
-      // Get campaigns from VK API
+      // Get campaigns from VK API and resolve ad_plan_id matches
       const campaigns = await ctx.runAction(
         internal.vkApi.getCampaignsForAccount,
         { accessToken }
-      ) as Array<{ id: number; name: string; status: string }>;
-      const nameMap = new Map(campaigns.map((c) => [String(c.id), c.name]));
+      ) as Array<{ id: number; name: string; status: string; budget_limit_day: string; ad_plan_id?: number; delivery?: string }>;
 
-      for (const campaignIdStr of targetIds) {
-        if (!nameMap.has(campaignIdStr)) continue;
-        const campaignId = parseInt(campaignIdStr);
-        if (isNaN(campaignId)) continue;
+      const { filterCampaignsForRule } = await import("./uzBudgetHelpers");
+      const matched = filterCampaignsForRule(campaigns, rule as { targetCampaignIds?: string[] });
 
+      for (const campaign of matched) {
         try {
           await ctx.runAction(internal.vkApi.setCampaignBudget, {
             accessToken,
-            campaignId,
+            campaignId: campaign.id,
             newLimitRubles: initialBudget,
           });
           initialized++;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
-          errors.push(`Кампания ${campaignId}: ${msg}`);
+          errors.push(`Кампания ${campaign.id} (${campaign.name}): ${msg}`);
         }
       }
     }
