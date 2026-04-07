@@ -548,8 +548,19 @@ export const seedProviders = internalMutation({
           createdAt: Date.now(),
         });
         seeded.push(p.name);
+      } else {
+        // Update existing provider with latest fields
+        await ctx.db.patch(existing._id, {
+          displayName: p.displayName,
+          hasApi: p.hasApi,
+          authMethod: p.authMethod,
+          requiredFields: p.requiredFields,
+          notes: p.notes,
+          docsUrl: (p as Record<string, unknown>).docsUrl as string | undefined,
+        });
+        seeded.push(`${p.name}(updated)`);
       }
     }
-    return { seeded, skipped: PROVIDERS.length - seeded.length };
+    return { seeded };
   },
 });
