@@ -38,7 +38,7 @@ interface AgencyAccount {
   type?: string;
 }
 
-type Step = 'select' | 'fields' | 'getuniq_auth' | 'getuniq_accounts' | 'clickru_accounts';
+type Step = 'select' | 'fields' | 'getuniq_auth' | 'getuniq_accounts' | 'clickru_accounts' | 'zaleycash_accounts';
 
 export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConnectModalProps) {
   const typedUserId = userId as Id<"users">;
@@ -57,6 +57,10 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
   const clickruListAccounts = useAction((api as any).agencyProviders.clickruListAccounts);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const clickruConnect = useAction((api as any).agencyProviders.clickruConnectAccount);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const zaleycashListAccounts = useAction((api as any).agencyProviders.zaleycashListAccounts);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const zaleycashConnect = useAction((api as any).agencyProviders.zaleycashConnectAccount);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const providers = useQuery((api as any).agencyProviders.list) as AgencyProvider[] | undefined;
@@ -75,7 +79,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
   const handleBack = () => {
     if (step === 'getuniq_accounts') {
       setStep('getuniq_auth');
-    } else if (step === 'clickru_accounts') {
+    } else if (step === 'clickru_accounts' || step === 'zaleycash_accounts') {
       setStep('fields');
     } else if (step === 'getuniq_auth' || step === 'fields') {
       setStep('select');
@@ -167,6 +171,57 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
         providerId: selectedProvider._id,
         clickruAccountId: String(account.id),
         accountName: account.name || account.login || `Click.ru #${account.id}`,
+      });
+      onConnected();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка подключения');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ZaleyCash: save secret key, then load accounts
+  const handleZaleycashSaveAndLoad = async () => {
+    if (!selectedProvider) return;
+    if (!fieldValues.apiKey?.trim()) {
+      setError('Введите секретный ключ ZaleyCash');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    try {
+      await saveCredentials({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+        apiKey: fieldValues.apiKey.trim(),
+      });
+
+      const result = await zaleycashListAccounts({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+      });
+      setAgencyAccounts(result.accounts || []);
+      setStep('zaleycash_accounts');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка загрузки кабинетов');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ZaleyCash: connect selected account
+  const handleZaleycashConnect = async (account: AgencyAccount) => {
+    if (!selectedProvider) return;
+    setLoading(true);
+    setError(null);
+
+    try {
+      await zaleycashConnect({
+        userId: typedUserId,
+        providerId: selectedProvider._id,
+        zaleycashAccountId: String(account.id),
+        accountName: account.name || account.login || `ZaleyCash #${account.id}`,
       });
       onConnected();
     } catch (err) {
@@ -333,7 +388,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
   const showBack = step !== 'select';
   const title = step === 'select'
     ? 'Агентский кабинет'
-    : (step === 'getuniq_accounts' || step === 'clickru_accounts')
+    : (step === 'getuniq_accounts' || step === 'clickru_accounts' || step === 'zaleycash_accounts')
       ? 'Выберите кабинет'
       : selectedProvider?.displayName || '';
 
@@ -341,7 +396,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
     ? 'Выберите сервис, через который работает ваш рекламный кабинет'
     : step === 'getuniq_auth'
       ? 'Авторизуйтесь в GetUNIQ для получения списка кабинетов'
-      : (step === 'getuniq_accounts' || step === 'clickru_accounts')
+      : (step === 'getuniq_accounts' || step === 'clickru_accounts' || step === 'zaleycash_accounts')
         ? 'Выберите кабинет для подключения'
         : selectedProvider?.notes || 'Заполните данные для подключения';
 
@@ -466,6 +521,7 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
                 onClick={
                   selectedProvider.name === 'getuniq' ? handleGetuniqCredentialsSave
                   : selectedProvider.name === 'clickru' ? handleClickruSaveAndLoad
+                  : selectedProvider.name === 'zaleycash' ? handleZaleycashSaveAndLoad
                   : handleSubmit
                 }
                 disabled={loading}
@@ -479,10 +535,10 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
                 {loading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
-                    {(selectedProvider.name === 'getuniq' || selectedProvider.name === 'clickru') ? 'Загрузка кабинетов...' : 'Подключение...'}
+                    {(selectedProvider.name === 'getuniq' || selectedProvider.name === 'clickru' || selectedProvider.name === 'zaleycash') ? 'Загрузка кабинетов...' : 'Подключение...'}
                   </>
                 ) : (
-                  (selectedProvider.name === 'getuniq' || selectedProvider.name === 'clickru') ? 'Далее' : 'Подключить'
+                  (selectedProvider.name === 'getuniq' || selectedProvider.name === 'clickru' || selectedProvider.name === 'zaleycash') ? 'Далее' : 'Подключить'
                 )}
               </button>
             </div>
@@ -573,6 +629,45 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
                     key={account.id}
                     type="button"
                     onClick={() => handleClickruConnect(account)}
+                    disabled={loading}
+                    className={cn(
+                      'w-full flex items-center justify-between p-4 rounded-lg border transition-all text-left',
+                      'hover:border-primary hover:bg-primary/5',
+                      'disabled:opacity-50'
+                    )}
+                  >
+                    <div>
+                      <div className="font-medium">
+                        {account.name || account.login || `Кабинет #${account.id}`}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        ID: {account.id}
+                        {account.status && ` · ${account.status}`}
+                      </div>
+                    </div>
+                    {loading ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                    ) : (
+                      <span className="text-xs text-primary">Подключить</span>
+                    )}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+          {/* ZaleyCash: Account picker */}
+          {step === 'zaleycash_accounts' && (
+            <div className="space-y-2" data-testid="zaleycash-account-list">
+              {agencyAccounts.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground text-sm">
+                  Нет кабинетов в ZaleyCash
+                </div>
+              ) : (
+                agencyAccounts.map((account) => (
+                  <button
+                    key={account.id}
+                    type="button"
+                    onClick={() => handleZaleycashConnect(account)}
                     disabled={loading}
                     className={cn(
                       'w-full flex items-center justify-between p-4 rounded-lg border transition-all text-left',

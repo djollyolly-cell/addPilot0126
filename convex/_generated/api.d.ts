@@ -10,6 +10,7 @@
 
 import type * as adAccounts from "../adAccounts.js";
 import type * as admin from "../admin.js";
+import type * as agencyProviders from "../agencyProviders.js";
 import type * as aiCabinet from "../aiCabinet.js";
 import type * as aiGenerate from "../aiGenerate.js";
 import type * as aiLimits from "../aiLimits.js";
@@ -51,6 +52,7 @@ import type {
 declare const fullApi: ApiFromModules<{
   adAccounts: typeof adAccounts;
   admin: typeof admin;
+  agencyProviders: typeof agencyProviders;
   aiCabinet: typeof aiCabinet;
   aiGenerate: typeof aiGenerate;
   aiLimits: typeof aiLimits;

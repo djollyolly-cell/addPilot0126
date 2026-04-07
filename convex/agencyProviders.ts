@@ -472,6 +472,132 @@ export const clickruConnectAccount = action({
   },
 });
 
+// ---- ZaleyCash flow ----
+
+const ZALEYCASH_API_BASE = "https://zaleycash.com/api/v2";
+
+/** Exchange ZaleyCash secret key for a session access token */
+async function getZaleycashSessionToken(secretKey: string): Promise<{ accessToken: string; expiresAt: number }> {
+  const resp = await fetch(`${ZALEYCASH_API_BASE}/token`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${secretKey}` },
+  });
+  if (!resp.ok) {
+    const text = await resp.text();
+    if (resp.status === 401 || resp.status === 403) {
+      throw new Error("Секретный ключ ZaleyCash недействителен. Проверьте ключ в профиле ZaleyCash.");
+    }
+    throw new Error(`ZaleyCash token error: ${resp.status} ${text}`);
+  }
+  const data = await resp.json();
+  return {
+    accessToken: data.access_token || data.accessToken || data.token,
+    expiresAt: data.expires_at ? data.expires_at * 1000 : Date.now() + 3600 * 1000,
+  };
+}
+
+/** List available accounts from ZaleyCash */
+export const zaleycashListAccounts = action({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+  },
+  handler: async (ctx, args) => {
+    const creds = await ctx.runQuery(selfInternal.agencyProviders.getCredentialsInternal, {
+      userId: args.userId,
+      providerId: args.providerId,
+    });
+
+    if (!creds?.apiKey) {
+      throw new Error("Сначала сохраните секретный ключ ZaleyCash");
+    }
+
+    // Get session token from secret key
+    const session = await getZaleycashSessionToken(creds.apiKey);
+
+    // Save session token for future use
+    await ctx.runMutation(selfInternal.agencyProviders.updateCredentialsTokens, {
+      userId: args.userId,
+      providerId: args.providerId,
+      oauthAccessToken: session.accessToken,
+      oauthTokenExpiresAt: session.expiresAt,
+    });
+
+    const resp = await fetch(`${ZALEYCASH_API_BASE}/user/accounts/list`, {
+      headers: { Authorization: `Bearer ${session.accessToken}` },
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`ZaleyCash accounts error: ${resp.status} ${text}`);
+    }
+
+    const data = await resp.json();
+    const accounts = Array.isArray(data) ? data : data.data || data.items || data.accounts || [];
+    return { accounts };
+  },
+});
+
+/** Get VK Ads token for a ZaleyCash account and connect it */
+export const zaleycashConnectAccount = action({
+  args: {
+    userId: v.id("users"),
+    providerId: v.id("agencyProviders"),
+    zaleycashAccountId: v.string(),
+    accountName: v.string(),
+  },
+  handler: async (ctx, args): Promise<{ accountId: string }> => {
+    const creds = await ctx.runQuery(selfInternal.agencyProviders.getCredentialsInternal, {
+      userId: args.userId,
+      providerId: args.providerId,
+    });
+
+    if (!creds?.apiKey) {
+      throw new Error("Нет секретного ключа ZaleyCash");
+    }
+
+    // Get fresh session token
+    const session = await getZaleycashSessionToken(creds.apiKey);
+
+    // Save refreshed session token
+    await ctx.runMutation(selfInternal.agencyProviders.updateCredentialsTokens, {
+      userId: args.userId,
+      providerId: args.providerId,
+      oauthAccessToken: session.accessToken,
+      oauthTokenExpiresAt: session.expiresAt,
+    });
+
+    // Get myTarget/VK Ads token for this account
+    const tokenResp = await fetch(`${ZALEYCASH_API_BASE}/my_target/token`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${session.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ account_id: args.zaleycashAccountId }),
+    });
+
+    if (!tokenResp.ok) {
+      const text = await tokenResp.text();
+      throw new Error(`Не удалось получить VK-токен: ${tokenResp.status} ${text}`);
+    }
+
+    const tokenData = await tokenResp.json();
+    const vkToken = tokenData.accessToken || tokenData.access_token || tokenData.token;
+    if (!vkToken) throw new Error("ZaleyCash не вернул VK-токен");
+
+    const result: { accountId: string } = await ctx.runAction(internal.adAccounts.connectAgencyAccountInternal, {
+      userId: args.userId,
+      accessToken: vkToken,
+      name: args.accountName,
+      agencyProviderId: args.providerId,
+      agencyCabinetId: args.zaleycashAccountId,
+    });
+
+    return result;
+  },
+});
+
 // ---- Vitamin flow ----
 
 /** Connect a Vitamin cabinet: user provides VK token from Vitamin support + cabinet ID */
@@ -634,7 +760,17 @@ export const seedProviders = internalMutation({
           { key: "accessToken", label: "Токен доступа", placeholder: "Токен из agency.cerebroapps.ru", type: "textarea" },
           { key: "accountName", label: "Название кабинета", placeholder: "Например: Клиент Петров", type: "text" },
         ],
-        notes: "API нет. Токен получается вручную через agency.cerebroapps.ru",
+        notes: "Токен получается через agency.cerebroapps.ru",
+      },
+      {
+        name: "zaleycash",
+        displayName: "ZaleyCash",
+        hasApi: true,
+        authMethod: "api_key",
+        requiredFields: [
+          { key: "apiKey", label: "Секретный ключ ZaleyCash", placeholder: "Ключ из профиля ZaleyCash", type: "password" },
+        ],
+        notes: "Секретный ключ получить в профиле ZaleyCash. После ввода загрузится список кабинетов.",
       },
     ];
 
