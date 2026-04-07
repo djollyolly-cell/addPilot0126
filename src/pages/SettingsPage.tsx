@@ -1143,16 +1143,14 @@ function ReferralTab({ userId }: { userId: string }) {
               <span className="ml-1.5">{copied ? 'Скопировано' : 'Копировать'}</span>
             </Button>
           </div>
-          {stats.referralType === 'discount' && (
-            <p className="text-sm text-muted-foreground">
-              Тип ссылки: <span className="font-medium text-foreground">со скидкой {stats.referralDiscount}%</span> для приглашённых
-            </p>
-          )}
           <div className="p-3 bg-muted/50 rounded-lg space-y-1.5 text-sm text-muted-foreground">
             <p className="font-medium text-foreground">Как это работает:</p>
             <ol className="list-decimal list-inside space-y-1">
               <li>Отправьте этот код другу</li>
               <li>При оплате подписки он вводит его в поле «Реферальный код»</li>
+              {stats.referralType === 'discount' && (
+                <li>Друг получает <span className="font-medium text-foreground">скидку {stats.referralDiscount}%</span> на оплату</li>
+              )}
               <li>Вы получаете <span className="font-medium text-foreground">+7 дней</span> к подписке за каждого оплатившего</li>
             </ol>
           </div>
