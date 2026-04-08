@@ -102,4 +102,18 @@ crons.interval(
   internal.adAccounts.checkAgencyTokenHealth
 );
 
+// System health check — every 6 hours
+crons.cron(
+  "system-health-check",
+  "0 0,6,12,18 * * *",
+  internal.healthCheck.runSystemCheck
+);
+
+// Function verification — every 12 hours (03:00 and 15:00 UTC)
+crons.cron(
+  "function-verification",
+  "0 3,15 * * *",
+  internal.healthCheck.runFunctionCheck
+);
+
 export default crons;
