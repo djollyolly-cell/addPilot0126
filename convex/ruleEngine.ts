@@ -1835,7 +1835,7 @@ export const checkUzBudgetRules = internalAction({
                     { ruleId: rule._id, campaignId: campaignIdStr }
                   );
 
-                  if (campaign.status !== "active") {
+                  if (campaign.status !== "active" || campaign.delivery === "not_delivering") {
                     try {
                       await ctx.runAction(internal.vkApi.resumeCampaign, {
                         accessToken,
