@@ -673,4 +673,22 @@ export default defineSchema({
     status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
     error: v.optional(v.string()),
   }).index("by_name", ["name"]),
+
+  // Health check results — diagnostic history
+  healthCheckResults: defineTable({
+    type: v.union(v.literal("system"), v.literal("function"), v.literal("user")),
+    targetUserId: v.optional(v.id("users")),
+    status: v.union(v.literal("ok"), v.literal("warning"), v.literal("error")),
+    summary: v.string(),
+    details: v.any(),
+    checkedUsers: v.number(),
+    checkedAccounts: v.number(),
+    checkedRules: v.number(),
+    warnings: v.number(),
+    errors: v.number(),
+    duration: v.number(),
+    createdAt: v.number(),
+  })
+    .index("by_type", ["type", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
 }, { schemaValidation: false });
