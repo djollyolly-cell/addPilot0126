@@ -46,7 +46,9 @@ function minutesAgo(ts: number): number {
 
 // ─── Block 1.1: Cron Health (heartbeat + results) ───
 
-export const checkCronHealth = internalQuery({
+// Split into small queries to avoid 1s timeout, assembled in orchestrator
+
+export const checkCronHeartbeats = internalQuery({
   args: {},
   handler: async (ctx): Promise<CheckResult> => {
     const heartbeats = await ctx.db.query("cronHeartbeats").collect();
@@ -71,47 +73,52 @@ export const checkCronHealth = internalQuery({
       const hb = heartbeats.find((h) => h.name === cfg.name);
       if (!hb) continue;
 
-      // Stuck check
       if (hb.status === "running" && minutesAgo(hb.startedAt) > 10) {
         issues.push(`${cfg.label}: STUCK (${minutesAgo(hb.startedAt)} мин)`);
         status = "error";
         continue;
       }
-
-      // Error check
       if (hb.error) {
         issues.push(`${cfg.label}: ошибка — ${hb.error.slice(0, 80)}`);
         status = "error";
         continue;
       }
-
-      // Staleness check
       if (cfg.maxStaleMin && hb.finishedAt && minutesAgo(hb.finishedAt) > cfg.maxStaleMin) {
         issues.push(`${cfg.label}: отстаёт (${minutesAgo(hb.finishedAt)} мин)`);
         if (status === "ok") status = "warning";
       }
     }
 
-    // ── Result verification ──
+    return { name: "Кроны (heartbeat)", status, message: issues.length ? `${issues.length} проблем` : "ок", details: issues };
+  },
+});
 
-    // sync-metrics: count synced accounts
+export const checkCronSyncResults = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<CheckResult> => {
+    const issues: string[] = [];
+    let status: CheckStatus = "ok";
+
     const allAccounts = await ctx.db.query("adAccounts").collect();
-    const activeAccounts = allAccounts.filter(
-      (a) => a.status === "active" || a.status === "error"
-    );
+    const activeAccounts = allAccounts.filter((a) => a.status === "active" || a.status === "error");
     const now = Date.now();
-    const syncedCount = activeAccounts.filter(
-      (a) => a.lastSyncAt && now - a.lastSyncAt < 10 * 60_000
-    ).length;
+    const syncedCount = activeAccounts.filter((a) => a.lastSyncAt && now - a.lastSyncAt < 10 * 60_000).length;
 
     if (activeAccounts.length > 0 && syncedCount < activeAccounts.length) {
-      issues.push(
-        `sync: ${syncedCount}/${activeAccounts.length} синхронизированы`
-      );
+      issues.push(`sync: ${syncedCount}/${activeAccounts.length} синхронизированы`);
       if (status === "ok") status = "warning";
     }
 
-    // uz-budget-reset: check for today's resets
+    return { name: "Кроны (sync)", status, message: issues.length ? issues[0] : "ок", details: issues };
+  },
+});
+
+export const checkCronResetResults = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<CheckResult> => {
+    const issues: string[] = [];
+    let status: CheckStatus = "ok";
+
     const today = todayStr();
     const todayStart = new Date(today).getTime();
     const uzRules = await ctx.db.query("rules").collect();
@@ -129,57 +136,48 @@ export const checkCronHealth = internalQuery({
       );
 
       for (const rule of resetRules) {
-        const ruleResetCount = resetLogs.filter(
-          (l) => l.ruleId === rule._id
-        ).length;
+        const ruleResetCount = resetLogs.filter((l) => l.ruleId === rule._id).length;
         const targetCount = rule.targetCampaignIds?.length ?? 0;
         if (targetCount > 0 && ruleResetCount === 0) {
           issues.push(`Ресет "${rule.name}": не выполнен (0/${targetCount})`);
           status = "error";
         } else if (targetCount > 0 && ruleResetCount < targetCount) {
-          issues.push(
-            `Ресет "${rule.name}": частичный (${ruleResetCount}/${targetCount})`
-          );
+          issues.push(`Ресет "${rule.name}": частичный (${ruleResetCount}/${targetCount})`);
           status = "error";
         }
       }
     }
 
-    // daily-digest: check sent
+    return { name: "Кроны (ресет)", status, message: issues.length ? `${issues.length} проблем` : "ок", details: issues };
+  },
+});
+
+export const checkCronDigestResults = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<CheckResult> => {
+    const issues: string[] = [];
+    let status: CheckStatus = "ok";
+
+    const today = todayStr();
+    const todayStart = new Date(today).getTime();
+    const heartbeats = await ctx.db.query("cronHeartbeats").collect();
     const digestHb = heartbeats.find((h) => h.name === "sendDailyDigest");
+
     if (digestHb?.finishedAt && digestHb.finishedAt >= todayStart) {
       const settings = await ctx.db.query("userSettings").collect();
       const digestUsers = settings.filter((s) => s.digestEnabled);
-      const sentNotifs = await ctx.db
-        .query("notifications")
-        .withIndex("by_status")
-        .collect();
+      const sentNotifs = await ctx.db.query("notifications").withIndex("by_status").collect();
       const todayDigests = sentNotifs.filter(
-        (n) =>
-          n.type === "digest" &&
-          n.createdAt >= todayStart &&
-          n.status === "sent"
+        (n) => n.type === "digest" && n.createdAt >= todayStart && n.status === "sent"
       );
 
       if (digestUsers.length > 0 && todayDigests.length === 0) {
-        issues.push(
-          `Дайджест: ${digestUsers.length} пользователей ожидали, 0 отправлено`
-        );
+        issues.push(`Дайджест: ${digestUsers.length} пользователей ожидали, 0 отправлено`);
         if (status === "ok") status = "warning";
       }
     }
 
-    const message =
-      status === "ok"
-        ? `все кроны в норме`
-        : `${issues.length} ${issues.length === 1 ? "проблема" : "проблем"}`;
-
-    return {
-      name: "Кроны",
-      status,
-      message,
-      details: issues,
-    };
+    return { name: "Кроны (дайджест)", status, message: issues.length ? issues[0] : "ок", details: issues };
   },
 });
 
@@ -431,8 +429,37 @@ export const runSystemCheck = internalAction({
     const startTime = Date.now();
 
     const blocks: CheckResult[] = [];
+
+    // Cron health split into 4 small queries to avoid 1s timeout
+    const cronChecks = [
+      { name: "checkCronHeartbeats", fn: internal.healthCheck.checkCronHeartbeats },
+      { name: "checkCronSyncResults", fn: internal.healthCheck.checkCronSyncResults },
+      { name: "checkCronResetResults", fn: internal.healthCheck.checkCronResetResults },
+      { name: "checkCronDigestResults", fn: internal.healthCheck.checkCronDigestResults },
+    ];
+
+    // Merge cron sub-checks into one "Кроны" block
+    const cronIssues: string[] = [];
+    let cronStatus: CheckStatus = "ok";
+    for (const check of cronChecks) {
+      try {
+        const result = await ctx.runQuery(check.fn, {});
+        if (result.details) cronIssues.push(...result.details);
+        cronStatus = worstStatus([cronStatus, result.status]);
+      } catch (err) {
+        cronIssues.push(`${check.name}: CHECK_FAILED: ${err instanceof Error ? err.message : String(err)}`);
+        cronStatus = worstStatus([cronStatus, "warning"]);
+      }
+    }
+    blocks.push({
+      name: "Кроны",
+      status: cronStatus,
+      message: cronStatus === "ok" ? "все кроны в норме" : `${cronIssues.length} ${cronIssues.length === 1 ? "проблема" : "проблем"}`,
+      details: cronIssues,
+    });
+
+    // Other checks
     const blockChecks = [
-      { name: "checkCronHealth", fn: internal.healthCheck.checkCronHealth },
       { name: "checkTokenHealth", fn: internal.healthCheck.checkTokenHealth },
       { name: "checkAccountSync", fn: internal.healthCheck.checkAccountSync },
       { name: "checkNotifications", fn: internal.healthCheck.checkNotifications },

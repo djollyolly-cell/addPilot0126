@@ -21,7 +21,9 @@ interface UzRule {
 /**
  * Крон сброса бюджета.
  * Запускается каждые 30 минут, проверяет timezone пользователя,
- * и сбрасывает бюджет если наступили новые сутки (00:00 в timezone пользователя).
+ * и сбрасывает бюджет в окне 23:00-00:00 текущих суток (timezone пользователя).
+ * Окно 23:00-00:00 даёт 2 попытки (крон каждые 30 мин) и гарантирует,
+ * что бюджеты сброшены ДО начала нового дня.
  */
 export const resetBudgets = internalAction({
   args: {},
@@ -42,7 +44,8 @@ export const resetBudgets = internalAction({
         });
         const tz = settings?.timezone || "Europe/Moscow";
 
-        // Check: is it 00:00-00:29 in user's timezone?
+        // Check: is it 23:00-23:59 in user's timezone?
+        // Reset happens at end of day (23:00) so budgets are ready before midnight.
         // Use Intl.DateTimeFormat.formatToParts() — reliable on Convex runtime
         const now = new Date();
         const formatter = new Intl.DateTimeFormat("en-US", {
@@ -57,12 +60,13 @@ export const resetBudgets = internalAction({
 
         console.log(`[uz_budget_reset] Rule ${rule._id}: tz=${tz}, hour=${hour}, minute=${minute}`);
 
-        // Cron runs every 30 min → catch window 00:00-00:29
-        if (hour !== 0 || minute >= 30) continue;
+        // Cron runs every 30 min → catch window 23:00-23:59 (2 attempts)
+        if (hour !== 23) continue;
 
-        // Check if already reset today
-        // Since hour=0 and minute is 0-29, user's midnight was ~minute minutes ago
-        const dayStartUtc = now.getTime() - minute * 60 * 1000;
+        // Check if already reset today (use 23:00 as anchor — covers today's reset)
+        // dayStartUtc = start of current calendar day in user's tz
+        const minutesSinceMidnight = hour * 60 + minute;
+        const dayStartUtc = now.getTime() - minutesSinceMidnight * 60 * 1000;
         const dayEndUtc = dayStartUtc + 24 * 60 * 60 * 1000;
         const alreadyReset = await ctx.runQuery(
           internal.uzBudgetCron.hasResetToday,

@@ -24,14 +24,17 @@ function todayStr(): string {
 export const syncAll = internalAction({
   args: {},
   handler: async (ctx) => {
-    // Level 3: Heartbeat guard — detect stuck previous runs
+    // Hard lock: skip this run if previous is still running (< 10 min)
     const STUCK_THRESHOLD_MS = 10 * 60 * 1000; // 10 minutes
     const prevHeartbeat = await ctx.runQuery(internal.syncMetrics.getCronHeartbeat, { name: "syncAll" });
     if (prevHeartbeat && prevHeartbeat.status === "running") {
-      const stuckMinutes = Math.round((Date.now() - prevHeartbeat.startedAt) / 60_000);
-      if (Date.now() - prevHeartbeat.startedAt > STUCK_THRESHOLD_MS) {
-        console.warn(`[syncAll] WARNING: previous run started ${stuckMinutes}m ago and hasn't finished. Possible hang. Proceeding anyway.`);
+      const elapsedMs = Date.now() - prevHeartbeat.startedAt;
+      const stuckMinutes = Math.round(elapsedMs / 60_000);
+      if (elapsedMs < STUCK_THRESHOLD_MS) {
+        console.log(`[syncAll] Previous run still active (${stuckMinutes}m ago). Skipping this cycle.`);
+        return;
       }
+      console.warn(`[syncAll] Previous run STUCK (${stuckMinutes}m ago, >${Math.round(STUCK_THRESHOLD_MS / 60_000)}m). Overriding and starting new run.`);
     }
     await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, { name: "syncAll", status: "running" });
 
@@ -329,11 +332,21 @@ export const syncAll = internalAction({
 // Internal query — list all active ad accounts (for cron)
 import { internalQuery, internalMutation, query } from "./_generated/server";
 
+const BATCH_SIZE = 40; // Max accounts per sync cycle (~40 × 45s = 30 min)
+const SKIP_IF_SYNCED_WITHIN_MS = 4 * 60 * 1000; // Skip if synced < 4 min ago
+
 export const listActiveAccounts = internalQuery({
   args: {},
   handler: async (ctx) => {
     const accounts = await ctx.db.query("adAccounts").collect();
-    return accounts.filter((a) => a.status === "active" || a.status === "error");
+    const active = accounts.filter((a) => a.status === "active" || a.status === "error");
+    const now = Date.now();
+
+    // Prioritize: oldest lastSyncAt first, skip recently synced
+    return active
+      .filter((a) => !a.lastSyncAt || (now - a.lastSyncAt) > SKIP_IF_SYNCED_WITHIN_MS)
+      .sort((a, b) => (a.lastSyncAt || 0) - (b.lastSyncAt || 0))
+      .slice(0, BATCH_SIZE);
   },
 });
 
