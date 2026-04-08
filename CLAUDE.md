@@ -71,5 +71,8 @@ Detailed rules are in `.claude/rules/`:
 | File | Trigger |
 |---|---|
 | `vk-banner.md` | Banner generation: FLUX prompts, visual styles, layouts, text coverage, composite |
+| `service-diagnostic.md` | Service monitoring: health checks, user diagnostics, "why isn't X working?" |
 
 When working on banner generation (creating/modifying banners, FLUX prompts, visual styles, text overlay, coverage checks), ALWAYS follow `docs/skills/vk-banner.md` first.
+
+When diagnosing service issues, checking health, or investigating user problems, ALWAYS follow `docs/skills/service-diagnostic.md` first.
