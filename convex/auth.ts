@@ -1461,6 +1461,21 @@ export const proactiveTokenRefresh = internalAction({
       }
     }
 
+    // 3. User-level personal VK ID tokens
+    const vkUsers = await ctx.runQuery(internal.auth.getExpiringUserVkTokens, { threshold });
+    for (const user of vkUsers) {
+      try {
+        await ctx.runAction(internal.auth.getValidVkToken, {
+          userId: user._id,
+        });
+        refreshed++;
+        console.log(`[proactiveRefresh] User "${user.name || user.email}": VK ID token refreshed`);
+      } catch (err) {
+        failed++;
+        console.log(`[proactiveRefresh] User "${user.name || user.email}": VK ID refresh failed — ${err}`);
+      }
+    }
+
     if (refreshed > 0 || failed > 0) {
       console.log(`[proactiveRefresh] Done: ${refreshed} refreshed, ${failed} failed`);
     }
@@ -1492,6 +1507,27 @@ export const getExpiringUserTokens = internalQuery({
         u.vkAdsTokenExpiresAt > Date.now() && // not yet expired
         u.vkAdsTokenExpiresAt < args.threshold && // but will expire within window
         u.vkAdsRefreshToken // has refresh token to use
+    );
+  },
+});
+
+export const getExpiringUserVkTokens = internalQuery({
+  args: { threshold: v.number() },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const MAX_EXPIRED_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — refresh token still valid
+    const users = await ctx.db.query("users").collect();
+    return users.filter(
+      (u) =>
+        u.vkAccessToken &&
+        u.vkTokenExpiresAt &&
+        u.vkRefreshToken &&
+        (
+          // About to expire (within proactive window)
+          (u.vkTokenExpiresAt > now && u.vkTokenExpiresAt < args.threshold) ||
+          // Already expired but within 7 days (refresh token still usable)
+          (u.vkTokenExpiresAt <= now && u.vkTokenExpiresAt > now - MAX_EXPIRED_AGE_MS)
+        )
     );
   },
 });
