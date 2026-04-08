@@ -1227,6 +1227,7 @@ function DiagnosticSection() {
         {latestResults && latestResults.length > 0 && (
           <div className="space-y-2 mt-4">
             <h4 className="text-sm font-medium text-muted-foreground">Последние результаты</h4>
+            {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
             {latestResults.slice(0, 10).map((r: any) => (
               <div key={r._id} className="flex items-center justify-between p-3 rounded-lg border border-border">
                 <div className="flex items-center gap-2">
