@@ -119,8 +119,16 @@ export const checkCronResetResults = internalQuery({
     const issues: string[] = [];
     let status: CheckStatus = "ok";
 
-    const today = todayStr();
-    const todayStart = new Date(today).getTime();
+    // Reset happens at 23:00 user timezone. Only check if it's past midnight (i.e. reset window has passed).
+    const now = new Date();
+    const utcHour = now.getUTCHours();
+
+    // Reset window is 23:00 local. Most users are UTC+3 (MSK), so 23:00 MSK = 20:00 UTC.
+    // Only flag missing resets after 21:00 UTC (midnight MSK) when the window has definitely passed.
+    if (utcHour < 21) {
+      return { name: "Кроны (ресет)", status: "ok", message: "окно ресета ещё не наступило", details: [] };
+    }
+
     const uzRules = await ctx.db.query("rules").collect();
     const resetRules = uzRules.filter(
       (r) =>
@@ -130,20 +138,24 @@ export const checkCronResetResults = internalQuery({
     );
 
     if (resetRules.length > 0) {
-      const todayLogs = await ctx.db.query("actionLogs").collect();
-      const resetLogs = todayLogs.filter(
-        (l) => l.actionType === "budget_reset" && l.createdAt >= todayStart
-      );
-
+      // Only fetch recent reset logs (last 24h) per rule to avoid scanning all actionLogs
+      const yesterday = Date.now() - 24 * 3600_000;
       for (const rule of resetRules) {
-        const ruleResetCount = resetLogs.filter((l) => l.ruleId === rule._id).length;
+        const ruleLogs = await ctx.db
+          .query("actionLogs")
+          .withIndex("by_ruleId", (q) => q.eq("ruleId", rule._id))
+          .order("desc")
+          .take(50);
+        const recentResets = ruleLogs.filter(
+          (l) => l.actionType === "budget_reset" && l.createdAt >= yesterday
+        );
         const targetCount = rule.targetCampaignIds?.length ?? 0;
-        if (targetCount > 0 && ruleResetCount === 0) {
+        if (targetCount > 0 && recentResets.length === 0) {
           issues.push(`Ресет "${rule.name}": не выполнен (0/${targetCount})`);
           status = "error";
-        } else if (targetCount > 0 && ruleResetCount < targetCount) {
-          issues.push(`Ресет "${rule.name}": частичный (${ruleResetCount}/${targetCount})`);
-          status = "error";
+        } else if (targetCount > 0 && recentResets.length < targetCount) {
+          issues.push(`Ресет "${rule.name}": частичный (${recentResets.length}/${targetCount})`);
+          if (status === "ok") status = "warning";
         }
       }
     }
@@ -267,7 +279,9 @@ export const checkAccountSync = internalQuery({
         continue;
       }
 
-      if (minutesAgo(acc.lastSyncAt) > 15) {
+      // With batching (40 accounts per 5min cycle), full coverage takes ~20min.
+      // Use 30min threshold to avoid false positives.
+      if (minutesAgo(acc.lastSyncAt) > 30) {
         issues.push(`${label}: lastSync ${minutesAgo(acc.lastSyncAt)} мин назад`);
         if (status === "ok") status = "warning";
       }
