@@ -1182,35 +1182,102 @@ export const getUserByEmailInternal = internalQuery({
 });
 
 // ─── Cleanup stuck pending payments ───
-// Marks payments stuck in "pending" for >4 hours as "failed".
-// bePaid webhook should arrive within minutes; 4h means it never will.
+// Checks bePaid API for actual status of pending payments >4h old.
+// If bePaid says "successful" → process webhook manually.
+// If bePaid says "failed"/"expired"/unknown → mark as failed.
 
 const STUCK_PAYMENT_THRESHOLD_MS = 4 * 60 * 60 * 1000; // 4 hours
+const BEPAID_CHECKOUT_STATUS_URL = "https://checkout.bepaid.by/ctp/api/checkouts";
 
-export const cleanupStuckPayments = internalMutation({
+export const getStuckPendingPayments = internalQuery({
   args: {},
   handler: async (ctx) => {
     const payments = await ctx.db.query("payments").collect();
     const now = Date.now();
-    let cleaned = 0;
-
-    for (const p of payments) {
-      if (
+    return payments.filter(
+      (p) =>
         p.status === "pending" &&
         p.createdAt &&
         now - p.createdAt > STUCK_PAYMENT_THRESHOLD_MS
-      ) {
-        await ctx.db.patch(p._id, {
-          status: "failed",
-          errorMessage: "Webhook от bePaid не получен (таймаут 4ч)",
-          completedAt: now,
-        });
-        cleaned++;
+    );
+  },
+});
+
+export const markPaymentFailed = internalMutation({
+  args: {
+    paymentId: v.id("payments"),
+    errorMessage: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.paymentId, {
+      status: "failed",
+      errorMessage: args.errorMessage,
+      completedAt: Date.now(),
+    });
+  },
+});
+
+export const cleanupStuckPayments = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const stuckPayments = await ctx.runQuery(internal.billing.getStuckPendingPayments, {});
+    if (stuckPayments.length === 0) return;
+
+    const shopId = process.env.BEPAID_SHOP_ID;
+    const secretKey = process.env.BEPAID_SECRET_KEY;
+    const hasCredentials = !!(shopId && secretKey);
+
+    let recovered = 0;
+    let markedFailed = 0;
+
+    for (const payment of stuckPayments) {
+      // Try to check actual status in bePaid
+      if (hasCredentials && payment.token) {
+        try {
+          const resp = await fetch(`${BEPAID_CHECKOUT_STATUS_URL}/${payment.token}`, {
+            headers: {
+              "Authorization": `Basic ${btoa(`${shopId}:${secretKey}`)}`,
+              "Content-Type": "application/json",
+            },
+          });
+
+          if (resp.ok) {
+            const data = await resp.json();
+            const txStatus = data?.checkout?.order?.status;
+            const txUid = data?.checkout?.order?.uid;
+
+            if (txStatus === "successful" && txUid) {
+              // Payment actually succeeded! Process it via webhook handler.
+              await ctx.runMutation(internal.billing.handleBepaidWebhook, {
+                transactionType: "payment",
+                status: "successful",
+                trackingId: payment.orderId,
+                uid: txUid,
+                amount: payment.amount * 100, // webhook expects kopecks
+                currency: payment.currency || "BYN",
+              });
+              recovered++;
+              console.log(`[cleanupStuckPayments] RECOVERED payment ${payment.orderId} — was successful in bePaid`);
+              continue;
+            }
+          }
+        } catch (err) {
+          console.log(`[cleanupStuckPayments] bePaid check failed for ${payment.orderId}: ${err}`);
+        }
       }
+
+      // bePaid says not successful or check failed → mark as failed
+      await ctx.runMutation(internal.billing.markPaymentFailed, {
+        paymentId: payment._id,
+        errorMessage: hasCredentials
+          ? "Платёж не завершён в bePaid (проверено через API)"
+          : "Webhook от bePaid не получен (таймаут 4ч)",
+      });
+      markedFailed++;
     }
 
-    if (cleaned > 0) {
-      console.log(`[cleanupStuckPayments] Marked ${cleaned} stuck payments as failed`);
+    if (recovered > 0 || markedFailed > 0) {
+      console.log(`[cleanupStuckPayments] ${recovered} recovered, ${markedFailed} marked failed`);
     }
   },
 });
