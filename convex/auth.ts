@@ -881,8 +881,9 @@ export const getValidTokenForAccount = internalAction({
 
     // No credentials at all — agency/manual API keys
     if (!clientId && !clientSecret) {
-      // If token has no expiry, treat as non-expiring
-      if (!account.tokenExpiresAt) {
+      // If token has no expiry (undefined/null), treat as non-expiring
+      // tokenExpiresAt=0 means "invalidated", must NOT return here
+      if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
         return account.accessToken;
       }
       // If token is still valid, return it
@@ -931,21 +932,21 @@ export const getValidTokenForAccount = internalAction({
     }
 
     // Has credentials — check if token is still valid
+    // Note: tokenExpiresAt=0 means "invalidated by TOKEN_EXPIRED", NOT "no expiry"
     if (account.tokenExpiresAt && account.tokenExpiresAt > now + BUFFER_MS) {
       return account.accessToken;
     }
 
-    // Token expired or invalidated (tokenExpiresAt=0 after TOKEN_EXPIRED from VK)
-    if (account.tokenExpiresAt !== undefined && account.tokenExpiresAt <= now + BUFFER_MS) {
-      console.log(
-        `[getValidTokenForAccount] «${account.name}» (${args.accountId}): token expired/invalidated (expiresAt=${account.tokenExpiresAt}), starting refresh`
-      );
-    }
-
-    // Token without expiry doesn't expire
-    if (!account.tokenExpiresAt) {
+    // Token without expiry (undefined/null) doesn't expire — return as-is
+    // But tokenExpiresAt=0 is "invalidated", must NOT return here
+    if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
       return account.accessToken;
     }
+
+    // Token expired or invalidated — log and proceed to refresh
+    console.log(
+      `[getValidTokenForAccount] «${account.name}» (${args.accountId}): token expired/invalidated (expiresAt=${account.tokenExpiresAt}), starting refresh`
+    );
 
     // Token expired — try refresh
     // Use account-level refreshToken first, fallback to user-level
