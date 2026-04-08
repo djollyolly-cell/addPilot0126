@@ -2032,3 +2032,73 @@ export const setVitaminCabinetId = mutation({
     });
   },
 });
+
+// TEMP: Audit all account tokens — remove after use
+export const auditTokenHealth = action({
+  args: { adminUserId: v.string() },
+  handler: async (ctx, args): Promise<unknown> => {
+    // Only admin can run this
+    if (args.adminUserId !== "kx7djrrpr67bry6zxehzx0e65x8141ct") {
+      throw new Error("Unauthorized");
+    }
+    const users: unknown = await ctx.runQuery(internal.adAccounts.auditTokenHealthQuery);
+    return users;
+  },
+});
+
+export const auditTokenHealthQuery = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const users = await ctx.db.query("users").collect();
+    const accounts = await ctx.db.query("adAccounts").collect();
+    const now = Date.now();
+
+    const result: {
+      userId: string;
+      userName: string;
+      email: string;
+      vkTokenExpired: boolean;
+      vkAdsTokenExpired: boolean;
+      vkTokenExpiresAt: number | null;
+      vkAdsTokenExpiresAt: number | null;
+      hasVkRefresh: boolean;
+      hasVkAdsRefresh: boolean;
+      accounts: {
+        id: string;
+        name: string;
+        status: string;
+        tokenExpiresAt: number | null;
+        tokenExpired: boolean;
+        hasRefresh: boolean;
+        isAgency: boolean;
+      }[];
+    }[] = [];
+
+    for (const u of users) {
+      const userAccounts = accounts.filter((a) => a.userId === u._id);
+      if (userAccounts.length === 0) continue;
+
+      result.push({
+        userId: u._id,
+        userName: u.name || "",
+        email: u.email || "",
+        vkTokenExpired: !!(u.vkTokenExpiresAt && u.vkTokenExpiresAt < now),
+        vkAdsTokenExpired: !!(u.vkAdsTokenExpiresAt && u.vkAdsTokenExpiresAt < now),
+        vkTokenExpiresAt: u.vkTokenExpiresAt || null,
+        vkAdsTokenExpiresAt: u.vkAdsTokenExpiresAt || null,
+        hasVkRefresh: !!u.vkRefreshToken,
+        hasVkAdsRefresh: !!u.vkAdsRefreshToken,
+        accounts: userAccounts.map((a) => ({
+          id: a._id,
+          name: a.name,
+          status: a.status,
+          tokenExpiresAt: a.tokenExpiresAt || null,
+          tokenExpired: !!(a.tokenExpiresAt && a.tokenExpiresAt < now),
+          hasRefresh: !!a.refreshToken,
+          isAgency: a.vkAccountId.startsWith("agency_"),
+        })),
+      });
+    }
+    return result;
+  },
+});
