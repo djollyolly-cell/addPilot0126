@@ -1527,7 +1527,7 @@ export const getExpiringUserVkTokens = internalQuery({
   args: { threshold: v.number() },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const MAX_EXPIRED_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — refresh token still valid
+    const MAX_EXPIRED_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — try refresh even if old
     const users = await ctx.db.query("users").collect();
     return users.filter(
       (u) =>
