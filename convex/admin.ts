@@ -53,18 +53,13 @@ export const listUsers = query({
           .withIndex("by_userId", (q) => q.eq("userId", user._id))
           .collect();
 
-        const logs = await ctx.db
-          .query("actionLogs")
-          .withIndex("by_userId", (q) => q.eq("userId", user._id))
-          .collect();
-
-        // Last completed payment with promo code
+        // Payments: read all per user (usually < 20 per user, safe)
         const payments = await ctx.db
           .query("payments")
           .withIndex("by_userId", (q) => q.eq("userId", user._id))
           .collect();
-        const lastPayment = payments
-          .filter((p) => p.status === "completed")
+        const completedPayments = payments.filter((p) => p.status === "completed");
+        const lastPayment = completedPayments
           .sort((a, b) => (b.completedAt || b.createdAt) - (a.completedAt || a.createdAt))[0];
 
         return {
@@ -78,12 +73,9 @@ export const listUsers = query({
           createdAt: user.createdAt,
           accountsCount: accounts.length,
           rulesCount: rules.length,
-          logsCount: logs.length,
           lastPromoCode: lastPayment?.promoCode || null,
           lastBonusDays: lastPayment?.bonusDays || null,
-          totalPaid: payments
-            .filter((p) => p.status === "completed")
-            .reduce((sum, p) => sum + (p.amount || 0), 0),
+          totalPaid: completedPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
           referralCode: user.referralCode ?? null,
           referralType: (user.referralType ?? "basic") as string,
           referralDiscount: user.referralDiscount ?? 10,
@@ -135,11 +127,14 @@ export const getStats = query({
     const proCount = users.filter((u) => u.subscriptionTier === "pro").length;
     const withTelegram = users.filter((u) => u.telegramChatId).length;
 
-    // Count users with at least one ad account
+    // Count users with at least one ad account — iterate without collecting all
     const accountUserIds = new Set<string>();
-    const allAccounts = await ctx.db.query("adAccounts").collect();
-    for (const acc of allAccounts) {
-      accountUserIds.add(acc.userId as string);
+    for (const user of users) {
+      const firstAccount = await ctx.db
+        .query("adAccounts")
+        .withIndex("by_userId", (q) => q.eq("userId", user._id))
+        .first();
+      if (firstAccount) accountUserIds.add(user._id as string);
     }
     const withAccounts = accountUserIds.size;
 
