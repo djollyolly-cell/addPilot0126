@@ -1511,6 +1511,18 @@ export const getExpiringUserTokens = internalQuery({
   },
 });
 
+// TEMP: Force proactive refresh from API — remove after use
+export const forceProactiveRefresh = action({
+  args: { adminUserId: v.string() },
+  handler: async (ctx, args): Promise<string> => {
+    if (args.adminUserId !== "kx7djrrpr67bry6zxehzx0e65x8141ct") {
+      throw new Error("Unauthorized");
+    }
+    await ctx.runAction(internal.auth.proactiveTokenRefresh);
+    return "Done";
+  },
+});
+
 export const getExpiringUserVkTokens = internalQuery({
   args: { threshold: v.number() },
   handler: async (ctx, args) => {
