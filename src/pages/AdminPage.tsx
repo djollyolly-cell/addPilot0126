@@ -23,6 +23,9 @@ import {
   Bell,
   X,
   MessageSquare,
+  Activity,
+  Stethoscope,
+  UserCheck,
 } from 'lucide-react';
 import { Label } from '../components/ui/label';
 import { Id } from '../../convex/_generated/dataModel';
@@ -283,6 +286,9 @@ function AdminDashboard() {
 
       {/* User Feedback */}
       <FeedbackListSection />
+
+      {/* Diagnostics */}
+      <DiagnosticSection />
 
       {/* Notification Modal */}
       {notifyUserId && (
@@ -1100,6 +1106,148 @@ function FeedbackThread({
         </Button>
       )}
     </div>
+  );
+}
+
+function DiagnosticSection() {
+  const runSystemCheck = useAction(api.healthCheck.runManualSystemCheck);
+  const runFunctionCheck = useAction(api.healthCheck.runManualFunctionCheck);
+  const runUserCheck = useAction(api.healthCheck.runManualUserCheck);
+  const latestResults = useQuery(api.healthCheck.getLatestResults);
+
+  const [running, setRunning] = useState<string | null>(null);
+  const [selectedUserId, setSelectedUserId] = useState('');
+
+  const handleSystemCheck = async () => {
+    setRunning('system');
+    try {
+      await runSystemCheck({});
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRunning(null);
+    }
+  };
+
+  const handleFunctionCheck = async () => {
+    setRunning('function');
+    try {
+      await runFunctionCheck({});
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRunning(null);
+    }
+  };
+
+  const handleUserCheck = async () => {
+    if (!selectedUserId) return;
+    setRunning('user');
+    try {
+      await runUserCheck({ userId: selectedUserId as Id<"users"> });
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRunning(null);
+    }
+  };
+
+  const statusBadge = (status: string) => {
+    if (status === 'ok') return <Badge variant="success">OK</Badge>;
+    if (status === 'warning') return <Badge variant="warning">Warning</Badge>;
+    return <Badge variant="destructive">Error</Badge>;
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2">
+          <Stethoscope className="w-5 h-5" />
+          Диагностика
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <Button
+            onClick={handleSystemCheck}
+            disabled={running !== null}
+            variant="outline"
+            className="h-auto py-3"
+          >
+            {running === 'system' ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <Activity className="h-4 w-4 mr-2" />
+            )}
+            <div className="text-left">
+              <div className="font-medium">Быстрая проверка</div>
+              <div className="text-xs text-muted-foreground">Цикл 1: 5-15 сек</div>
+            </div>
+          </Button>
+
+          <Button
+            onClick={handleFunctionCheck}
+            disabled={running !== null}
+            variant="outline"
+            className="h-auto py-3"
+          >
+            {running === 'function' ? (
+              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+            ) : (
+              <Stethoscope className="h-4 w-4 mr-2" />
+            )}
+            <div className="text-left">
+              <div className="font-medium">Полная диагностика</div>
+              <div className="text-xs text-muted-foreground">Цикл 2: 30-120 сек</div>
+            </div>
+          </Button>
+
+          <div className="flex gap-2">
+            <Input
+              placeholder="userId..."
+              value={selectedUserId}
+              onChange={(e) => setSelectedUserId(e.target.value)}
+              className="flex-1"
+            />
+            <Button
+              onClick={handleUserCheck}
+              disabled={running !== null || !selectedUserId}
+              variant="outline"
+              size="icon"
+            >
+              {running === 'user' ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <UserCheck className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+        </div>
+
+        {latestResults && latestResults.length > 0 && (
+          <div className="space-y-2 mt-4">
+            <h4 className="text-sm font-medium text-muted-foreground">Последние результаты</h4>
+            {latestResults.slice(0, 10).map((r: any) => (
+              <div key={r._id} className="flex items-center justify-between p-3 rounded-lg border border-border">
+                <div className="flex items-center gap-2">
+                  {statusBadge(r.status)}
+                  <span className="text-sm font-medium capitalize">{r.type}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(r.createdAt).toLocaleString('ru-RU')}
+                  </span>
+                </div>
+                <div className="text-xs text-muted-foreground">
+                  {r.checkedUsers > 0 && `${r.checkedUsers} польз. `}
+                  {r.warnings > 0 && `${r.warnings} warn `}
+                  {r.errors > 0 && `${r.errors} err `}
+                  {Math.round(r.duration / 1000)}сек
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
