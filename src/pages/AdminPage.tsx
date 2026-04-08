@@ -25,7 +25,6 @@ import {
   MessageSquare,
   Activity,
   Stethoscope,
-  UserCheck,
 } from 'lucide-react';
 import { Label } from '../components/ui/label';
 import { Id } from '../../convex/_generated/dataModel';
@@ -87,6 +86,8 @@ function AdminDashboard() {
   const [togglingAdmin, setTogglingAdmin] = useState<string | null>(null);
   const [notifyUserId, setNotifyUserId] = useState<string | null>(null);
   const [expandedReferralUserId, setExpandedReferralUserId] = useState<string | null>(null);
+  const [diagUserId, setDiagUserId] = useState<string | null>(null);
+  const runUserCheck = useAction(api.healthCheck.runManualUserCheck);
   const [notifyTitle, setNotifyTitle] = useState('');
   const [notifyMessage, setNotifyMessage] = useState('');
   const [notifyType, setNotifyType] = useState<'info' | 'warning' | 'payment'>('info');
@@ -530,9 +531,33 @@ function AdminDashboard() {
                             size="sm"
                             className="h-7 w-7 p-0"
                             title="Отправить уведомление"
-                            onClick={() => { setNotifyUserId(u._id); setNotifyResult(null); }}
+                            onClick={(e) => { e.stopPropagation(); setNotifyUserId(u._id); setNotifyResult(null); }}
                           >
                             <Bell className="w-3.5 h-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            title="Диагностика пользователя"
+                            disabled={diagUserId === u._id}
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              setDiagUserId(u._id);
+                              try {
+                                await runUserCheck({ userId: u._id as Id<'users'> });
+                              } catch (err) {
+                                console.error('User diagnostic failed:', err);
+                              } finally {
+                                setDiagUserId(null);
+                              }
+                            }}
+                          >
+                            {diagUserId === u._id ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Stethoscope className="w-3.5 h-3.5" />
+                            )}
                           </Button>
                         </div>
                       </td>
@@ -1112,11 +1137,9 @@ function FeedbackThread({
 function DiagnosticSection() {
   const runSystemCheck = useAction(api.healthCheck.runManualSystemCheck);
   const runFunctionCheck = useAction(api.healthCheck.runManualFunctionCheck);
-  const runUserCheck = useAction(api.healthCheck.runManualUserCheck);
   const latestResults = useQuery(api.healthCheck.getLatestResults);
 
   const [running, setRunning] = useState<string | null>(null);
-  const [selectedUserId, setSelectedUserId] = useState('');
 
   const handleSystemCheck = async () => {
     setRunning('system');
@@ -1140,17 +1163,6 @@ function DiagnosticSection() {
     }
   };
 
-  const handleUserCheck = async () => {
-    if (!selectedUserId) return;
-    setRunning('user');
-    try {
-      await runUserCheck({ userId: selectedUserId as Id<"users"> });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setRunning(null);
-    }
-  };
 
   const statusBadge = (status: string) => {
     if (status === 'ok') return <Badge variant="success">OK</Badge>;
@@ -1202,25 +1214,9 @@ function DiagnosticSection() {
             </div>
           </Button>
 
-          <div className="flex gap-2">
-            <Input
-              placeholder="userId..."
-              value={selectedUserId}
-              onChange={(e) => setSelectedUserId(e.target.value)}
-              className="flex-1"
-            />
-            <Button
-              onClick={handleUserCheck}
-              disabled={running !== null || !selectedUserId}
-              variant="outline"
-              size="icon"
-            >
-              {running === 'user' ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <UserCheck className="h-4 w-4" />
-              )}
-            </Button>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Stethoscope className="h-3.5 w-3.5" />
+            <span>Проверка пользователя — кнопка в строке таблицы</span>
           </div>
         </div>
 
