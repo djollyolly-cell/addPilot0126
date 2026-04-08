@@ -85,7 +85,21 @@ export const resetBudgets = internalAction({
               internal.auth.getValidTokenForAccount,
               { accountId }
             );
-          } catch {
+          } catch (tokenErr) {
+            const accName = await ctx.runQuery(internal.uzBudgetCron.getAccountName, { accountId });
+            console.error(`[uz_budget_reset] Token failed for account "${accName}" (${accountId}): ${tokenErr}`);
+            // Notify user about skipped reset via Telegram
+            try {
+              const chatId = await ctx.runQuery(internal.telegram.getUserChatId, {
+                userId: rule.userId,
+              });
+              if (chatId) {
+                await ctx.runAction(internal.telegram.sendMessage, {
+                  chatId,
+                  text: `⚠️ <b>Ресет не выполнен</b>\n\nКабинет «${accName || accountId}»: ошибка токена.\nБюджеты не сброшены. Переподключите кабинет или обновите токен.`,
+                });
+              }
+            } catch { /* notification best-effort */ }
             continue;
           }
 
@@ -148,6 +162,14 @@ export const resetBudgets = internalAction({
         console.error(`[uz_budget_reset] Error processing rule ${rule._id}:`, err);
       }
     }
+  },
+});
+
+export const getAccountName = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const acc = await ctx.db.get(args.accountId);
+    return acc?.name || null;
   },
 });
 
