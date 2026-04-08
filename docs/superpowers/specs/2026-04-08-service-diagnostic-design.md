@@ -113,6 +113,7 @@ Telegram: только при проблемах (warning/error). Silent when gr
 - clientId == null AND clientSecret == null AND нет user-level credentials (vkAdsClientId/vkAdsClientSecret) -> NO_CREDENTIALS (warning) — refresh невозможен при истечении токена
 - status == "error" и createdAt за последние 24ч -> CONNECT_FAILED (warning): "Кабинет '{name}' не подключился: {lastError}"
 - lastSyncAt == null (ни разу не синхронизировался) -> NEVER_SYNCED (error): подключён но не работает
+- Агентский кабинет (vitaminCabinetId != null) со status="error" и lastError содержит "TOKEN_EXPIRED" -> AGENCY_REFRESH_FAILED (error): "Витамин не обновил токен для '{name}'. Проверить: VITAMIN_API_KEY валиден? vitaminCabinetId корректный? API Витамина доступен? Кабинет в ошибке {N} часов"
 
 Вердикт: "ok: N/N синхронизируются" / "warning: N отстают / N не подключились" / "error: N в ошибке"
 
