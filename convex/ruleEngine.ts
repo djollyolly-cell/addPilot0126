@@ -1720,8 +1720,15 @@ export const checkUzBudgetRules = internalAction({
               internal.auth.getValidTokenForAccount,
               { accountId: accountId as Id<"adAccounts"> }
             );
-          } catch {
-            console.error(`[uz_budget] Cannot get token for account ${accountId}`);
+          } catch (tokenErr) {
+            const tokenMsg = tokenErr instanceof Error ? tokenErr.message : String(tokenErr);
+            console.error(`[uz_budget] Cannot get token for account ${accountId}: ${tokenMsg}`);
+            // Invalidate tokenExpiresAt so next cycle triggers refresh
+            if (tokenMsg.includes("TOKEN_EXPIRED")) {
+              await ctx.runMutation(internal.adAccounts.invalidateAccountToken, {
+                accountId: accountId as Id<"adAccounts">,
+              });
+            }
             skipped.tokenErr++;
             return;
           }

@@ -935,6 +935,13 @@ export const getValidTokenForAccount = internalAction({
       return account.accessToken;
     }
 
+    // Token expired or invalidated (tokenExpiresAt=0 after TOKEN_EXPIRED from VK)
+    if (account.tokenExpiresAt !== undefined && account.tokenExpiresAt <= now + BUFFER_MS) {
+      console.log(
+        `[getValidTokenForAccount] «${account.name}» (${args.accountId}): token expired/invalidated (expiresAt=${account.tokenExpiresAt}), starting refresh`
+      );
+    }
+
     // Token without expiry doesn't expire
     if (!account.tokenExpiresAt) {
       return account.accessToken;
@@ -1021,8 +1028,15 @@ export const getValidTokenForAccount = internalAction({
         );
       }
 
+      console.log(
+        `[getValidTokenForAccount] «${account.name}» (${args.accountId}): ✅ token refreshed via refresh_token, new expiresIn=${refreshed.expiresIn}s`
+      );
       return refreshed.accessToken;
     } catch (err) {
+      const refreshMsg = err instanceof Error ? err.message : String(err);
+      console.log(
+        `[getValidTokenForAccount] «${account.name}» (${args.accountId}): refresh_token failed: ${refreshMsg}, trying fallbacks...`
+      );
       // Refresh failed — try agency_client_credentials as last resort
       const agencyToken = await tryAgencyFallback();
       if (agencyToken) return agencyToken;
@@ -1527,7 +1541,7 @@ export const getExpiringUserVkTokens = internalQuery({
   args: { threshold: v.number() },
   handler: async (ctx, args) => {
     const now = Date.now();
-    const MAX_EXPIRED_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — try refresh even if old
+    const MAX_EXPIRED_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — VK refresh tokens may be valid longer
     const users = await ctx.db.query("users").collect();
     return users.filter(
       (u) =>

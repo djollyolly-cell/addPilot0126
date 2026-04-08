@@ -286,6 +286,13 @@ export const syncAll = internalAction({
           status: "error",
           lastError: `Sync failed: ${msg}`,
         });
+
+        // If TOKEN_EXPIRED — invalidate tokenExpiresAt so next call triggers refresh
+        if (msg.includes("TOKEN_EXPIRED")) {
+          await ctx.runMutation(internal.adAccounts.invalidateAccountToken, {
+            accountId: account._id,
+          });
+        }
       }
     }
 

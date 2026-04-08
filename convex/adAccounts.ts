@@ -957,6 +957,26 @@ export const listAds = query({
   },
 });
 
+/**
+ * Сброс tokenExpiresAt при реальном TOKEN_EXPIRED от VK API (401).
+ * После сброса getValidTokenForAccount запустит полный цикл рефреша
+ * (refresh_token → agency_client_credentials → Vitamin API fallback).
+ * Не затрагивает работающие кабинеты — вызывается ТОЛЬКО после 401.
+ */
+export const invalidateAccountToken = internalMutation({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return;
+    await ctx.db.patch(args.accountId, {
+      tokenExpiresAt: 0,
+    });
+    console.log(
+      `[invalidateAccountToken] «${account.name}» (${args.accountId}): tokenExpiresAt reset to 0, next call will trigger refresh`
+    );
+  },
+});
+
 // Update account status
 export const updateStatus = mutation({
   args: {
