@@ -1743,6 +1743,37 @@ export const checkAgencyTokenHealth = internalAction({
             console.log(`[tokenHealth] ${acc.name}: restored to active`);
           }
         } else if (resp.status === 401 || resp.status === 403) {
+          // Try proactive refresh before marking as error
+          let refreshed = false;
+          try {
+            const newToken = await ctx.runAction(
+              internal.auth.getValidTokenForAccount,
+              { accountId: acc._id }
+            );
+            if (newToken) {
+              // Verify the new token works
+              const verifyResp = await fetch(`https://target.my.com/api/v2/user.json`, {
+                headers: { Authorization: `Bearer ${newToken}` },
+              });
+              if (verifyResp.ok) {
+                refreshed = true;
+                healthy++;
+                if (acc.status === "error") {
+                  await ctx.runMutation(internal.adAccounts.updateAccountHealth, {
+                    accountId: acc._id,
+                    status: "active",
+                    lastError: undefined,
+                  });
+                }
+                console.log(`[tokenHealth] ${acc.name}: auto-refreshed successfully`);
+              }
+            }
+          } catch (refreshErr) {
+            console.log(`[tokenHealth] ${acc.name}: auto-refresh failed: ${refreshErr}`);
+          }
+
+          if (refreshed) continue;
+
           failed++;
           const wasAlreadyError = acc.status === "error";
 

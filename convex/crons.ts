@@ -116,4 +116,18 @@ crons.cron(
   internal.healthCheck.runFunctionCheck
 );
 
+// Proactive token refresh — every 4 hours, refreshes tokens expiring within 12h
+crons.interval(
+  "proactive-token-refresh",
+  { hours: 4 },
+  internal.auth.proactiveTokenRefresh
+);
+
+// Cleanup stuck pending payments — every 2 hours
+crons.interval(
+  "cleanup-stuck-payments",
+  { hours: 2 },
+  internal.billing.cleanupStuckPayments
+);
+
 export default crons;

@@ -1416,3 +1416,82 @@ export const setAdvertiserIdForUser = internalMutation({
     }
   },
 });
+
+// ─── Proactive Token Refresh ───
+// Cron: refreshes tokens expiring within 12h BEFORE they actually expire.
+// Covers both user-level VK Ads tokens and per-account tokens.
+
+const PROACTIVE_REFRESH_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
+
+export const proactiveTokenRefresh = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    const now = Date.now();
+    const threshold = now + PROACTIVE_REFRESH_WINDOW_MS;
+    let refreshed = 0;
+    let failed = 0;
+
+    // 1. Per-account tokens
+    const accounts = await ctx.runQuery(internal.auth.getExpiringAccounts, { threshold });
+    for (const acc of accounts) {
+      try {
+        await ctx.runAction(internal.auth.getValidTokenForAccount, {
+          accountId: acc._id,
+        });
+        refreshed++;
+        console.log(`[proactiveRefresh] Account "${acc.name}": refreshed`);
+      } catch (err) {
+        failed++;
+        console.log(`[proactiveRefresh] Account "${acc.name}": failed — ${err}`);
+      }
+    }
+
+    // 2. User-level VK Ads tokens
+    const users = await ctx.runQuery(internal.auth.getExpiringUserTokens, { threshold });
+    for (const user of users) {
+      try {
+        await ctx.runAction(internal.auth.getValidVkAdsToken, {
+          userId: user._id,
+        });
+        refreshed++;
+        console.log(`[proactiveRefresh] User "${user.name || user.email}": VK Ads token refreshed`);
+      } catch (err) {
+        failed++;
+        console.log(`[proactiveRefresh] User "${user.name || user.email}": VK Ads refresh failed — ${err}`);
+      }
+    }
+
+    if (refreshed > 0 || failed > 0) {
+      console.log(`[proactiveRefresh] Done: ${refreshed} refreshed, ${failed} failed`);
+    }
+  },
+});
+
+export const getExpiringAccounts = internalQuery({
+  args: { threshold: v.number() },
+  handler: async (ctx, args) => {
+    const accounts = await ctx.db.query("adAccounts").collect();
+    return accounts.filter(
+      (a) =>
+        (a.status === "active" || a.status === "error") &&
+        a.tokenExpiresAt &&
+        a.tokenExpiresAt > Date.now() && // not yet expired
+        a.tokenExpiresAt < args.threshold // but will expire within window
+    );
+  },
+});
+
+export const getExpiringUserTokens = internalQuery({
+  args: { threshold: v.number() },
+  handler: async (ctx, args) => {
+    const users = await ctx.db.query("users").collect();
+    return users.filter(
+      (u) =>
+        u.vkAdsAccessToken &&
+        u.vkAdsTokenExpiresAt &&
+        u.vkAdsTokenExpiresAt > Date.now() && // not yet expired
+        u.vkAdsTokenExpiresAt < args.threshold && // but will expire within window
+        u.vkAdsRefreshToken // has refresh token to use
+    );
+  },
+});

@@ -1180,3 +1180,37 @@ export const getUserByEmailInternal = internalQuery({
       .first();
   },
 });
+
+// ─── Cleanup stuck pending payments ───
+// Marks payments stuck in "pending" for >4 hours as "failed".
+// bePaid webhook should arrive within minutes; 4h means it never will.
+
+const STUCK_PAYMENT_THRESHOLD_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+export const cleanupStuckPayments = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const payments = await ctx.db.query("payments").collect();
+    const now = Date.now();
+    let cleaned = 0;
+
+    for (const p of payments) {
+      if (
+        p.status === "pending" &&
+        p.createdAt &&
+        now - p.createdAt > STUCK_PAYMENT_THRESHOLD_MS
+      ) {
+        await ctx.db.patch(p._id, {
+          status: "failed",
+          errorMessage: "Webhook от bePaid не получен (таймаут 4ч)",
+          completedAt: now,
+        });
+        cleaned++;
+      }
+    }
+
+    if (cleaned > 0) {
+      console.log(`[cleanupStuckPayments] Marked ${cleaned} stuck payments as failed`);
+    }
+  },
+});
