@@ -269,7 +269,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
                   <span className="text-2xl">🇷🇺</span>
                   <div>
                     <p className="font-medium">Россия</p>
-                    <p className="text-sm text-muted-foreground">Российская карта</p>
+                    <p className="text-sm text-muted-foreground">Карты МИР и другие</p>
                   </div>
                 </div>
                 <div className="text-right">
@@ -607,7 +607,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
           </div>
 
           <div className="p-3 bg-blue-500/10 text-blue-700 dark:text-blue-400 rounded-lg text-sm">
-            <p>Оплата проходит через платёжную систему bePaid.</p>
+            <p>Оплата проходит через платёжную систему bePaid. Принимаются карты МИР.</p>
             <p className="mt-1">Сумма к оплате: <strong>{finalAmountBYN} BYN</strong> (≈ {priceRUB} ₽ по курсу НБРБ)</p>
           </div>
 

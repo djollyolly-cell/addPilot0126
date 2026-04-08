@@ -302,6 +302,9 @@ function ProfileTab({ user }: { user: NonNullable<ReturnType<typeof useAuth>['us
                   Изменить тариф
                 </button>
               )}
+              <p className="text-xs text-muted-foreground text-center pt-1">
+                🇷🇺 Доступна оплата картами МИР
+              </p>
             </div>
           </CardContent>
         </Card>

@@ -469,6 +469,12 @@ function PricingSection() {
             </div>
           ))}
         </div>
+
+        <div className="mt-10 max-w-2xl mx-auto p-4 rounded-2xl bg-blue-50 border border-blue-200 text-center">
+          <p className="text-sm text-blue-800">
+            🇷🇺 Для пользователей из России доступна оплата картами МИР
+          </p>
+        </div>
       </div>
     </section>
   );

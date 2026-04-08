@@ -219,7 +219,13 @@ export function PricingPage() {
         })}
       </div>
 
-      <div className="mt-12 text-center text-sm text-muted-foreground">
+      <div className="mt-8 max-w-2xl mx-auto p-4 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-center">
+        <p className="text-sm text-blue-800 dark:text-blue-200">
+          🇷🇺 Для пользователей из России доступна оплата картами МИР
+        </p>
+      </div>
+
+      <div className="mt-6 text-center text-sm text-muted-foreground">
         <p>Отмена подписки в любой момент.</p>
         <p className="mt-2">Вопросы? Напишите нам в Telegram: @Addpilot_bot</p>
       </div>
