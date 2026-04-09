@@ -1379,6 +1379,32 @@ export const resumeCampaign = internalAction({
   },
 });
 
+/** Verify campaign budget/status after update — read back from VK API */
+export const verifyCampaignState = internalAction({
+  args: {
+    accessToken: v.string(),
+    campaignId: v.number(),
+  },
+  handler: async (_, args): Promise<{ budget: number; status: string; delivery: string } | null> => {
+    try {
+      const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
+        "campaigns.json",
+        args.accessToken,
+        { _id: String(args.campaignId), fields: "id,status,budget_limit_day,delivery" }
+      );
+      const camp = data.items?.[0];
+      if (!camp) return null;
+      return {
+        budget: Number(camp.budget_limit_day || 0),
+        status: camp.status || "unknown",
+        delivery: (camp as unknown as { delivery?: string }).delivery || "unknown",
+      };
+    } catch {
+      return null;
+    }
+  },
+});
+
 /** Get active accounts for a user (used by fetchUzCampaigns) */
 export const getActiveAccountsForUser = internalQuery({
   args: { userId: v.id("users") },

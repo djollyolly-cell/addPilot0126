@@ -1839,6 +1839,22 @@ export const checkUzBudgetRules = internalAction({
                     }
                   }
 
+                  // Verify: read back actual budget from VK API
+                  // If VK didn't apply the change, log as failed so dedup allows retry
+                  let verifyFailed = false;
+                  try {
+                    const actual = await ctx.runAction(internal.vkApi.verifyCampaignState, {
+                      accessToken,
+                      campaignId: campaign.id,
+                    });
+                    if (actual && actual.budget < newLimit) {
+                      console.warn(`[uz_budget] VERIFY FAILED: campaign ${campaign.id} budget=${actual.budget} (expected ${newLimit}), status=${actual.status}`);
+                      verifyFailed = true;
+                    }
+                  } catch {
+                    // Verification failed — don't block, log as success
+                  }
+
                   await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
                     userId: rule.userId,
                     ruleId: rule._id,
@@ -1850,6 +1866,7 @@ export const checkUzBudgetRules = internalAction({
                     newBudget: newLimit,
                     step: newLimit - dailyLimitRubles,
                     spentToday,
+                    ...(verifyFailed ? { error: `VK не применил изменение бюджета` } : {}),
                   });
 
                   if (rule.actions.notifyOnEveryIncrease ||
