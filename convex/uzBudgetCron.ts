@@ -64,10 +64,11 @@ export const resetBudgets = internalAction({
         if (hour !== 0) continue;
 
         // Compute start/end of current calendar day in user's timezone.
-        // At hour=0, minute=M: we are M minutes into the new day.
-        // dayStartUtc = now minus M minutes = midnight in user's tz (in UTC ms).
+        // At hour=0, minute=M, second=S: we are M*60+S seconds into the new day.
+        // dayStartUtc = now minus elapsed seconds = midnight in user's tz (in UTC ms).
         const minutePart = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
-        const dayStartUtc = now.getTime() - minutePart * 60 * 1000;
+        const secondsPart = now.getSeconds();
+        const dayStartUtc = now.getTime() - (minutePart * 60 + secondsPart) * 1000;
         const dayEndUtc = dayStartUtc + 24 * 60 * 60 * 1000;
         const alreadyReset = await ctx.runQuery(
           internal.uzBudgetCron.hasResetToday,

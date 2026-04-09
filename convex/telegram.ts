@@ -734,6 +734,43 @@ export const handleWebhook = internalAction({
       return { ok: true };
     }
 
+    // ── Forward non-text private messages (photos, voice, stickers) to support ──
+    if (!update.message?.text && update.message?.chat?.type === "private") {
+      const chatId = String(update.message.chat.id);
+      const supportGroupId = process.env.SUPPORT_GROUP_CHAT_ID;
+      const supportTopicId = process.env.SUPPORT_TOPIC_ID;
+      if (supportGroupId && supportTopicId) {
+        try {
+          const forwardedId = await ctx.runAction(
+            internal.telegram.forwardToSupport,
+            { fromChatId: chatId, messageId: update.message.message_id }
+          );
+          if (forwardedId) {
+            const fromUser = update.message.from;
+            const userName = [fromUser?.first_name, fromUser?.last_name].filter(Boolean).join(" ")
+              + (fromUser?.username ? ` (@${fromUser.username})` : "");
+            await ctx.runMutation(internal.telegram.saveSupportMapping, {
+              forwardedMessageId: forwardedId,
+              originalChatId: chatId,
+              originalMessageId: update.message.message_id,
+              userName: userName || undefined,
+            });
+          }
+          await ctx.runAction(internal.telegram.sendMessage, {
+            chatId,
+            text: "✉️ Сообщение передано администратору. Ожидайте ответа.",
+          });
+        } catch (err) {
+          console.error("[telegram] Failed to forward non-text to support:", err);
+          await ctx.runAction(internal.telegram.sendMessage, {
+            chatId,
+            text: "⚠️ Не удалось переслать сообщение. Попробуйте позже или напишите текстом.",
+          }).catch(() => {});
+        }
+      }
+      return { ok: true };
+    }
+
     // ── Handle text messages ──
     if (!update.message?.text) return { ok: true };
 
@@ -817,6 +854,10 @@ export const handleWebhook = internalAction({
         });
       } catch (err) {
         console.error("[telegram] Failed to forward to support:", err);
+        await ctx.runAction(internal.telegram.sendMessage, {
+          chatId,
+          text: "⚠️ Не удалось переслать сообщение. Попробуйте позже.",
+        }).catch(() => {});
       }
       return { ok: true, action: "forwarded_to_support" };
     }

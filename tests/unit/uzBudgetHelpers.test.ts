@@ -157,32 +157,44 @@ describe("filterCampaignsForRule", () => {
 // ═══════════════════════════════════════════════════════════
 
 describe("shouldTriggerBudgetIncrease", () => {
-  it("triggers when delivery paused and spent >= 90%", () => {
-    expect(shouldTriggerBudgetIncrease("not_delivering", "active", 95, 100)).toBe(true);
+  // New logic: triggers when spent >= limit - budgetStep (default step=1)
+  // Threshold for limit=100, step=1 is 99
+
+  it("triggers when spent reaches limit - step", () => {
+    expect(shouldTriggerBudgetIncrease("not_delivering", "active", 99, 100, 1)).toBe(true);
   });
 
-  it("triggers when blocked and spent >= 90%", () => {
-    expect(shouldTriggerBudgetIncrease("delivering", "blocked", 91, 100)).toBe(true);
+  it("triggers when spent equals limit", () => {
+    expect(shouldTriggerBudgetIncrease("delivering", "blocked", 100, 100, 1)).toBe(true);
   });
 
-  it("triggers proactively when still delivering and spent >= 90%", () => {
-    expect(shouldTriggerBudgetIncrease("delivering", "active", 100, 100)).toBe(true);
+  it("triggers when spent exceeds limit", () => {
+    expect(shouldTriggerBudgetIncrease("delivering", "active", 105, 100, 1)).toBe(true);
   });
 
-  it("does not trigger when spent < 90%", () => {
-    expect(shouldTriggerBudgetIncrease("not_delivering", "active", 80, 100)).toBe(false);
+  it("does not trigger when spent below threshold", () => {
+    expect(shouldTriggerBudgetIncrease("not_delivering", "active", 98, 100, 1)).toBe(false);
   });
 
-  it("triggers at exact 90%", () => {
-    expect(shouldTriggerBudgetIncrease("not_delivering", "active", 90, 100)).toBe(true);
+  it("uses default budgetStep=1 when not provided", () => {
+    expect(shouldTriggerBudgetIncrease("not_delivering", "active", 99, 100)).toBe(true);
+    expect(shouldTriggerBudgetIncrease("not_delivering", "active", 98, 100)).toBe(false);
   });
 
-  it("triggers with undefined delivery when spent >= 90%", () => {
-    expect(shouldTriggerBudgetIncrease(undefined, "active", 95, 100)).toBe(true);
+  it("works with larger budgetStep", () => {
+    // step=10, limit=100 → threshold=90
+    expect(shouldTriggerBudgetIncrease(undefined, "active", 90, 100, 10)).toBe(true);
+    expect(shouldTriggerBudgetIncrease(undefined, "active", 89, 100, 10)).toBe(false);
   });
 
-  it("does not trigger when spent < 90% even if paused", () => {
-    expect(shouldTriggerBudgetIncrease("not_delivering", "blocked", 50, 100)).toBe(false);
+  it("does not trigger when spent is zero", () => {
+    expect(shouldTriggerBudgetIncrease("not_delivering", "blocked", 0, 100, 1)).toBe(false);
+  });
+
+  it("handles budgetStep >= limit (triggers if spent > 0)", () => {
+    // step=100, limit=100 → guard: triggers if spent > 0
+    expect(shouldTriggerBudgetIncrease("active", "active", 1, 100, 100)).toBe(true);
+    expect(shouldTriggerBudgetIncrease("active", "active", 0, 100, 100)).toBe(false);
   });
 });
 

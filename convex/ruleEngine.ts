@@ -1517,9 +1517,27 @@ export const hasRecentBudgetIncrease = internalQuery({
   },
   handler: async (ctx, args) => {
     // Find the most recent successful budget increase for this campaign today
-    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
-    const mskMidnight = new Date(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate());
-    const dayStartUtc = mskMidnight.getTime() - 3 * 60 * 60 * 1000;
+    // Use rule owner's timezone (consistent with resetBudgets)
+    const rule = await ctx.db.get(args.ruleId);
+    let tz = "Europe/Moscow";
+    if (rule) {
+      const settings = await ctx.db
+        .query("userSettings")
+        .withIndex("by_userId", (q) => q.eq("userId", rule.userId))
+        .first();
+      if (settings?.timezone) tz = settings.timezone;
+    }
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "numeric", minute: "numeric",
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(now);
+    const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
+    const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
+    const minutesSinceMidnight = hour * 60 + minute;
+    const dayStartUtc = now.getTime() - (minutesSinceMidnight * 60 + now.getSeconds()) * 1000;
 
     const logs = await ctx.db
       .query("actionLogs")
@@ -1557,17 +1575,34 @@ export const hasRecentBudgetIncrease = internalQuery({
 });
 
 /** Check if this is the first budget increase today for a campaign.
- *  Uses Moscow time (UTC+3) to match VK daily cycle. */
+ *  Uses rule owner's timezone (consistent with resetBudgets). */
 export const isFirstBudgetIncreaseToday = internalQuery({
   args: {
     ruleId: v.id("rules"),
     campaignId: v.string(),
   },
   handler: async (ctx, args) => {
-    // Moscow midnight (UTC+3) in UTC ms
-    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
-    const mskMidnight = new Date(msk.getUTCFullYear(), msk.getUTCMonth(), msk.getUTCDate());
-    const dayStartUtc = mskMidnight.getTime() - 3 * 60 * 60 * 1000;
+    // Use rule owner's timezone
+    const rule = await ctx.db.get(args.ruleId);
+    let tz = "Europe/Moscow";
+    if (rule) {
+      const settings = await ctx.db
+        .query("userSettings")
+        .withIndex("by_userId", (q) => q.eq("userId", rule.userId))
+        .first();
+      if (settings?.timezone) tz = settings.timezone;
+    }
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "numeric", minute: "numeric",
+      hour12: false,
+    });
+    const parts = formatter.formatToParts(now);
+    const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
+    const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
+    const minutesSinceMidnight = hour * 60 + minute;
+    const dayStartUtc = now.getTime() - (minutesSinceMidnight * 60 + now.getSeconds()) * 1000;
     const logs = await ctx.db
       .query("actionLogs")
       .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))

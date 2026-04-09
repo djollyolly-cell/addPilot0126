@@ -113,6 +113,8 @@ export function shouldTriggerBudgetIncrease(
   dailyLimitRubles: number,
   budgetStep: number = 1
 ): boolean {
+  // Guard: if step >= limit, threshold would be ≤0 — always trigger
+  if (budgetStep >= dailyLimitRubles) return spentToday > 0;
   // Trigger when spent is within one step of the limit
   return spentToday >= dailyLimitRubles - budgetStep;
 }
