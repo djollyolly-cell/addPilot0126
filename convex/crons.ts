@@ -109,6 +109,13 @@ crons.cron(
   internal.healthCheck.runSystemCheck
 );
 
+// Budget health check — every 6 hours, offset 30 min from system check
+crons.cron(
+  "budget-health-check",
+  "30 0,6,12,18 * * *",
+  internal.budgetHealthCheck.runBudgetHealthCheck
+);
+
 // Function verification — every 12 hours (03:00 and 15:00 UTC)
 crons.cron(
   "function-verification",
