@@ -21,9 +21,10 @@ interface UzRule {
 /**
  * Крон сброса бюджета.
  * Запускается каждые 30 минут, проверяет timezone пользователя,
- * и сбрасывает бюджет в окне 23:00-00:00 текущих суток (timezone пользователя).
- * Окно 23:00-00:00 даёт 2 попытки (крон каждые 30 мин) и гарантирует,
- * что бюджеты сброшены ДО начала нового дня.
+ * и сбрасывает бюджет в окне 00:00-00:59 нового дня (timezone пользователя).
+ * Окно 00:00-00:59 даёт 2 попытки (крон каждые 30 мин).
+ * Сброс в 00:00 безопасен: VK API возвращает spent=0 за новый день,
+ * поэтому checkUzBudgetRules (catch-up) не откатит сброс.
  */
 export const resetBudgets = internalAction({
   args: {},
@@ -44,8 +45,8 @@ export const resetBudgets = internalAction({
         });
         const tz = settings?.timezone || "Europe/Moscow";
 
-        // Check: is it 23:00-23:59 in user's timezone?
-        // Reset happens at end of day (23:00) so budgets are ready before midnight.
+        // Check: is it 00:00-00:59 in user's timezone?
+        // Reset at start of new day: VK daily spent = 0, so catch-up won't undo it.
         // Use Intl.DateTimeFormat.formatToParts() — reliable on Convex runtime
         const now = new Date();
         const formatter = new Intl.DateTimeFormat("en-US", {
@@ -56,17 +57,17 @@ export const resetBudgets = internalAction({
         });
         const parts = formatter.formatToParts(now);
         const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "-1", 10);
-        const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "-1", 10);
 
-        console.log(`[uz_budget_reset] Rule ${rule._id}: tz=${tz}, hour=${hour}, minute=${minute}`);
+        console.log(`[uz_budget_reset] Rule ${rule._id}: tz=${tz}, hour=${hour}`);
 
-        // Cron runs every 30 min → catch window 23:00-23:59 (2 attempts)
-        if (hour !== 23) continue;
+        // Cron runs every 30 min → catch window 00:00-00:59 (2 attempts)
+        if (hour !== 0) continue;
 
-        // Check if already reset today (use 23:00 as anchor — covers today's reset)
-        // dayStartUtc = start of current calendar day in user's tz
-        const minutesSinceMidnight = hour * 60 + minute;
-        const dayStartUtc = now.getTime() - minutesSinceMidnight * 60 * 1000;
+        // Compute start/end of current calendar day in user's timezone.
+        // At hour=0, minute=M: we are M minutes into the new day.
+        // dayStartUtc = now minus M minutes = midnight in user's tz (in UTC ms).
+        const minutePart = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
+        const dayStartUtc = now.getTime() - minutePart * 60 * 1000;
         const dayEndUtc = dayStartUtc + 24 * 60 * 60 * 1000;
         const alreadyReset = await ctx.runQuery(
           internal.uzBudgetCron.hasResetToday,
