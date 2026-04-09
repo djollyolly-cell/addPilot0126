@@ -532,6 +532,59 @@ export const getCampaignSpentToday = internalAction({
   },
 });
 
+/**
+ * Batch version: fetch spent today for multiple campaigns in one API call.
+ * VK statistics API accepts comma-separated IDs.
+ * Chunks into groups of 200 to avoid URL length limits.
+ * Returns Map<campaignId, spentRubles>.
+ */
+export const getCampaignsSpentTodayBatch = internalAction({
+  args: {
+    accessToken: v.string(),
+    campaignIds: v.array(v.string()),
+  },
+  handler: async (_, args): Promise<Record<string, number>> => {
+    if (args.campaignIds.length === 0) return {};
+
+    const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
+    const today = msk.toISOString().slice(0, 10);
+    const result: Record<string, number> = {};
+
+    // Chunk IDs (200 per request to stay within URL limits)
+    const CHUNK_SIZE = 200;
+    for (let i = 0; i < args.campaignIds.length; i += CHUNK_SIZE) {
+      const chunk = args.campaignIds.slice(i, i + CHUNK_SIZE);
+      const idsStr = chunk.join(",");
+
+      try {
+        const data = await callMtApi<{ items: MtStatItem[]; total: MtStatRow | null }>(
+          "statistics/campaigns/day.json",
+          args.accessToken,
+          {
+            id: idsStr,
+            date_from: today,
+            date_to: today,
+            metrics: "base",
+          }
+        );
+
+        for (const item of data.items || []) {
+          let totalSpent = 0;
+          for (const row of item.rows || []) {
+            totalSpent += parseFloat(row.base?.spent || "0");
+          }
+          result[String(item.id)] = totalSpent;
+        }
+      } catch (err) {
+        console.error(`[vkApi] getCampaignsSpentTodayBatch failed for chunk starting at ${i}:`, err);
+        // On error, campaigns in this chunk get 0 (not in result map)
+      }
+    }
+
+    return result;
+  },
+});
+
 // Get banner statistics WITH video metrics (started, viewed 25/50/75/100%)
 // myTarget API v2: metrics=base,video returns video completion data
 // Verified: API returns video.started, video.viewed_25_percent, etc.

@@ -97,19 +97,18 @@ export function filterCampaignsForRule(
 }
 
 /**
- * Check if campaign budget is exhausted and should be increased.
- * Matches original logic: (delivery paused OR blocked) AND spent >= 90% of budget.
+ * Check if campaign budget should be increased.
+ * Proactive: triggers at 90% spent regardless of delivery status,
+ * so budget is added BEFORE VK stops the group.
+ * Resume logic (ruleEngine.ts) handles already-stopped groups separately.
  */
 export function shouldTriggerBudgetIncrease(
-  delivery: string | undefined,
-  status: string,
+  _delivery: string | undefined,
+  _status: string,
   spentToday: number,
   dailyLimitRubles: number
 ): boolean {
-  const isDeliveryPaused = delivery === "not_delivering";
-  const isBlocked = status === "blocked";
-  const isSpentNearLimit = spentToday >= dailyLimitRubles * 0.90;
-  return (isDeliveryPaused || isBlocked) && isSpentNearLimit;
+  return spentToday >= dailyLimitRubles * 0.90;
 }
 
 /**

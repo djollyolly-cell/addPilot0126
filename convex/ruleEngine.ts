@@ -1753,28 +1753,30 @@ export const checkUzBudgetRules = internalAction({
             for (const c of matched) allMatchedCampaignIds.add(String(c.id));
           }
 
-          // 4. Fetch spent ONCE per matched campaign (not per rule)
-          // Only fetch for not_delivering/blocked campaigns — skip delivering ones
-          const spentCache = new Map<string, number>();
+          // 4. Fetch spent for ALL matched campaigns in one batch API call
+          // Proactive: check spent for every campaign (not just paused/blocked)
+          // so we can increase budget BEFORE VK stops the group
+          const eligibleIds: string[] = [];
           for (const cid of allMatchedCampaignIds) {
             const camp = campaigns.find((c) => String(c.id) === cid);
             if (!camp) continue;
-            const dailyLimit = Number(camp.budget_limit_day || "0");
-            if (dailyLimit <= 0) continue;
+            if (Number(camp.budget_limit_day || "0") <= 0) continue;
             if (camp.status === "deleted") continue;
+            eligibleIds.push(cid);
+          }
 
-            const isDeliveryPaused = camp.delivery === "not_delivering";
-            const isBlocked = camp.status === "blocked";
-            if (!isDeliveryPaused && !isBlocked) continue;
-
+          const spentCache = new Map<string, number>();
+          if (eligibleIds.length > 0) {
             try {
-              const spent = await ctx.runAction(
-                internal.vkApi.getCampaignSpentToday,
-                { accessToken, campaignId: cid }
-              );
-              spentCache.set(cid, spent);
-            } catch {
-              console.error(`[uz_budget] Failed to get spent for campaign ${cid}`);
+              const batchResult = await ctx.runAction(
+                internal.vkApi.getCampaignsSpentTodayBatch,
+                { accessToken, campaignIds: eligibleIds }
+              ) as Record<string, number>;
+              for (const [cid, spent] of Object.entries(batchResult)) {
+                spentCache.set(cid, spent);
+              }
+            } catch (err) {
+              console.error(`[uz_budget] Batch spent fetch failed for account ${accountId}:`, err);
             }
           }
 

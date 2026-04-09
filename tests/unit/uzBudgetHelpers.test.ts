@@ -165,8 +165,8 @@ describe("shouldTriggerBudgetIncrease", () => {
     expect(shouldTriggerBudgetIncrease("delivering", "blocked", 91, 100)).toBe(true);
   });
 
-  it("does not trigger when still delivering", () => {
-    expect(shouldTriggerBudgetIncrease("delivering", "active", 100, 100)).toBe(false);
+  it("triggers proactively when still delivering and spent >= 90%", () => {
+    expect(shouldTriggerBudgetIncrease("delivering", "active", 100, 100)).toBe(true);
   });
 
   it("does not trigger when spent < 90%", () => {
@@ -177,8 +177,12 @@ describe("shouldTriggerBudgetIncrease", () => {
     expect(shouldTriggerBudgetIncrease("not_delivering", "active", 90, 100)).toBe(true);
   });
 
-  it("does not trigger with undefined delivery and active status", () => {
-    expect(shouldTriggerBudgetIncrease(undefined, "active", 95, 100)).toBe(false);
+  it("triggers with undefined delivery when spent >= 90%", () => {
+    expect(shouldTriggerBudgetIncrease(undefined, "active", 95, 100)).toBe(true);
+  });
+
+  it("does not trigger when spent < 90% even if paused", () => {
+    expect(shouldTriggerBudgetIncrease("not_delivering", "blocked", 50, 100)).toBe(false);
   });
 });
 
