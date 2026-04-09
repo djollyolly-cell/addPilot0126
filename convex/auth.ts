@@ -559,7 +559,8 @@ export const refreshVkAdsToken = internalAction({
     const data = await response.json();
 
     if (data.error) {
-      throw new Error(data.error_description || data.error || "Не удалось обновить токен VK Ads");
+      const desc = data.error_description ? `${data.error}: ${data.error_description}` : data.error;
+      throw new Error(desc || "Не удалось обновить токен VK Ads");
     }
 
     await ctx.runMutation(internal.users.updateVkAdsTokens, {
@@ -615,8 +616,9 @@ export const getValidVkAdsToken = internalAction({
         refreshToken: tokens.refreshToken,
       });
       return refreshed.accessToken;
-    } catch {
-      throw new Error("Не удалось обновить токен VK Ads. Подключите VK Ads заново.");
+    } catch (refreshErr) {
+      const detail = refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
+      throw new Error(`Не удалось обновить токен VK Ads: ${detail}`);
     }
   },
 });
@@ -1438,6 +1440,16 @@ export const setAdvertiserIdForUser = internalMutation({
 
 const PROACTIVE_REFRESH_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
 
+const ADMIN_CHAT_ID = "325307765";
+
+// Unrecoverable VK API errors — no point retrying
+const UNRECOVERABLE_ERRORS = ["invalid_token", "token has been deleted", "token_revoked"];
+
+function isUnrecoverable(err: unknown): boolean {
+  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+  return UNRECOVERABLE_ERRORS.some((e) => msg.includes(e));
+}
+
 export const proactiveTokenRefresh = internalAction({
   args: {},
   handler: async (ctx) => {
@@ -1445,6 +1457,7 @@ export const proactiveTokenRefresh = internalAction({
     const threshold = now + PROACTIVE_REFRESH_WINDOW_MS;
     let refreshed = 0;
     let failed = 0;
+    const failures: string[] = [];
 
     // 1. Per-account tokens
     const accounts = await ctx.runQuery(internal.auth.getExpiringAccounts, { threshold });
@@ -1453,46 +1466,101 @@ export const proactiveTokenRefresh = internalAction({
         await ctx.runAction(internal.auth.getValidTokenForAccount, {
           accountId: acc._id,
         });
-        refreshed++;
-        console.log(`[proactiveRefresh] Account "${acc.name}": refreshed`);
+        // Verify: re-read and check expiresAt actually updated
+        const updated = await ctx.runQuery(internal.auth.getAccountTokenExpiry, { accountId: acc._id });
+        if (updated && updated > now) {
+          refreshed++;
+          console.log(`[proactiveRefresh] Account "${acc.name}": refreshed, expires ${new Date(updated).toISOString()}`);
+        } else {
+          failed++;
+          const msg = `Account "${acc.name}": refresh returned OK but token not updated`;
+          console.log(`[proactiveRefresh] ${msg}`);
+          failures.push(msg);
+        }
       } catch (err) {
         failed++;
-        console.log(`[proactiveRefresh] Account "${acc.name}": failed — ${err}`);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[proactiveRefresh] Account "${acc.name}": failed — ${errMsg}`);
+        if (isUnrecoverable(err)) {
+          // Clear refresh token so we don't retry forever
+          await ctx.runMutation(internal.auth.clearAccountRefreshToken, { accountId: acc._id });
+          failures.push(`Account "${acc.name}": НЕИСПРАВИМО — ${errMsg}. Refresh token очищен.`);
+        } else {
+          failures.push(`Account "${acc.name}": ${errMsg}`);
+        }
       }
     }
 
     // 2. User-level VK Ads tokens
     const users = await ctx.runQuery(internal.auth.getExpiringUserTokens, { threshold });
     for (const user of users) {
+      const label = user.name || user.email;
       try {
         await ctx.runAction(internal.auth.getValidVkAdsToken, {
           userId: user._id,
         });
-        refreshed++;
-        console.log(`[proactiveRefresh] User "${user.name || user.email}": VK Ads token refreshed`);
+        // Verify
+        const updated = await ctx.runQuery(internal.auth.getUserVkAdsTokenExpiry, { userId: user._id });
+        if (updated && updated > now) {
+          refreshed++;
+          console.log(`[proactiveRefresh] User "${label}": VK Ads token refreshed, expires ${new Date(updated).toISOString()}`);
+        } else {
+          failed++;
+          const msg = `User "${label}": VK Ads refresh OK but token not updated`;
+          console.log(`[proactiveRefresh] ${msg}`);
+          failures.push(msg);
+        }
       } catch (err) {
         failed++;
-        console.log(`[proactiveRefresh] User "${user.name || user.email}": VK Ads refresh failed — ${err}`);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[proactiveRefresh] User "${label}": VK Ads refresh failed — ${errMsg}`);
+        if (isUnrecoverable(err)) {
+          await ctx.runMutation(internal.auth.clearUserVkAdsRefreshToken, { userId: user._id });
+          failures.push(`User "${label}": VK Ads НЕИСПРАВИМО — ${errMsg}. Refresh token очищен.`);
+        } else {
+          failures.push(`User "${label}": VK Ads — ${errMsg}`);
+        }
       }
     }
 
     // 3. User-level personal VK ID tokens
     const vkUsers = await ctx.runQuery(internal.auth.getExpiringUserVkTokens, { threshold });
     for (const user of vkUsers) {
+      const label = user.name || user.email;
       try {
         await ctx.runAction(internal.auth.getValidVkToken, {
           userId: user._id,
         });
         refreshed++;
-        console.log(`[proactiveRefresh] User "${user.name || user.email}": VK ID token refreshed`);
+        console.log(`[proactiveRefresh] User "${label}": VK ID token refreshed`);
       } catch (err) {
         failed++;
-        console.log(`[proactiveRefresh] User "${user.name || user.email}": VK ID refresh failed — ${err}`);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[proactiveRefresh] User "${label}": VK ID refresh failed — ${errMsg}`);
+        if (isUnrecoverable(err)) {
+          await ctx.runMutation(internal.auth.clearUserVkRefreshToken, { userId: user._id });
+          failures.push(`User "${label}": VK ID НЕИСПРАВИМО — ${errMsg}. Refresh token очищен.`);
+        } else {
+          failures.push(`User "${label}": VK ID — ${errMsg}`);
+        }
       }
     }
 
     if (refreshed > 0 || failed > 0) {
       console.log(`[proactiveRefresh] Done: ${refreshed} refreshed, ${failed} failed`);
+    }
+
+    // Notify admin on failures
+    if (failures.length > 0) {
+      const text = `🔑 <b>Proactive Token Refresh — ${failures.length} ошибок</b>\n\n${failures.map((f) => `• ${f}`).join("\n")}\n\n✅ Успешно: ${refreshed}`;
+      try {
+        await ctx.runAction(internal.telegram.sendMessage, {
+          chatId: ADMIN_CHAT_ID,
+          text,
+        });
+      } catch (tgErr) {
+        console.error(`[proactiveRefresh] Failed to send Telegram alert: ${tgErr}`);
+      }
     }
   },
 });
@@ -1551,6 +1619,50 @@ export const forceProactiveRefresh = action({
   },
 });
 
+// TEMP: Diagnose VK Ads token refresh for a user — shows raw VK API error
+export const diagRefreshVkAds = action({
+  args: { userId: v.string() },
+  handler: async (ctx, args): Promise<string> => {
+    const tokens = await ctx.runQuery(internal.users.getVkAdsTokens, {
+      userId: args.userId as Id<"users">,
+    });
+    if (!tokens?.refreshToken) return "No refresh token";
+
+    const creds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
+      userId: args.userId as Id<"users">,
+    });
+    const clientId = creds?.clientId || process.env.VK_ADS_CLIENT_ID;
+    const clientSecret = creds?.clientSecret || process.env.VK_ADS_CLIENT_SECRET;
+    if (!clientId || !clientSecret) return "No client credentials";
+
+    const params = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: tokens.refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+    });
+
+    const response = await fetch("https://target.my.com/api/v2/oauth2/token.json", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: params.toString(),
+    });
+    const data = await response.json();
+
+    if (data.error) {
+      return `VK API error: ${data.error} — ${data.error_description || "no desc"} (status=${response.status})`;
+    }
+    // If we got here, save the new tokens
+    await ctx.runMutation(internal.users.updateVkAdsTokens, {
+      userId: args.userId as Id<"users">,
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token,
+      expiresIn: data.expires_in || 86400,
+    });
+    return `OK: refreshed, new token starts with ${data.access_token?.substring(0, 15)}..., expires_in=${data.expires_in}`;
+  },
+});
+
 export const getExpiringUserVkTokens = internalQuery({
   args: { threshold: v.number() },
   handler: async (ctx, args) => {
@@ -1569,5 +1681,44 @@ export const getExpiringUserVkTokens = internalQuery({
           (u.vkTokenExpiresAt <= now && u.vkTokenExpiresAt > now - MAX_EXPIRED_AGE_MS)
         )
     );
+  },
+});
+
+// ─── Verification & cleanup helpers for proactiveTokenRefresh ───
+
+export const getAccountTokenExpiry = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const acc = await ctx.db.get(args.accountId);
+    return acc?.tokenExpiresAt ?? null;
+  },
+});
+
+export const getUserVkAdsTokenExpiry = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    return user?.vkAdsTokenExpiresAt ?? null;
+  },
+});
+
+export const clearAccountRefreshToken = internalMutation({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.accountId, { refreshToken: undefined });
+  },
+});
+
+export const clearUserVkAdsRefreshToken = internalMutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.userId, { vkAdsRefreshToken: undefined });
+  },
+});
+
+export const clearUserVkRefreshToken = internalMutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.userId, { vkRefreshToken: undefined });
   },
 });
