@@ -1027,8 +1027,8 @@ export const syncNow = action({
         });
       }
 
-      // Fetch campaigns from myTarget API
-      const mtCampaigns = await ctx.runAction(api.vkApi.getMtCampaigns, {
+      // Fetch ALL campaigns from myTarget API (with pagination, up to 250/page)
+      const mtCampaigns = await ctx.runAction(internal.vkApi.getCampaignsForAccount, {
         accessToken,
       });
 
@@ -2120,5 +2120,102 @@ export const auditTokenHealthQuery = internalQuery({
       });
     }
     return result;
+  },
+});
+
+/**
+ * TEMP — Diagnose campaign count: VK API (real) vs DB (saved).
+ * For each active account, fetches all campaigns from VK with pagination
+ * and compares to what's in our campaigns table.
+ * Remove after use.
+ */
+export const diagnoseCampaignCounts = action({
+  args: {},
+  handler: async (ctx): Promise<unknown> => {
+    const accounts: Array<{
+      _id: string; name: string; userId: string; status: string;
+      accessToken: string; vkAccountId: string;
+    }> = await ctx.runQuery(internal.adAccounts.getAllAccountsInternal) as never;
+
+    const activeAccounts = accounts.filter((a) => a.status === "active");
+    console.log(`[diagnoseCampaignCounts] ${activeAccounts.length} active accounts out of ${accounts.length} total`);
+
+    const results: Array<{
+      accountName: string;
+      accountId: string;
+      userId: string;
+      vkApiCount: number;
+      dbCount: number;
+      diff: number;
+      missingInDb: string[];
+      error?: string;
+    }> = [];
+
+    for (const acc of activeAccounts) {
+      try {
+        // Get valid token
+        let token: string;
+        try {
+          token = await ctx.runAction(internal.auth.getValidTokenForAccount, {
+            accountId: acc._id as never,
+          });
+        } catch {
+          results.push({
+            accountName: acc.name, accountId: acc._id, userId: acc.userId,
+            vkApiCount: -1, dbCount: -1, diff: 0, missingInDb: [],
+            error: "TOKEN_ERROR",
+          });
+          continue;
+        }
+
+        // Fetch ALL campaigns from VK API with pagination
+        const vkCampaigns = await ctx.runAction(
+          internal.vkApi.getCampaignsForAccount,
+          { accessToken: token }
+        ) as Array<{ id: number; name: string; status: string }>;
+
+        // Count campaigns in our DB for this account
+        const dbCampaigns: Array<{ vkCampaignId: string }> = await ctx.runQuery(
+          internal.adAccounts.getCampaignsForAccountDiag,
+          { accountId: acc._id as never }
+        ) as never;
+
+        const dbIds = new Set(dbCampaigns.map((c) => c.vkCampaignId));
+        const missingInDb = vkCampaigns
+          .filter((c) => !dbIds.has(String(c.id)))
+          .map((c) => `${c.id} (${c.name || "?"}, ${c.status})`);
+
+        results.push({
+          accountName: acc.name,
+          accountId: acc._id,
+          userId: acc.userId,
+          vkApiCount: vkCampaigns.length,
+          dbCount: dbCampaigns.length,
+          diff: vkCampaigns.length - dbCampaigns.length,
+          missingInDb: missingInDb.slice(0, 20), // cap output
+        });
+      } catch (err) {
+        results.push({
+          accountName: acc.name, accountId: acc._id, userId: acc.userId,
+          vkApiCount: -1, dbCount: -1, diff: 0, missingInDb: [],
+          error: String(err),
+        });
+      }
+    }
+
+    // Sort: biggest diff first
+    results.sort((a, b) => b.diff - a.diff);
+    return results;
+  },
+});
+
+/** TEMP — helper for diagnoseCampaignCounts */
+export const getCampaignsForAccountDiag = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("campaigns")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .collect();
   },
 });

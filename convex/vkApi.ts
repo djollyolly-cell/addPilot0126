@@ -1189,7 +1189,7 @@ export const getCampaignsForAccount = internalAction({
       const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
         "campaigns.json",
         args.accessToken,
-        { fields: "id,name,status,package_id,budget_limit_day,delivery,ad_plan_id", limit: String(LIMIT), offset: String(offset) }
+        { fields: "id,name,status,package_id,budget_limit,budget_limit_day,delivery,ad_plan_id", limit: String(LIMIT), offset: String(offset) }
       );
       const items = data.items || [];
       allCampaigns.push(...items);
