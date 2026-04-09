@@ -1500,13 +1500,20 @@ export const proactiveTokenRefresh = internalAction({
 export const getExpiringAccounts = internalQuery({
   args: { threshold: v.number() },
   handler: async (ctx, args) => {
+    const now = Date.now();
+    const MAX_EXPIRED_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
     const accounts = await ctx.db.query("adAccounts").collect();
     return accounts.filter(
       (a) =>
         (a.status === "active" || a.status === "error") &&
         a.tokenExpiresAt &&
-        a.tokenExpiresAt > Date.now() && // not yet expired
-        a.tokenExpiresAt < args.threshold // but will expire within window
+        a.refreshToken &&
+        (
+          // About to expire (within proactive window)
+          (a.tokenExpiresAt > now && a.tokenExpiresAt < args.threshold) ||
+          // Already expired but within 30 days (refresh token still usable)
+          (a.tokenExpiresAt <= now && a.tokenExpiresAt > now - MAX_EXPIRED_AGE_MS)
+        )
     );
   },
 });
@@ -1514,14 +1521,20 @@ export const getExpiringAccounts = internalQuery({
 export const getExpiringUserTokens = internalQuery({
   args: { threshold: v.number() },
   handler: async (ctx, args) => {
+    const now = Date.now();
+    const MAX_EXPIRED_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
     const users = await ctx.db.query("users").collect();
     return users.filter(
       (u) =>
         u.vkAdsAccessToken &&
         u.vkAdsTokenExpiresAt &&
-        u.vkAdsTokenExpiresAt > Date.now() && // not yet expired
-        u.vkAdsTokenExpiresAt < args.threshold && // but will expire within window
-        u.vkAdsRefreshToken // has refresh token to use
+        u.vkAdsRefreshToken &&
+        (
+          // About to expire (within proactive window)
+          (u.vkAdsTokenExpiresAt > now && u.vkAdsTokenExpiresAt < args.threshold) ||
+          // Already expired but within 30 days (refresh token still usable)
+          (u.vkAdsTokenExpiresAt <= now && u.vkAdsTokenExpiresAt > now - MAX_EXPIRED_AGE_MS)
+        )
     );
   },
 });
