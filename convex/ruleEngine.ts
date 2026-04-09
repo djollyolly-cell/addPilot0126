@@ -1815,6 +1815,37 @@ export const checkUzBudgetRules = internalAction({
                 const campaignIdStr = String(campaign.id);
                 const spentToday = spentCache.get(campaignIdStr);
 
+                // Cascade unblock: if campaign is blocked by budget and spent >= limit,
+                // resume it (ad_plan + banners) even without triggering a budget increase.
+                // This handles the case where VK blocked the cascade and our previous
+                // attempts to set budget were silently ignored.
+                if (campaign.status === "blocked" && spentToday !== undefined && spentToday >= dailyLimitRubles) {
+                  try {
+                    // Set budget above spent so VK allows delivery
+                    const unblockBudget = Math.ceil(spentToday) + budgetStep;
+                    const cappedBudget = maxDailyBudget ? Math.min(unblockBudget, maxDailyBudget) : unblockBudget;
+                    await ctx.runAction(internal.vkApi.setCampaignBudget, {
+                      accessToken, campaignId: campaign.id, newLimitRubles: cappedBudget,
+                    });
+                    await ctx.runAction(internal.vkApi.resumeCampaign, {
+                      accessToken, campaignId: campaign.id,
+                    });
+                    await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+                      userId: rule.userId, ruleId: rule._id,
+                      accountId: accountId as Id<"adAccounts">,
+                      campaignId: campaignIdStr, campaignName: campaign.name,
+                      actionType: "budget_increased" as const,
+                      oldBudget: dailyLimitRubles, newBudget: cappedBudget,
+                      step: cappedBudget - dailyLimitRubles, spentToday,
+                    });
+                    console.log(`[uz_budget] Cascade unblock: ${campaign.name} (${campaignIdStr}) ${dailyLimitRubles}→${cappedBudget}₽`);
+                    totalActions++;
+                  } catch (err) {
+                    console.error(`[uz_budget] Cascade unblock failed for ${campaignIdStr}:`, err);
+                  }
+                  continue;
+                }
+
                 // No cached spent = campaign was delivering, skip
                 if (spentToday === undefined) { skipped.delivering++; continue; }
 
