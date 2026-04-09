@@ -691,4 +691,14 @@ export default defineSchema({
   })
     .index("by_type", ["type", "createdAt"])
     .index("by_createdAt", ["createdAt"]),
+
+  // Support chat: forwarded messages mapping (user ↔ admin topic)
+  supportMessages: defineTable({
+    forwardedMessageId: v.number(),    // ID сообщения в группе (после forward)
+    originalChatId: v.string(),        // chatId пользователя (для ответа)
+    originalMessageId: v.optional(v.number()), // ID исходного сообщения
+    userName: v.optional(v.string()),  // имя пользователя для контекста
+    createdAt: v.number(),
+  })
+    .index("by_forwardedMessageId", ["forwardedMessageId"]),
 }, { schemaValidation: false });

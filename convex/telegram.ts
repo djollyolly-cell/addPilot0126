@@ -39,6 +39,10 @@ export interface TelegramUpdate {
       last_name?: string;
       user_id?: number;
     };
+    reply_to_message?: {
+      message_id: number;
+      from?: { id: number; is_bot: boolean; first_name: string };
+    };
     date: number;
   };
   callback_query?: {
@@ -786,6 +790,61 @@ export const handleWebhook = internalAction({
       });
 
       return { ok: true, linked: false };
+    }
+
+    // ── Support: forward private messages to admin topic ──
+    const chatType = update.message.chat.type;
+    if (chatType === "private") {
+      try {
+        const forwardedId = await ctx.runAction(
+          internal.telegram.forwardToSupport,
+          { fromChatId: chatId, messageId: update.message.message_id }
+        );
+        if (forwardedId) {
+          const fromUser = update.message.from;
+          const userName = [fromUser?.first_name, fromUser?.last_name].filter(Boolean).join(" ")
+            + (fromUser?.username ? ` (@${fromUser.username})` : "");
+          await ctx.runMutation(internal.telegram.saveSupportMapping, {
+            forwardedMessageId: forwardedId,
+            originalChatId: chatId,
+            originalMessageId: update.message.message_id,
+            userName: userName || undefined,
+          });
+        }
+        await ctx.runAction(internal.telegram.sendMessage, {
+          chatId,
+          text: "✉️ Сообщение передано администратору. Ожидайте ответа.",
+        });
+      } catch (err) {
+        console.error("[telegram] Failed to forward to support:", err);
+      }
+      return { ok: true, action: "forwarded_to_support" };
+    }
+
+    // ── Support: forward admin reply back to user ──
+    const supportGroupId = process.env.SUPPORT_GROUP_CHAT_ID;
+    if (
+      chatType === "supergroup" &&
+      supportGroupId &&
+      String(update.message.chat.id) === supportGroupId &&
+      update.message.reply_to_message
+    ) {
+      try {
+        const replyToId = update.message.reply_to_message.message_id;
+        const mapping = await ctx.runQuery(
+          internal.telegram.getSupportMapping,
+          { forwardedMessageId: replyToId }
+        );
+        if (mapping) {
+          await ctx.runAction(internal.telegram.sendMessage, {
+            chatId: mapping.originalChatId,
+            text: `💬 <b>Ответ администратора:</b>\n\n${text}`,
+          });
+        }
+      } catch (err) {
+        console.error("[telegram] Failed to forward admin reply:", err);
+      }
+      return { ok: true, action: "admin_reply_forwarded" };
     }
 
     return { ok: true };
@@ -2263,5 +2322,79 @@ export const debugSendDigest = internalAction({
     }
 
     return { sent: true, accounts: data.accounts.length, messages: messages.length };
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
+// Support chat: forward user messages to admin topic
+// ═══════════════════════════════════════════════════════════
+
+/** Forward a message from user's private chat to the support group topic */
+export const forwardToSupport = internalAction({
+  args: {
+    fromChatId: v.string(),
+    messageId: v.number(),
+  },
+  handler: async (_ctx, args) => {
+    const botToken = process.env.TELEGRAM_BOT_TOKEN;
+    if (!botToken) throw new Error("TELEGRAM_BOT_TOKEN not configured");
+
+    const groupChatId = process.env.SUPPORT_GROUP_CHAT_ID;
+    const topicId = process.env.SUPPORT_TOPIC_ID;
+    if (!groupChatId || !topicId) throw new Error("SUPPORT_GROUP_CHAT_ID or SUPPORT_TOPIC_ID not configured");
+
+    const response = await fetch(
+      `${TELEGRAM_API_BASE}${botToken}/forwardMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: groupChatId,
+          from_chat_id: args.fromChatId,
+          message_id: args.messageId,
+          message_thread_id: parseInt(topicId, 10),
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Telegram forwardMessage failed ${response.status}: ${errorText}`);
+    }
+
+    const result = await response.json();
+    return result.result?.message_id as number | undefined;
+  },
+});
+
+/** Save mapping: forwarded message ID → original user chat */
+export const saveSupportMapping = internalMutation({
+  args: {
+    forwardedMessageId: v.number(),
+    originalChatId: v.string(),
+    originalMessageId: v.optional(v.number()),
+    userName: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("supportMessages", {
+      forwardedMessageId: args.forwardedMessageId,
+      originalChatId: args.originalChatId,
+      originalMessageId: args.originalMessageId,
+      userName: args.userName,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/** Find original user chat by forwarded message ID */
+export const getSupportMapping = internalQuery({
+  args: { forwardedMessageId: v.number() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("supportMessages")
+      .withIndex("by_forwardedMessageId", (q) =>
+        q.eq("forwardedMessageId", args.forwardedMessageId)
+      )
+      .first();
   },
 });
