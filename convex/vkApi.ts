@@ -1364,6 +1364,7 @@ export const setCampaignBudget = internalAction({
 /**
  * Activate a campaign (resume after budget block).
  * Supports both legacy myTarget and new VK Ads accounts.
+ * Also checks parent ad_plan — if it's blocked, activates it too.
  */
 export const resumeCampaign = internalAction({
   args: {
@@ -1371,11 +1372,51 @@ export const resumeCampaign = internalAction({
     campaignId: v.number(),
   },
   handler: async (_, args) => {
-    return await postCampaignWithFallback(
+    // 1. Activate the campaign/group itself
+    const result = await postCampaignWithFallback(
       args.accessToken,
       args.campaignId,
       { status: "active" },
     );
+
+    // 2. Check parent ad_plan — if blocked, activate it too
+    try {
+      const groupData = await callMtApi<{ items: Array<{ id: number; ad_plan_id?: number }> }>(
+        "ad_groups.json",
+        args.accessToken,
+        { _id: String(args.campaignId), fields: "id,ad_plan_id" }
+      );
+      const adPlanId = groupData.items?.[0]?.ad_plan_id;
+      if (adPlanId) {
+        const planData = await callMtApi<{ items: Array<{ id: number; status: string }> }>(
+          "ad_plans.json",
+          args.accessToken,
+          { _id: String(adPlanId), fields: "id,status" }
+        );
+        const plan = planData.items?.[0];
+        if (plan && plan.status === "blocked") {
+          const planUrl = `${MT_API_BASE}/api/v2/ad_plans/${adPlanId}.json`;
+          const planResp = await fetchWithTimeout(planUrl, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${args.accessToken}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ status: "active" }),
+          });
+          if (planResp.ok) {
+            console.log(`[resumeCampaign] Activated blocked ad_plan ${adPlanId} (parent of campaign ${args.campaignId})`);
+          } else {
+            console.warn(`[resumeCampaign] Failed to activate ad_plan ${adPlanId}: ${planResp.status}`);
+          }
+        }
+      }
+    } catch (err) {
+      // Non-critical: group resume succeeded, ad_plan check is best-effort
+      console.warn(`[resumeCampaign] ad_plan check failed for campaign ${args.campaignId}:`, err);
+    }
+
+    return result;
   },
 });
 
