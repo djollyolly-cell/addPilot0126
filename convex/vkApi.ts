@@ -1412,8 +1412,38 @@ export const resumeCampaign = internalAction({
         }
       }
     } catch (err) {
-      // Non-critical: group resume succeeded, ad_plan check is best-effort
       console.warn(`[resumeCampaign] ad_plan check failed for campaign ${args.campaignId}:`, err);
+    }
+
+    // 3. Unblock banners — VK blocks them cascade with ad_plan/group
+    try {
+      const bannersData = await callMtApi<{ items: Array<{ id: number; status: string }> }>(
+        "banners.json",
+        args.accessToken,
+        { campaign_id: String(args.campaignId), fields: "id,status", limit: "250" }
+      );
+      const blocked = (bannersData.items || []).filter(b => b.status === "blocked");
+      if (blocked.length > 0) {
+        let activated = 0;
+        for (const b of blocked) {
+          try {
+            const bResp = await fetchWithTimeout(`${MT_API_BASE}/api/v2/banners/${b.id}.json`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${args.accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ status: "active" }),
+            });
+            if (bResp.ok) activated++;
+          } catch { /* best-effort per banner */ }
+        }
+        if (activated > 0) {
+          console.log(`[resumeCampaign] Activated ${activated}/${blocked.length} blocked banners in campaign ${args.campaignId}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[resumeCampaign] banner unblock failed for campaign ${args.campaignId}:`, err);
     }
 
     return result;
