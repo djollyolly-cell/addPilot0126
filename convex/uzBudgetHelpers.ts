@@ -98,17 +98,23 @@ export function filterCampaignsForRule(
 
 /**
  * Check if campaign budget should be increased.
- * Proactive: triggers at 90% spent regardless of delivery status,
- * so budget is added BEFORE VK stops the group.
- * Resume logic (ruleEngine.ts) handles already-stopped groups separately.
+ * Triggers when spent reaches (limit - step), where step defaults to 1₽.
+ * This ensures budget is only increased when the campaign actually
+ * spent up to the limit — not repeatedly while spent stays the same.
+ *
+ * Campaign must also be stopped (not_delivering or blocked) to trigger.
  */
 export function shouldTriggerBudgetIncrease(
-  _delivery: string | undefined,
-  _status: string,
+  delivery: string | undefined,
+  status: string,
   spentToday: number,
-  dailyLimitRubles: number
+  dailyLimitRubles: number,
+  budgetStep: number = 1
 ): boolean {
-  return spentToday >= dailyLimitRubles * 0.90;
+  const isStopped = delivery === "not_delivering" || status === "blocked";
+  if (!isStopped) return false;
+  // Trigger when spent is within one step of the limit
+  return spentToday >= dailyLimitRubles - budgetStep;
 }
 
 /**

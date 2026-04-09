@@ -1503,7 +1503,11 @@ export const getActiveUzRules = internalQuery({
 
 // getCampaignSpentToday moved to vkApi.ts — now queries VK API directly (real-time)
 
-/** Check if budget was recently increased (dedup within 5 min) */
+/** Check if budget was recently increased and spent hasn't grown since.
+ *  Returns true = skip (dedup), false = allow increase.
+ *  Core rule: only allow next increase when spent has actually grown
+ *  since the last increase. No time-based escape hatches.
+ */
 export const hasRecentBudgetIncrease = internalQuery({
   args: {
     ruleId: v.id("rules"),
@@ -1537,36 +1541,16 @@ export const hasRecentBudgetIncrease = internalQuery({
 
     if (args.currentSpent !== undefined && lastLog.metricsSnapshot) {
       const spentAtLastIncrease = lastLog.metricsSnapshot.spent ?? 0;
-      const newBudgetAtLastIncrease = lastLog.metricsSnapshot.newBudget;
 
-      if (newBudgetAtLastIncrease !== undefined) {
-        // New logs with newBudget tracking
-        if (args.currentSpent >= newBudgetAtLastIncrease * 0.90) {
-          return false; // campaign consumed the new budget — allow next increase
-        }
-        if (args.currentSpent <= spentAtLastIncrease) {
-          // Spent didn't grow since last increase.
-          // Escape hatch: if >15 min passed and campaign is still stuck,
-          // allow retry (VK may have delayed auto-resume or resume failed).
-          const STUCK_COOLDOWN_MS = 15 * 60 * 1000; // 15 minutes
-          const timeSinceIncrease = Date.now() - lastLog.createdAt;
-          if (timeSinceIncrease > STUCK_COOLDOWN_MS) {
-            return false; // allow retry — campaign may be stuck
-          }
-          return true; // too recent — skip
-        }
+      // Only allow next increase if spent has actually grown since last increase
+      if (args.currentSpent > spentAtLastIncrease) {
         return false; // spent grew — allow new increase
       }
-
-      // Legacy logs (no newBudget): if spent hasn't decreased, fall through
-      // to time-based dedup instead of blocking forever
-      if (args.currentSpent < spentAtLastIncrease) {
-        return true; // spent decreased (e.g. after daily reset) — skip
-      }
-      // Fall through to time-based dedup below
+      // Spent hasn't grown — block regardless of time
+      return true;
     }
 
-    // Fallback: use time-based dedup
+    // Fallback for logs without spent data: use time-based dedup
     const since = Date.now() - args.withinMs;
     return lastLog.createdAt >= since;
   },
@@ -1799,7 +1783,7 @@ export const checkUzBudgetRules = internalAction({
                 // No cached spent = campaign was delivering, skip
                 if (spentToday === undefined) { skipped.delivering++; continue; }
 
-                if (!shouldTriggerBudgetIncrease(campaign.delivery, campaign.status, spentToday, dailyLimitRubles)) {
+                if (!shouldTriggerBudgetIncrease(campaign.delivery, campaign.status, spentToday, dailyLimitRubles, budgetStep)) {
                   skipped.delivering++;
                   continue;
                 }
