@@ -1815,14 +1815,15 @@ export const checkUzBudgetRules = internalAction({
                 const campaignIdStr = String(campaign.id);
                 const spentToday = spentCache.get(campaignIdStr);
 
-                // Cascade unblock: if campaign is blocked by budget and spent >= limit,
-                // resume it (ad_plan + banners) even without triggering a budget increase.
-                // This handles the case where VK blocked the cascade and our previous
-                // attempts to set budget were silently ignored.
-                if (campaign.status === "blocked" && spentToday !== undefined && spentToday >= dailyLimitRubles) {
+                // Cascade unblock: if campaign is blocked — it may be blocked by VK
+                // either directly (spent >= limit) or cascaded from parent ad_plan.
+                // In both cases: set budget above spent, resume (ad_plan + banners).
+                // Only for campaigns covered by this UZ rule.
+                if (campaign.status === "blocked") {
                   try {
+                    const spent = spentToday ?? 0;
                     // Set budget above spent so VK allows delivery
-                    const unblockBudget = Math.ceil(spentToday) + budgetStep;
+                    const unblockBudget = Math.max(Math.ceil(spent) + budgetStep, dailyLimitRubles);
                     const cappedBudget = maxDailyBudget ? Math.min(unblockBudget, maxDailyBudget) : unblockBudget;
                     await ctx.runAction(internal.vkApi.setCampaignBudget, {
                       accessToken, campaignId: campaign.id, newLimitRubles: cappedBudget,
@@ -1830,15 +1831,17 @@ export const checkUzBudgetRules = internalAction({
                     await ctx.runAction(internal.vkApi.resumeCampaign, {
                       accessToken, campaignId: campaign.id,
                     });
-                    await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
-                      userId: rule.userId, ruleId: rule._id,
-                      accountId: accountId as Id<"adAccounts">,
-                      campaignId: campaignIdStr, campaignName: campaign.name,
-                      actionType: "budget_increased" as const,
-                      oldBudget: dailyLimitRubles, newBudget: cappedBudget,
-                      step: cappedBudget - dailyLimitRubles, spentToday,
-                    });
-                    console.log(`[uz_budget] Cascade unblock: ${campaign.name} (${campaignIdStr}) ${dailyLimitRubles}→${cappedBudget}₽`);
+                    if (cappedBudget !== dailyLimitRubles) {
+                      await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+                        userId: rule.userId, ruleId: rule._id,
+                        accountId: accountId as Id<"adAccounts">,
+                        campaignId: campaignIdStr, campaignName: campaign.name,
+                        actionType: "budget_increased" as const,
+                        oldBudget: dailyLimitRubles, newBudget: cappedBudget,
+                        step: cappedBudget - dailyLimitRubles, spentToday: spent,
+                      });
+                    }
+                    console.log(`[uz_budget] Cascade unblock: ${campaign.name} (${campaignIdStr}) budget=${cappedBudget}₽ spent=${spent}₽`);
                     totalActions++;
                   } catch (err) {
                     console.error(`[uz_budget] Cascade unblock failed for ${campaignIdStr}:`, err);
