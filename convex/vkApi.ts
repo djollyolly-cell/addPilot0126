@@ -1370,8 +1370,10 @@ export const resumeCampaign = internalAction({
   args: {
     accessToken: v.string(),
     campaignId: v.number(),
+    excludeBannerIds: v.optional(v.array(v.string())),
   },
   handler: async (_, args) => {
+    const excludeSet = new Set(args.excludeBannerIds ?? []);
     // 1. Activate the campaign/group itself
     const result = await postCampaignWithFallback(
       args.accessToken,
@@ -1425,7 +1427,13 @@ export const resumeCampaign = internalAction({
       const blocked = (bannersData.items || []).filter(b => b.status === "blocked");
       if (blocked.length > 0) {
         let activated = 0;
+        let skippedByRule = 0;
         for (const b of blocked) {
+          // Skip banners stopped by rules or user — don't override intentional stops
+          if (excludeSet.has(String(b.id))) {
+            skippedByRule++;
+            continue;
+          }
           try {
             const bResp = await fetchWithTimeout(`${MT_API_BASE}/api/v2/banners/${b.id}.json`, {
               method: "POST",
@@ -1438,8 +1446,8 @@ export const resumeCampaign = internalAction({
             if (bResp.ok) activated++;
           } catch { /* best-effort per banner */ }
         }
-        if (activated > 0) {
-          console.log(`[resumeCampaign] Activated ${activated}/${blocked.length} blocked banners in campaign ${args.campaignId}`);
+        if (activated > 0 || skippedByRule > 0) {
+          console.log(`[resumeCampaign] Campaign ${args.campaignId}: activated ${activated}, skipped ${skippedByRule} rule-stopped (total blocked: ${blocked.length})`);
         }
       }
     } catch (err) {

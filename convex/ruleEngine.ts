@@ -1695,6 +1695,43 @@ export const logBudgetAction = internalMutation({
   },
 });
 
+/** Get banner IDs that were stopped by rules TODAY and not reverted (for this account).
+ *  Used by cascade unblock to avoid reactivating intentionally-stopped banners.
+ *  Only considers today's stops — older stops may have been manually restarted by user.
+ */
+export const getStoppedBannerIdsForAccount = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    // Only look at today's logs (UTC midnight)
+    const now = new Date();
+    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .filter((q) =>
+        q.and(
+          q.gte(q.field("createdAt"), todayStart),
+          q.or(
+            q.eq(q.field("actionType"), "stopped"),
+            q.eq(q.field("actionType"), "stopped_and_notified")
+          )
+        )
+      )
+      .collect();
+    // Collect stopped banner IDs, excluding reverted ones
+    const stoppedIds = new Set<string>();
+    for (const log of logs) {
+      if (log.status === "success") {
+        stoppedIds.add(log.adId);
+      } else if (log.status === "reverted") {
+        stoppedIds.delete(log.adId);
+      }
+    }
+    return Array.from(stoppedIds);
+  },
+});
+
 /**
  * Check all active uz_budget_manage rules.
  * Runs as independent cron (not inside syncAll) to avoid timeout dependency.
@@ -1819,7 +1856,18 @@ export const checkUzBudgetRules = internalAction({
                 // either directly (spent >= limit) or cascaded from parent ad_plan.
                 // In both cases: set budget above spent, resume (ad_plan + banners).
                 // Only for campaigns covered by this UZ rule.
+                // Dedup: skip if already unblocked in the last 5 minutes.
                 if (campaign.status === "blocked") {
+                  // Dedup: check if we already did cascade unblock for this campaign recently
+                  const recentUnblock = await ctx.runQuery(
+                    internal.ruleEngine.hasRecentBudgetIncrease,
+                    { ruleId: rule._id, campaignId: campaignIdStr, withinMs: 5 * 60 * 1000, currentSpent: spentToday ?? 0 }
+                  );
+                  if (recentUnblock) {
+                    skipped.dedup++;
+                    continue;
+                  }
+
                   try {
                     const spent = spentToday ?? 0;
                     // Set budget above spent so VK allows delivery
@@ -1828,20 +1876,29 @@ export const checkUzBudgetRules = internalAction({
                     await ctx.runAction(internal.vkApi.setCampaignBudget, {
                       accessToken, campaignId: campaign.id, newLimitRubles: cappedBudget,
                     });
+
+                    // Get banner IDs stopped by rules — don't reactivate them
+                    const stoppedBannerIds = await ctx.runQuery(
+                      internal.ruleEngine.getStoppedBannerIdsForAccount,
+                      { accountId: accountId as Id<"adAccounts"> }
+                    );
+
                     await ctx.runAction(internal.vkApi.resumeCampaign, {
                       accessToken, campaignId: campaign.id,
+                      excludeBannerIds: stoppedBannerIds,
                     });
-                    if (cappedBudget !== dailyLimitRubles) {
-                      await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
-                        userId: rule.userId, ruleId: rule._id,
-                        accountId: accountId as Id<"adAccounts">,
-                        campaignId: campaignIdStr, campaignName: campaign.name,
-                        actionType: "budget_increased" as const,
-                        oldBudget: dailyLimitRubles, newBudget: cappedBudget,
-                        step: cappedBudget - dailyLimitRubles, spentToday: spent,
-                      });
-                    }
-                    console.log(`[uz_budget] Cascade unblock: ${campaign.name} (${campaignIdStr}) budget=${cappedBudget}₽ spent=${spent}₽`);
+                    // Always log cascade unblock — even if budget didn't change.
+                    // Without this log, dedup (hasRecentBudgetIncrease) won't find it
+                    // and cascade unblock will repeat every 5 minutes infinitely.
+                    await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+                      userId: rule.userId, ruleId: rule._id,
+                      accountId: accountId as Id<"adAccounts">,
+                      campaignId: campaignIdStr, campaignName: campaign.name,
+                      actionType: "budget_increased" as const,
+                      oldBudget: dailyLimitRubles, newBudget: cappedBudget,
+                      step: cappedBudget - dailyLimitRubles, spentToday: spent,
+                    });
+                    console.log(`[uz_budget] Cascade unblock: ${campaign.name} (${campaignIdStr}) budget=${cappedBudget}₽ spent=${spent}₽ excludedBanners=${stoppedBannerIds.length}`);
                     totalActions++;
                   } catch (err) {
                     console.error(`[uz_budget] Cascade unblock failed for ${campaignIdStr}:`, err);
@@ -1899,9 +1956,15 @@ export const checkUzBudgetRules = internalAction({
 
                   if (campaign.status !== "active" || campaign.delivery === "not_delivering") {
                     try {
+                      // Get banner IDs stopped by rules — don't reactivate them
+                      const stoppedBannerIds = await ctx.runQuery(
+                        internal.ruleEngine.getStoppedBannerIdsForAccount,
+                        { accountId: accountId as Id<"adAccounts"> }
+                      );
                       await ctx.runAction(internal.vkApi.resumeCampaign, {
                         accessToken,
                         campaignId: campaign.id,
+                        excludeBannerIds: stoppedBannerIds,
                       });
                     } catch (resumeErr) {
                       console.error(`[uz_budget] Budget set OK but resume failed for campaign ${campaign.id}:`, resumeErr);
