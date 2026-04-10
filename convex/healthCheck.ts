@@ -82,6 +82,7 @@ export const checkCronHeartbeats = internalQuery({
       { name: "sendWeeklyDigest", label: "weekly-digest" },
       { name: "sendMonthlyDigest", label: "monthly-digest" },
       { name: "checkAgencyTokenHealth", label: "agency-token-health" },
+      { name: "proactiveTokenRefresh", label: "proactive-token-refresh", maxStaleMin: 250 },
     ];
 
     for (const cfg of CRON_CONFIGS) {

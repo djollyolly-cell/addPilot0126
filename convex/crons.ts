@@ -127,7 +127,8 @@ crons.cron(
 crons.interval(
   "proactive-token-refresh",
   { hours: 4 },
-  internal.auth.proactiveTokenRefresh
+  internal.auth.proactiveTokenRefresh,
+  {}
 );
 
 // Cleanup stuck pending payments — every 2 hours

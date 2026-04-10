@@ -625,34 +625,45 @@ export const getValidVkAdsToken = internalAction({
 
 // ─── PER-ACCOUNT TOKEN MANAGEMENT ────────────────────────────────
 
-// Helper: try refreshing token via Vitamin API (last-resort fallback for agency_client accounts)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const selfInternalAgency = internal as any;
+
+// Helper: try refreshing token via Vitamin API using user's personal API key
 async function tryVitaminRefresh(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ctx: any,
   accountId: Id<"adAccounts">,
-  account: { vitaminCabinetId?: string; name?: string },
+  account: { vitaminCabinetId?: string; agencyProviderId?: string; userId: string; name?: string },
 ): Promise<string | null> {
   if (!account.vitaminCabinetId) return null;
   try {
+    // Look up user's personal Vitamin API key from agencyCredentials
+    let userApiKey: string | undefined;
+    if (account.agencyProviderId) {
+      const creds = await ctx.runQuery(selfInternalAgency.agencyProviders.getCredentialsInternal, {
+        userId: account.userId,
+        providerId: account.agencyProviderId,
+      });
+      userApiKey = creds?.apiKey || undefined;
+    }
+
     console.log(
-      `[getValidTokenForAccount] «${account.name}» (${accountId}): trying Vitamin API fallback`
+      `[getValidTokenForAccount] «${account.name}» (${accountId}): trying Vitamin API refresh (personalKey=${!!userApiKey})`
     );
     const result = await ctx.runAction(internal.auth.refreshViaVitamin, {
       accountId,
       vitaminCabinetId: account.vitaminCabinetId,
+      userApiKey,
     });
     return result.accessToken;
   } catch (vitErr) {
     const vitMsg = vitErr instanceof Error ? vitErr.message : String(vitErr);
     console.log(
-      `[getValidTokenForAccount] «${account.name}» (${accountId}): Vitamin fallback failed: ${vitMsg}`
+      `[getValidTokenForAccount] «${account.name}» (${accountId}): Vitamin refresh failed: ${vitMsg}`
     );
     return null;
   }
 }
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const selfInternalAgency = internal as any;
 
 /** Try refreshing VK Ads token via GetUNIQ API (for agency accounts linked to GetUNIQ provider) */
 async function tryGetuniqRefresh(
@@ -1084,16 +1095,17 @@ export const getAccountWithCredentials = internalQuery({
   },
 });
 
-// Refresh token via Vitamin.tools API (for agency_client accounts)
+// Refresh token via Vitamin.tools API using user's personal API key
 export const refreshViaVitamin = internalAction({
   args: {
     accountId: v.id("adAccounts"),
     vitaminCabinetId: v.string(),
+    userApiKey: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ accessToken: string }> => {
-    const apiKey = process.env.VITAMIN_API_KEY;
+    const apiKey = args.userApiKey || process.env.VITAMIN_API_KEY;
     if (!apiKey) {
-      throw new Error("VITAMIN_API_KEY not configured");
+      throw new Error("Vitamin API-ключ не найден. Переподключите кабинет с персональным API-ключом.");
     }
 
     const resp = await fetch(
@@ -1450,9 +1462,26 @@ function isUnrecoverable(err: unknown): boolean {
   return UNRECOVERABLE_ERRORS.some((e) => msg.includes(e));
 }
 
+// Schedule a one-time retry for proactiveTokenRefresh (actions can't use ctx.scheduler)
+export const scheduleProactiveRetry = internalMutation({
+  args: { delayMs: v.number() },
+  handler: async (ctx, args) => {
+    await ctx.scheduler.runAfter(args.delayMs, internal.auth.proactiveTokenRefresh, { isRetry: true });
+  },
+});
+
 export const proactiveTokenRefresh = internalAction({
-  args: {},
-  handler: async (ctx) => {
+  args: { isRetry: v.optional(v.boolean()) },
+  handler: async (ctx, args) => {
+    const isRetry = args.isRetry ?? false;
+
+    // Record heartbeat — start
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+      name: "proactiveTokenRefresh",
+      status: "running",
+    });
+
+    try {
     const now = Date.now();
     const threshold = now + PROACTIVE_REFRESH_WINDOW_MS;
     let refreshed = 0;
@@ -1562,6 +1591,39 @@ export const proactiveTokenRefresh = internalAction({
         console.error(`[proactiveRefresh] Failed to send Telegram alert: ${tgErr}`);
       }
     }
+
+    // If some tokens failed to refresh and this is NOT already a retry — schedule one retry in 30 min.
+    // Retry does NOT schedule another retry (isRetry=true), preventing infinite loops.
+    if (failed > 0 && !isRetry) {
+      console.log(`[proactiveRefresh] ${failed} failures — scheduling retry in 30 min`);
+      await ctx.runMutation(internal.auth.scheduleProactiveRetry, {
+        delayMs: 30 * 60_000,
+      });
+    }
+
+    // Record heartbeat — completed (even with partial failures, the cron itself ran)
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+      name: "proactiveTokenRefresh",
+      status: "completed",
+    });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[proactiveTokenRefresh] Fatal error: ${errMsg}`);
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "proactiveTokenRefresh",
+        status: "failed",
+        error: errMsg.slice(0, 200),
+      });
+      // Schedule retry on crash too (if not already a retry)
+      if (!isRetry) {
+        try {
+          await ctx.runMutation(internal.auth.scheduleProactiveRetry, {
+            delayMs: 30 * 60_000,
+          });
+        } catch { /* don't fail on scheduling failure */ }
+      }
+      throw err;
+    }
   },
 });
 
@@ -1614,7 +1676,7 @@ export const forceProactiveRefresh = action({
     if (args.adminUserId !== "kx7djrrpr67bry6zxehzx0e65x8141ct") {
       throw new Error("Unauthorized");
     }
-    await ctx.runAction(internal.auth.proactiveTokenRefresh);
+    await ctx.runAction(internal.auth.proactiveTokenRefresh, {});
     return "Done";
   },
 });
