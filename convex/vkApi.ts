@@ -1317,7 +1317,7 @@ async function postCampaignWithFallback(
     );
   }
 
-  // 3. Retry via ad_plans/{ad_plan_id}.json
+  // 3. Write to ad_plans/{ad_plan_id}.json (parent level)
   const planUrl = `${MT_API_BASE}/api/v2/ad_plans/${adPlanId}.json`;
   const planResp = await fetchWithTimeout(planUrl, {
     method: "POST",
@@ -1335,6 +1335,28 @@ async function postCampaignWithFallback(
       `VK Ads API Error ${planResp.status} (ad_plan ${adPlanId}): ${planErr}`,
     );
   }
+
+  // 4. Also write to ad_groups/{id}.json so read-back is consistent.
+  // getCampaignsForAccount reads budget_limit_day from ad_group level,
+  // so without this the next cycle sees stale budget → phantom resets.
+  try {
+    const groupPostUrl = `${MT_API_BASE}/api/v2/ad_groups/${campaignId}.json`;
+    const groupPostResp = await fetchWithTimeout(groupPostUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    if (!groupPostResp.ok) {
+      console.warn(`[postCampaignWithFallback] ad_group ${campaignId} POST failed (${groupPostResp.status}), ad_plan write succeeded`);
+    }
+  } catch (err) {
+    // Best-effort: ad_plan write succeeded, ad_group sync failed
+    console.warn(`[postCampaignWithFallback] ad_group ${campaignId} POST error:`, err);
+  }
+
   const planText = await planResp.text();
   if (planText.trim()) return JSON.parse(planText) as MtCampaign;
   return { id: adPlanId } as unknown as MtCampaign;
@@ -1381,41 +1403,11 @@ export const resumeCampaign = internalAction({
       { status: "active" },
     );
 
-    // 2. Check parent ad_plan — if blocked, activate it too
-    try {
-      const groupData = await callMtApi<{ items: Array<{ id: number; ad_plan_id?: number }> }>(
-        "ad_groups.json",
-        args.accessToken,
-        { _id: String(args.campaignId), fields: "id,ad_plan_id" }
-      );
-      const adPlanId = groupData.items?.[0]?.ad_plan_id;
-      if (adPlanId) {
-        const planData = await callMtApi<{ items: Array<{ id: number; status: string }> }>(
-          "ad_plans.json",
-          args.accessToken,
-          { _id: String(adPlanId), fields: "id,status" }
-        );
-        const plan = planData.items?.[0];
-        if (plan && plan.status === "blocked") {
-          const planUrl = `${MT_API_BASE}/api/v2/ad_plans/${adPlanId}.json`;
-          const planResp = await fetchWithTimeout(planUrl, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${args.accessToken}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({ status: "active" }),
-          });
-          if (planResp.ok) {
-            console.log(`[resumeCampaign] Activated blocked ad_plan ${adPlanId} (parent of campaign ${args.campaignId})`);
-          } else {
-            console.warn(`[resumeCampaign] Failed to activate ad_plan ${adPlanId}: ${planResp.status}`);
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`[resumeCampaign] ad_plan check failed for campaign ${args.campaignId}:`, err);
-    }
+    // 2. Parent ad_plan: do NOT activate it here.
+    // Activating ad_plan cascades to ALL sibling ad_groups — dangerous when one ad_plan
+    // has many children (e.g. 218 in one user's case). Budget write via
+    // postCampaignWithFallback already targets ad_plan level for new accounts,
+    // which may auto-unblock it via budget increase.
 
     // 3. Unblock banners — VK blocks them cascade with ad_plan/group
     try {

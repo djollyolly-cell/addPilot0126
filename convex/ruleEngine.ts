@@ -1858,6 +1858,17 @@ export const checkUzBudgetRules = internalAction({
                 // Only for campaigns covered by this UZ rule.
                 // Dedup: skip if already unblocked in the last 5 minutes.
                 if (campaign.status === "blocked") {
+                  // Guard: only cascade-unblock if VK blocked the campaign for budget exhaustion.
+                  // VK budget block = spent is near or above the daily limit.
+                  // If spent is much below the limit — campaign was stopped manually by user.
+                  // Threshold: spent >= limit - step (same logic as shouldTriggerBudgetIncrease).
+                  const spent = spentToday ?? 0;
+                  const threshold = Math.max(dailyLimitRubles - budgetStep, 0);
+                  if (spent < threshold) {
+                    skipped.blocked++;
+                    continue;
+                  }
+
                   // Dedup: check if we already did cascade unblock for this campaign recently
                   const recentUnblock = await ctx.runQuery(
                     internal.ruleEngine.hasRecentBudgetIncrease,
@@ -1869,7 +1880,7 @@ export const checkUzBudgetRules = internalAction({
                   }
 
                   try {
-                    const spent = spentToday ?? 0;
+                    // spent already computed above (guard check)
                     // Set budget above spent so VK allows delivery
                     const unblockBudget = Math.max(Math.ceil(spent) + budgetStep, dailyLimitRubles);
                     const cappedBudget = maxDailyBudget ? Math.min(unblockBudget, maxDailyBudget) : unblockBudget;
