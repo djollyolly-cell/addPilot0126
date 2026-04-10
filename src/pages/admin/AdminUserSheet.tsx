@@ -27,12 +27,12 @@ const TIER_BADGE_VARIANT: Record<string, 'secondary' | 'warning' | 'success'> = 
   pro: 'success',
 };
 
-interface AdminUser {
+export interface AdminUser {
   _id: string;
   email: string;
-  name: string | null;
+  name?: string;
   isAdmin: boolean;
-  subscriptionTier: string;
+  subscriptionTier?: string;
   subscriptionExpiresAt?: number;
   telegramChatId?: string;
   createdAt: number;
