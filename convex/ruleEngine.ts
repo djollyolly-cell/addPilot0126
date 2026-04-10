@@ -1881,9 +1881,8 @@ export const checkUzBudgetRules = internalAction({
 
                   try {
                     // spent already computed above (guard check)
-                    // Set budget above spent so VK allows delivery
-                    const unblockBudget = Math.max(Math.ceil(spent) + budgetStep, dailyLimitRubles);
-                    const cappedBudget = maxDailyBudget ? Math.min(unblockBudget, maxDailyBudget) : unblockBudget;
+                    // Use same formula as normal path: currentLimit + step (with catch-up if spent > limit)
+                    const cappedBudget = calculateNewBudget(dailyLimitRubles, spent, budgetStep, maxDailyBudget);
                     await ctx.runAction(internal.vkApi.setCampaignBudget, {
                       accessToken, campaignId: campaign.id, newLimitRubles: cappedBudget,
                     });
