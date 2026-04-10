@@ -1514,6 +1514,7 @@ export const hasRecentBudgetIncrease = internalQuery({
     campaignId: v.string(),
     withinMs: v.number(),
     currentSpent: v.optional(v.number()),
+    currentBudget: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     // Find the most recent successful budget increase for this campaign today
@@ -1564,7 +1565,16 @@ export const hasRecentBudgetIncrease = internalQuery({
       if (args.currentSpent > spentAtLastIncrease) {
         return false; // spent grew — allow new increase
       }
-      // Spent hasn't grown — block regardless of time
+
+      // Spent hasn't grown — but check if previous write reached VK.
+      // If VK budget still differs from what we set → write didn't reach ad_group → allow retry.
+      if (args.currentBudget !== undefined && lastLog.metricsSnapshot.newBudget !== undefined) {
+        if (args.currentBudget !== lastLog.metricsSnapshot.newBudget) {
+          return false; // budget mismatch — write didn't reach VK, retry
+        }
+      }
+
+      // Spent hasn't grown AND budget matches (write reached) — block
       return true;
     }
 
@@ -1872,7 +1882,7 @@ export const checkUzBudgetRules = internalAction({
                   // Dedup: check if we already did cascade unblock for this campaign recently
                   const recentUnblock = await ctx.runQuery(
                     internal.ruleEngine.hasRecentBudgetIncrease,
-                    { ruleId: rule._id, campaignId: campaignIdStr, withinMs: 5 * 60 * 1000, currentSpent: spentToday ?? 0 }
+                    { ruleId: rule._id, campaignId: campaignIdStr, withinMs: 5 * 60 * 1000, currentSpent: spentToday ?? 0, currentBudget: dailyLimitRubles }
                   );
                   if (recentUnblock) {
                     skipped.dedup++;
@@ -1927,7 +1937,7 @@ export const checkUzBudgetRules = internalAction({
                 // Dedup: skip if budget was already increased and spent hasn't grown
                 const recentIncrease = await ctx.runQuery(
                   internal.ruleEngine.hasRecentBudgetIncrease,
-                  { ruleId: rule._id, campaignId: campaignIdStr, withinMs: 5 * 60 * 1000, currentSpent: spentToday }
+                  { ruleId: rule._id, campaignId: campaignIdStr, withinMs: 5 * 60 * 1000, currentSpent: spentToday, currentBudget: dailyLimitRubles }
                 );
                 if (recentIncrease) { skipped.dedup++; continue; }
 
