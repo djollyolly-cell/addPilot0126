@@ -36,6 +36,21 @@ function todayStr(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+/** Get UTC timestamp of midnight in user's timezone (for correct "today" boundary). */
+function dayStartInTz(tz: string): number {
+  const now = new Date();
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hour: "numeric", minute: "numeric",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(now);
+  const hour = parseInt(parts.find((p) => p.type === "hour")?.value || "0", 10);
+  const minute = parseInt(parts.find((p) => p.type === "minute")?.value || "0", 10);
+  const minutesSinceMidnight = hour * 60 + minute;
+  return now.getTime() - (minutesSinceMidnight * 60 + now.getSeconds()) * 1000;
+}
+
 function hoursAgo(ts: number): number {
   return Math.round((Date.now() - ts) / 3_600_000);
 }
@@ -891,7 +906,13 @@ export const checkRuleCoverage = internalQuery({
     const rule = await ctx.db.get(args.ruleId);
     if (!rule) return { name: "Правило", status: "error", message: "Не найдено" };
 
-    const todayStart = new Date(todayStr()).getTime();
+    let tz = "Europe/Moscow";
+    const settings = await ctx.db
+      .query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", rule.userId))
+      .first();
+    if (settings?.timezone) tz = settings.timezone;
+    const todayStart = dayStartInTz(tz);
 
     // Skip rules created today
     if (rule.createdAt && rule.createdAt >= todayStart) {
@@ -949,7 +970,15 @@ export const checkLogDynamics = internalQuery({
     const rule = await ctx.db.get(args.ruleId);
     if (!rule) return { name: "Динамика", status: "error", message: "Правило не найдено" };
 
-    const todayStart = new Date(todayStr()).getTime();
+    // Use rule owner's timezone for "today" boundary (resets happen at user midnight)
+    let tz = "Europe/Moscow";
+    const settings = await ctx.db
+      .query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", rule.userId))
+      .first();
+    if (settings?.timezone) tz = settings.timezone;
+    const todayStart = dayStartInTz(tz);
+
     const logs = await ctx.db
       .query("actionLogs")
       .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
@@ -1029,7 +1058,13 @@ export const checkLogDynamics = internalQuery({
 export const checkDeduplication = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args): Promise<CheckResult> => {
-    const todayStart = new Date(todayStr()).getTime();
+    let tz = "Europe/Moscow";
+    const settings = await ctx.db
+      .query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .first();
+    if (settings?.timezone) tz = settings.timezone;
+    const todayStart = dayStartInTz(tz);
     const logs = await ctx.db
       .query("actionLogs")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))

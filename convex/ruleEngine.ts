@@ -458,6 +458,51 @@ export const getActionLogsByRule = query({
   },
 });
 
+/** Get last successful budget_increased log for a campaign under a rule */
+export const getLastBudgetLogForCampaign = internalQuery({
+  args: { ruleId: v.id("rules"), campaignId: v.string() },
+  handler: async (ctx, args) => {
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("actionType"), "budget_increased"),
+          q.eq(q.field("adId"), args.campaignId),
+          q.eq(q.field("status"), "success")
+        )
+      )
+      .order("desc")
+      .first();
+    if (!logs) return null;
+    return { newBudget: logs.metricsSnapshot?.newBudget, createdAt: logs.createdAt };
+  },
+});
+
+/** TEMP: List all UZ budget rules for a user (for diagnostic) */
+export const listUzBudgetRulesForUser = internalQuery({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("rules")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .filter((q) => q.eq(q.field("type"), "uz_budget_manage"))
+      .collect();
+  },
+});
+
+/** TEMP: Get recent budget actionLogs for a rule (for diagnostic) */
+export const getRecentBudgetLogsForRule = internalQuery({
+  args: { ruleId: v.id("rules"), limitCount: v.number() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("actionLogs")
+      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .order("desc")
+      .take(args.limitCount);
+  },
+});
+
 // ═══════════════════════════════════════════════════════════
 // Sprint 13 — Savings Widget Queries
 // ═══════════════════════════════════════════════════════════
@@ -1868,16 +1913,42 @@ export const checkUzBudgetRules = internalAction({
                 // Only for campaigns covered by this UZ rule.
                 // Dedup: skip if already unblocked in the last 5 minutes.
                 if (campaign.status === "blocked") {
-                  // Guard: only cascade-unblock if VK blocked the campaign for budget exhaustion.
-                  // VK budget block = spent is near or above the daily limit.
-                  // If spent is much below the limit — campaign was stopped manually by user.
-                  // Threshold: spent >= limit - step (same logic as shouldTriggerBudgetIncrease).
-                  const spent = spentToday ?? 0;
-                  const threshold = Math.max(dailyLimitRubles - budgetStep, 0);
-                  if (spent < threshold) {
-                    skipped.blocked++;
-                    continue;
+                  // Guard: only cascade-unblock if VK blocked for budget exhaustion.
+                  // Two checks distinguish budget block from manual stop:
+                  //
+                  // 1. If spent data exists: spent >= budget means VK exhausted the limit.
+                  //    spent < budget means someone stopped it manually (budget still available).
+                  //
+                  // 2. If spent data is missing (VK omits stats for some blocked campaigns):
+                  //    Compare current VK budget with our last logged newBudget.
+                  //    Match → we set this budget, VK likely blocked by exhaustion → unblock.
+                  //    Mismatch → someone changed budget externally → don't touch.
+                  if (spentToday !== undefined) {
+                    // Case 1: spent data available — direct check
+                    if (spentToday < dailyLimitRubles) {
+                      // Budget still has room → manual stop, skip
+                      skipped.blocked++;
+                      continue;
+                    }
+                  } else {
+                    // Case 2: no spent data — compare budget with our last log
+                    const lastLog = await ctx.runQuery(
+                      internal.ruleEngine.getLastBudgetLogForCampaign,
+                      { ruleId: rule._id, campaignId: campaignIdStr }
+                    );
+                    if (!lastLog || lastLog.newBudget === undefined) {
+                      // No log at all — we never touched this campaign, skip
+                      skipped.blocked++;
+                      continue;
+                    }
+                    if (dailyLimitRubles !== lastLog.newBudget) {
+                      // Budget changed externally since our last write → manual action, skip
+                      skipped.blocked++;
+                      continue;
+                    }
+                    // Budget matches our last write → VK exhausted it → proceed to unblock
                   }
+                  const spent = spentToday ?? dailyLimitRubles;
 
                   // Dedup: check if we already did cascade unblock for this campaign recently
                   const recentUnblock = await ctx.runQuery(

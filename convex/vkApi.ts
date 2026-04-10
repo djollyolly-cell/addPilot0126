@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { action, internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { classifyCampaignPackage } from "./telegram";
@@ -1292,32 +1293,62 @@ async function postCampaignWithFallback(
     throw new Error(`VK Ads API Error ${legacyResp.status}: ${errorText}`);
   }
 
-  // 2. New VK Ads format — look up ad_plan_id via ad_groups list endpoint
-  //    (single ad_groups/{id}.json does NOT return ad_plan_id field)
-  const groupUrl = new URL(`${MT_API_BASE}/api/v2/ad_groups.json`);
-  groupUrl.searchParams.set("_id", String(campaignId));
-  groupUrl.searchParams.set("fields", "id,ad_plan_id");
-  const groupResp = await fetchWithTimeout(groupUrl.toString(), {
-    headers: { Authorization: `Bearer ${accessToken}` },
+  // 2. New VK Ads format — try ad_groups/{id}.json first
+  // ad_groups is preferred for status changes (no cascade risk).
+  const groupPostUrl = `${MT_API_BASE}/api/v2/ad_groups/${campaignId}.json`;
+  const groupPostResp = await fetchWithTimeout(groupPostUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
   });
-  if (groupResp.status === 401) throw new Error("TOKEN_EXPIRED");
-  if (!groupResp.ok) {
+
+  if (groupPostResp.status === 401) throw new Error("TOKEN_EXPIRED");
+
+  if (groupPostResp.ok) {
+    const groupText = await groupPostResp.text();
+    if (groupText.trim()) return JSON.parse(groupText) as MtCampaign;
+    return { id: campaignId } as unknown as MtCampaign;
+  }
+
+  const groupErr = await groupPostResp.text();
+
+  // 3. If ad_groups also fails with unallowed_value AND this is a budget-only write,
+  // fall back to ad_plans. Some VK Ads accounts only accept budget at ad_plan level.
+  // NEVER write status to ad_plans — it cascades to ALL sibling ad_groups.
+  const isBudgetOnly = "budget_limit_day" in body && !("status" in body);
+  if (!isBudgetOnly || !groupErr.includes("unallowed_value")) {
     throw new Error(
-      `Failed to look up ad_group ${campaignId}: ${await groupResp.text()}`,
+      `VK Ads API Error ${groupPostResp.status} (ad_group ${campaignId}): ${groupErr}`,
     );
   }
-  const groupList = (await groupResp.json()) as {
+
+  // Lookup ad_plan_id for this ad_group
+  const lookupUrl = new URL(`${MT_API_BASE}/api/v2/ad_groups.json`);
+  lookupUrl.searchParams.set("_id", String(campaignId));
+  lookupUrl.searchParams.set("fields", "id,ad_plan_id");
+  const lookupResp = await fetchWithTimeout(lookupUrl.toString(), {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (lookupResp.status === 401) throw new Error("TOKEN_EXPIRED");
+  if (!lookupResp.ok) {
+    throw new Error(
+      `Failed to look up ad_group ${campaignId}: ${await lookupResp.text()}`,
+    );
+  }
+  const lookupData = (await lookupResp.json()) as {
     items?: Array<{ id: number; ad_plan_id?: number }>;
   };
-  const groupItem = groupList.items?.find((g) => g.id === campaignId);
-  const adPlanId = groupItem?.ad_plan_id;
+  const adPlanId = lookupData.items?.find((g) => g.id === campaignId)?.ad_plan_id;
   if (!adPlanId) {
     throw new Error(
       `ad_group ${campaignId} has no ad_plan_id — cannot set budget via ad_plans`,
     );
   }
 
-  // 3. Write to ad_plans/{ad_plan_id}.json (parent level)
+  // POST budget to ad_plans (budget only, never status)
   const planUrl = `${MT_API_BASE}/api/v2/ad_plans/${adPlanId}.json`;
   const planResp = await fetchWithTimeout(planUrl, {
     method: "POST",
@@ -1335,28 +1366,6 @@ async function postCampaignWithFallback(
       `VK Ads API Error ${planResp.status} (ad_plan ${adPlanId}): ${planErr}`,
     );
   }
-
-  // 4. Also write to ad_groups/{id}.json so read-back is consistent.
-  // getCampaignsForAccount reads budget_limit_day from ad_group level,
-  // so without this the next cycle sees stale budget → phantom resets.
-  try {
-    const groupPostUrl = `${MT_API_BASE}/api/v2/ad_groups/${campaignId}.json`;
-    const groupPostResp = await fetchWithTimeout(groupPostUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    if (!groupPostResp.ok) {
-      console.warn(`[postCampaignWithFallback] ad_group ${campaignId} POST failed (${groupPostResp.status}), ad_plan write succeeded`);
-    }
-  } catch (err) {
-    // Best-effort: ad_plan write succeeded, ad_group sync failed
-    console.warn(`[postCampaignWithFallback] ad_group ${campaignId} POST error:`, err);
-  }
-
   const planText = await planResp.text();
   if (planText.trim()) return JSON.parse(planText) as MtCampaign;
   return { id: adPlanId } as unknown as MtCampaign;
@@ -1578,6 +1587,241 @@ export const debugUzData = action({
       all_campaign_statuses: [...new Set(allCampaigns.map((c) => c.status))],
       all_ad_plan_statuses: [...new Set((adPlansRes.items || []).map((p) => p.status))],
     };
+  },
+});
+
+/** TEMP: Check specific ad_plan details — budget, status, delivery, all fields */
+export const diagnosAdPlan = action({
+  args: { accountId: v.id("adAccounts"), adPlanIds: v.array(v.number()) },
+  handler: async (ctx, args) => {
+    const accessToken: string = await ctx.runAction(
+      internal.auth.getValidTokenForAccount,
+      { accountId: args.accountId }
+    );
+
+    const results: Array<Record<string, unknown>> = [];
+    // Fetch each ad_plan individually for full detail
+    for (const planId of args.adPlanIds) {
+      try {
+        const url = `${MT_API_BASE}/api/v2/ad_plans/${planId}.json`;
+        const resp = await fetchWithTimeout(url, {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (!resp.ok) {
+          results.push({ id: planId, error: `HTTP ${resp.status}: ${await resp.text()}` });
+          continue;
+        }
+        const data = await resp.json();
+        results.push(data);
+      } catch (err) {
+        results.push({ id: planId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // Also fetch ad_groups under these plans
+    const groupResults: Array<Record<string, unknown>> = [];
+    for (const planId of args.adPlanIds) {
+      try {
+        const data = await callMtApi<{ items: Array<Record<string, unknown>> }>(
+          "ad_groups.json", accessToken,
+          { fields: "id,name,status,ad_plan_id,budget_limit_day,budget_limit,delivery", _ad_plan_id: String(planId), limit: "50" }
+        );
+        groupResults.push({ ad_plan_id: planId, groups: data.items || [] });
+      } catch (err) {
+        groupResults.push({ ad_plan_id: planId, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    // Fetch banners for first 3 groups
+    const bannerResults: Array<Record<string, unknown>> = [];
+    const firstGroups = groupResults[0] && !('error' in groupResults[0])
+      ? ((groupResults[0] as { groups: Array<{ id: number }> }).groups || []).slice(0, 3)
+      : [];
+    for (const grp of firstGroups) {
+      try {
+        const data = await callMtApi<{ items: Array<Record<string, unknown>> }>(
+          "banners.json", accessToken,
+          { fields: "id,status,moderation_status,delivery,textblocks", _campaign_id: String(grp.id), limit: "20" }
+        );
+        bannerResults.push({ group_id: grp.id, banners: data.items || [] });
+      } catch (err) {
+        bannerResults.push({ group_id: grp.id, error: err instanceof Error ? err.message : String(err) });
+      }
+    }
+
+    return { adPlans: results, adGroups: groupResults, banners: bannerResults };
+  },
+});
+
+/** TEMP: Deep diagnostic — fetch real VK API state for all UZ budget rules of a user.
+ * Compares VK state with our actionLogs to find the real reason campaigns are stuck.
+ */
+export const diagnosUzBudgetRules = action({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    // 1. Get all UZ budget rules for this user
+    const rules = await ctx.runQuery(internal.ruleEngine.listUzBudgetRulesForUser, { userId: args.userId });
+    if (!rules || rules.length === 0) return { error: "No UZ budget rules found" };
+
+    const results: Array<Record<string, unknown>> = [];
+
+    for (const rule of rules) {
+      const ruleResult: Record<string, unknown> = {
+        ruleId: rule._id,
+        ruleName: rule.name,
+        ruleActive: rule.isActive,
+        dailyLimit: rule.conditions?.value,
+        budgetStep: rule.conditions?.budgetStep,
+        maxDailyBudget: rule.conditions?.maxDailyBudget,
+        targetCampaignIds: rule.targetCampaignIds,
+        accounts: [],
+      };
+
+      for (const accountId of rule.targetAccountIds || []) {
+        let accessToken: string;
+        try {
+          accessToken = await ctx.runAction(internal.auth.getValidTokenForAccount, { accountId: accountId as Id<"adAccounts"> });
+        } catch (err) {
+          (ruleResult.accounts as Array<Record<string, unknown>>).push({
+            accountId,
+            error: `Token error: ${err instanceof Error ? err.message : String(err)}`,
+          });
+          continue;
+        }
+
+        // Fetch ALL campaigns from VK
+        const allCampaigns: Array<Record<string, unknown>> = [];
+        let offset = 0;
+        while (true) {
+          const res = await callMtApi<{ items: Array<Record<string, unknown>>; count: number }>(
+            "campaigns.json", accessToken,
+            { fields: "id,name,status,ad_plan_id,budget_limit_day,delivery,budget_limit", limit: "250", offset: String(offset) }
+          );
+          allCampaigns.push(...(res.items || []));
+          if ((res.items || []).length < 250) break;
+          offset += 250;
+        }
+
+        // Filter to rule's target campaigns (if specified)
+        const targetIds = (rule.targetCampaignIds || []).map(Number);
+        const targetCampaigns = targetIds.length > 0
+          ? allCampaigns.filter(c => targetIds.includes(c.id as number) || targetIds.includes(c.ad_plan_id as number))
+          : allCampaigns;
+
+        // Get parent ad_plan IDs
+        const parentPlanIds = [...new Set(targetCampaigns.map(c => c.ad_plan_id as number).filter(Boolean))];
+
+        // Fetch parent ad_plans
+        let parentPlans: Array<Record<string, unknown>> = [];
+        if (parentPlanIds.length > 0) {
+          try {
+            const plansRes = await callMtApi<{ items: Array<Record<string, unknown>> }>(
+              "ad_plans.json", accessToken,
+              { fields: "id,name,status,budget_limit,budget_limit_day,delivery", _id: parentPlanIds.join(",") }
+            );
+            parentPlans = (plansRes.items || []).filter(p => parentPlanIds.includes(p.id as number));
+            // Fallback: paginate if _id filter didn't work
+            if (parentPlans.length === 0) {
+              let pOffset = 0;
+              const allPlans: Array<Record<string, unknown>> = [];
+              while (true) {
+                const res = await callMtApi<{ items: Array<Record<string, unknown>> }>(
+                  "ad_plans.json", accessToken,
+                  { fields: "id,name,status,budget_limit,budget_limit_day,delivery", limit: "50", offset: String(pOffset) }
+                );
+                allPlans.push(...(res.items || []));
+                if ((res.items || []).length < 50) break;
+                pOffset += 50;
+              }
+              parentPlans = allPlans.filter(p => parentPlanIds.includes(p.id as number));
+            }
+          } catch (err) {
+            parentPlans = [{ error: err instanceof Error ? err.message : "fetch failed" }];
+          }
+        }
+
+        // Fetch today's spent via statistics API
+        const campaignIds = targetCampaigns.map(c => c.id as number);
+        let spentData: Array<Record<string, unknown>> = [];
+        if (campaignIds.length > 0) {
+          try {
+            const today = new Date().toISOString().slice(0, 10);
+            const statsRes = await callMtApi<{ items: Array<Record<string, unknown>> }>(
+              "statistics/campaigns/day.json", accessToken,
+              { id: campaignIds.join(","), date_from: today, date_to: today }
+            );
+            spentData = statsRes.items || [];
+          } catch (err) {
+            spentData = [{ error: err instanceof Error ? err.message : "fetch failed" }];
+          }
+        }
+
+        // Fetch ad_groups status/budget for these campaign IDs (new VK Ads accounts use ad_groups)
+        let adGroups: Array<Record<string, unknown>> = [];
+        if (campaignIds.length > 0) {
+          try {
+            const groupsRes = await callMtApi<{ items: Array<Record<string, unknown>> }>(
+              "ad_groups.json", accessToken,
+              { fields: "id,name,status,ad_plan_id,budget_limit_day,delivery", _id: campaignIds.join(",") }
+            );
+            adGroups = groupsRes.items || [];
+          } catch (err) {
+            adGroups = [{ error: err instanceof Error ? err.message : "fetch failed" }];
+          }
+        }
+
+        // Get recent actionLogs for this rule
+        const recentLogs = await ctx.runQuery(internal.ruleEngine.getRecentBudgetLogsForRule, {
+          ruleId: rule._id,
+          limitCount: 20,
+        });
+
+        (ruleResult.accounts as Array<Record<string, unknown>>).push({
+          accountId,
+          totalCampaignsInVK: allCampaigns.length,
+          targetCampaignsFound: targetCampaigns.length,
+          targetCampaigns: targetCampaigns.map(c => ({
+            id: c.id,
+            name: c.name,
+            status: c.status,
+            delivery: c.delivery,
+            budget_limit_day: c.budget_limit_day,
+            budget_limit: c.budget_limit,
+            ad_plan_id: c.ad_plan_id,
+          })),
+          parentAdPlans: parentPlans.map(p => ({
+            id: p.id,
+            name: p.name,
+            status: p.status,
+            delivery: p.delivery,
+            budget_limit_day: p.budget_limit_day,
+            budget_limit: p.budget_limit,
+          })),
+          adGroups: adGroups.map(g => ({
+            id: g.id,
+            name: g.name,
+            status: g.status,
+            delivery: g.delivery,
+            budget_limit_day: g.budget_limit_day,
+          })),
+          spentToday: spentData,
+          recentLogs: (recentLogs || []).map(l => ({
+            createdAt: new Date(l.createdAt).toISOString(),
+            campaignId: l.adId,
+            campaignName: l.campaignName,
+            actionType: l.actionType,
+            reason: l.reason,
+            newBudget: l.metricsSnapshot?.newBudget,
+            spentAtLog: l.metricsSnapshot?.spent,
+            status: l.status,
+          })),
+        });
+      }
+
+      results.push(ruleResult);
+    }
+
+    return { diagnosedAt: new Date().toISOString(), rules: results };
   },
 });
 
