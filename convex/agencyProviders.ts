@@ -621,6 +621,30 @@ export const vitaminConnectAccount = action({
     if (!apiKey) throw new Error("Введите API-ключ Витамин");
     if (!cabinetId) throw new Error("Введите ID кабинета");
 
+    // Verify API key + cabinet ID work with Vitamin API
+    const verifyResp = await fetch(VITAMIN_API_URL, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ id: [parseInt(cabinetId)] }),
+    });
+
+    if (!verifyResp.ok) {
+      const text = await verifyResp.text();
+      if (verifyResp.status === 401 || verifyResp.status === 403) {
+        throw new Error("API-ключ Витамин недействителен. Проверьте ключ.");
+      }
+      throw new Error(`Ошибка проверки Vitamin API: ${verifyResp.status} ${text}`);
+    }
+
+    const verifyData = await verifyResp.json();
+    if (verifyData.is_ok === false || verifyData.error) {
+      const errMsg = verifyData.error?.message || JSON.stringify(verifyData.error) || "Неизвестная ошибка";
+      throw new Error(`Vitamin API: ${errMsg}`);
+    }
+
     const name = args.accountName?.trim() || `Витамин #${cabinetId}`;
 
     // Connect using the VK token directly
