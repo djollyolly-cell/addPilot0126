@@ -36,11 +36,12 @@ export const getMetrics = query({
       Date.UTC(utc3Now.getUTCFullYear(), utc3Now.getUTCMonth(), utc3Now.getUTCDate())
     );
     const todayStart = startOfTodayUTC3.getTime() - 3 * 60 * 60 * 1000; // back to UTC
-    const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
-    const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+    const sevenDaysAgo = todayStart - 6 * 24 * 60 * 60 * 1000;
+    const thirtyDaysAgo = todayStart - 29 * 24 * 60 * 60 * 1000;
 
     // --- Registrations ---
     const registrationsToday = users.filter((u) => u.createdAt >= todayStart).length;
+    // 7d/30d include today
     const registrations7d = users.filter((u) => u.createdAt >= sevenDaysAgo).length;
     const registrations30d = users.filter((u) => u.createdAt >= thirtyDaysAgo).length;
 
@@ -178,6 +179,64 @@ export const getMetrics = query({
         };
       });
 
+    // --- Funnel: first payment tier distribution ---
+    // For each paying user, find what tier their FIRST payment was
+    const userFirstPaymentTier = new Map<string, string>();
+    for (const p of completedPayments.sort((a, b) => (a.completedAt || a.createdAt) - (b.completedAt || b.createdAt))) {
+      const uid = p.userId as string;
+      if (!userFirstPaymentTier.has(uid)) {
+        userFirstPaymentTier.set(uid, p.tier);
+      }
+    }
+    const firstPaymentStart = [...userFirstPaymentTier.values()].filter((t) => t === "start").length;
+    const firstPaymentPro = [...userFirstPaymentTier.values()].filter((t) => t === "pro").length;
+    const totalFirstPayments = userFirstPaymentTier.size;
+
+    // --- Funnel: Start → Pro upgrades ---
+    // Users who had a "start" payment and later a "pro" payment
+    const usersWithStart = new Set<string>();
+    const usersUpgradedToPro: { userId: string; startDate: number; proDate: number }[] = [];
+
+    const sortedPayments = completedPayments.sort(
+      (a, b) => (a.completedAt || a.createdAt) - (b.completedAt || b.createdAt)
+    );
+
+    for (const p of sortedPayments) {
+      const uid = p.userId as string;
+      if (p.tier === "start") {
+        usersWithStart.add(uid);
+      } else if (p.tier === "pro" && usersWithStart.has(uid)) {
+        // Check if not already counted
+        if (!usersUpgradedToPro.find((u) => u.userId === uid)) {
+          // Find their first start payment date
+          const firstStart = sortedPayments.find(
+            (sp) => (sp.userId as string) === uid && sp.tier === "start"
+          );
+          if (firstStart) {
+            usersUpgradedToPro.push({
+              userId: uid,
+              startDate: firstStart.completedAt || firstStart.createdAt,
+              proDate: p.completedAt || p.createdAt,
+            });
+          }
+        }
+      }
+    }
+
+    const upgradeCount = usersUpgradedToPro.length;
+    const upgradeDays = usersUpgradedToPro
+      .map((u) => Math.round((u.proDate - u.startDate) / (24 * 60 * 60 * 1000)))
+      .sort((a, b) => a - b);
+    const medianUpgradeDays = upgradeDays.length > 0
+      ? upgradeDays[Math.floor(upgradeDays.length / 2)]
+      : null;
+
+    // Percentage of Start users who upgraded to Pro
+    const totalEverStart = usersWithStart.size;
+    const upgradeRate = totalEverStart > 0
+      ? Math.round((upgradeCount / totalEverStart) * 100)
+      : 0;
+
     return {
       registrationsToday,
       registrations7d,
@@ -195,6 +254,14 @@ export const getMetrics = query({
       arpu,
       recentUsers,
       recentPayments,
+      // Funnel metrics
+      firstPaymentStart,
+      firstPaymentPro,
+      totalFirstPayments,
+      upgradeCount,
+      upgradeRate,
+      medianUpgradeDays,
+      totalEverStart,
     };
   },
 });
