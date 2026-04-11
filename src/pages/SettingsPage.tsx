@@ -624,6 +624,7 @@ function TelegramTab({ userId }: { userId: Id<'users'> }) {
   const connectionStatus = useQuery(api.telegram.getConnectionStatus, { userId });
   const existingToken = useQuery(api.telegram.getLinkToken, { userId });
   const generateToken = useMutation(api.telegram.generateLinkToken);
+  const disconnectTelegram = useMutation(api.telegram.disconnectTelegram);
 
   const userSettings = useQuery(api.userSettings.get, { userId });
   const setQuietHours = useMutation(api.userSettings.setQuietHours);
@@ -703,6 +704,17 @@ function TelegramTab({ userId }: { userId: Id<'users'> }) {
                   Уведомления отправляются в Telegram
                 </p>
               </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-muted-foreground hover:text-destructive"
+                onClick={async () => {
+                  await disconnectTelegram({ userId });
+                }}
+                data-testid="disconnect-telegram"
+              >
+                Отключить
+              </Button>
             </div>
           ) : (
             <div className="flex items-center gap-3 p-4 rounded-lg bg-muted">

@@ -430,6 +430,15 @@ export const processStartCommand = mutation({
 
     if (!link) return { linked: false, reason: "invalid_token" };
 
+    // Check if chatId is already used by another user
+    const allUsers = await ctx.db.query("users").collect();
+    const existingOwner = allUsers.find(
+      (u) => u.telegramChatId === args.chatId && u._id !== link.userId
+    );
+    if (existingOwner) {
+      return { linked: false, reason: "chatid_taken" };
+    }
+
     // Save chatId to user
     await ctx.db.patch(link.userId, {
       telegramChatId: args.chatId,
@@ -791,14 +800,23 @@ export const handleWebhook = internalAction({
 
         if (link) {
           // Save chatId + Telegram profile data to user
-          await ctx.runMutation(internal.telegram.saveChatId, {
+          const saveResult = await ctx.runMutation(internal.telegram.saveChatId, {
             userId: link.userId,
             chatId,
             telegramUserId: from.id,
             telegramFirstName: from.first_name,
             telegramLastName: from.last_name,
             telegramUsername: from.username,
-          });
+          }) as { saved: boolean; reason?: string; existingUserName?: string } | null;
+
+          if (saveResult && !saveResult.saved) {
+            // chatId already belongs to another user
+            await ctx.runAction(internal.telegram.sendMessage, {
+              chatId,
+              text: `⚠️ <b>Этот Telegram уже привязан к другому аккаунту</b> (${saveResult.existingUserName || "другой пользователь"}).\n\nКаждый пользователь должен подключать бота из <b>своего</b> Telegram. Попросите владельца аккаунта нажать ссылку подключения самостоятельно.`,
+            });
+            return { ok: true, linked: false, reason: "chatid_taken" };
+          }
 
           // Delete used token
           await ctx.runMutation(internal.telegram.deleteLinkToken, {
@@ -903,6 +921,20 @@ export const saveChatId = internalMutation({
     telegramUsername: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Check if this chatId is already used by ANOTHER user
+    const allUsers = await ctx.db.query("users").collect();
+    const existingOwner = allUsers.find(
+      (u) => u.telegramChatId === args.chatId && u._id !== args.userId
+    );
+    if (existingOwner) {
+      // chatId already belongs to another user — reject
+      return {
+        saved: false,
+        reason: "chatid_taken",
+        existingUserName: existingOwner.name || existingOwner.email,
+      };
+    }
+
     const patch: Record<string, unknown> = {
       telegramChatId: args.chatId,
       updatedAt: Date.now(),
@@ -912,6 +944,37 @@ export const saveChatId = internalMutation({
     if (args.telegramLastName !== undefined) patch.telegramLastName = args.telegramLastName;
     if (args.telegramUsername !== undefined) patch.telegramUsername = args.telegramUsername;
     await ctx.db.patch(args.userId, patch);
+    return { saved: true };
+  },
+});
+
+/** TEMP: Fix duplicate chatIds — remove chatId from users who don't own it */
+export const fixDuplicateChatIds = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const allUsers = await ctx.db.query("users").collect();
+    const chatIdMap = new Map<string, typeof allUsers>();
+    for (const u of allUsers) {
+      if (u.telegramChatId) {
+        const list = chatIdMap.get(u.telegramChatId) || [];
+        list.push(u);
+        chatIdMap.set(u.telegramChatId, list);
+      }
+    }
+    const fixed: string[] = [];
+    for (const [chatId, users] of chatIdMap) {
+      if (users.length <= 1) continue;
+      // Keep the oldest user (first registered), clear others
+      const sorted = users.sort((a, b) => (a._creationTime || 0) - (b._creationTime || 0));
+      for (let i = 1; i < sorted.length; i++) {
+        await ctx.db.patch(sorted[i]._id, {
+          telegramChatId: undefined,
+          updatedAt: Date.now(),
+        });
+        fixed.push(`Cleared chatId ${chatId} from ${sorted[i].name || sorted[i].email} (kept ${sorted[0].name || sorted[0].email})`);
+      }
+    }
+    return { fixed, count: fixed.length };
   },
 });
 
@@ -950,6 +1013,23 @@ export const getConnectionStatus = query({
       telegramUsername: user.telegramUsername,
       telegramPhone: user.telegramPhone,
     };
+  },
+});
+
+/** Disconnect Telegram bot — clear chatId from user */
+export const disconnectTelegram = mutation({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.userId, {
+      telegramChatId: undefined,
+      telegramUserId: undefined,
+      telegramFirstName: undefined,
+      telegramLastName: undefined,
+      telegramUsername: undefined,
+      telegramPhone: undefined,
+      updatedAt: Date.now(),
+    });
+    return { disconnected: true };
   },
 });
 

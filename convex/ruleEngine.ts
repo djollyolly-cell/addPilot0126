@@ -1546,6 +1546,96 @@ export const getActiveUzRules = internalQuery({
   },
 });
 
+/** TEMP: Diagnose wrong notifications — find all UZ rules + check chatId collisions */
+export const diagnoseBudgetNotifications = query({
+  args: {},
+  handler: async (ctx) => {
+    // 1. All active UZ budget rules with user info
+    const allRules = await ctx.db.query("rules").collect();
+    const uzRules = allRules.filter(
+      (r) => r.type === "uz_budget_manage" && r.isActive
+    );
+
+    const rulesWithUsers = [];
+    for (const rule of uzRules) {
+      const user = await ctx.db.get(rule.userId);
+      const accounts = [];
+      for (const accId of rule.targetAccountIds) {
+        const acc = await ctx.db.get(accId);
+        accounts.push({
+          id: accId,
+          name: acc?.name,
+          vkAccountId: acc?.vkAccountId,
+          userId: acc?.userId,
+        });
+      }
+      rulesWithUsers.push({
+        ruleId: rule._id,
+        ruleName: rule.name,
+        userId: rule.userId,
+        userName: user?.name || user?.email,
+        telegramChatId: user?.telegramChatId,
+        targetAccountIds: rule.targetAccountIds,
+        targetCampaignIds: rule.targetCampaignIds,
+        accounts,
+        notifyOnEveryIncrease: rule.actions.notifyOnEveryIncrease,
+        notifyOnKeyEvents: rule.actions.notifyOnKeyEvents,
+      });
+    }
+
+    // 2. Check for chatId collisions — multiple users with same chatId
+    const allUsers = await ctx.db.query("users").collect();
+    const chatIdMap: Record<string, { userId: string; name: string | undefined; email: string | undefined }[]> = {};
+    for (const u of allUsers) {
+      if (u.telegramChatId) {
+        const key = u.telegramChatId;
+        if (!chatIdMap[key]) chatIdMap[key] = [];
+        chatIdMap[key].push({ userId: u._id, name: u.name, email: u.email });
+      }
+    }
+    const duplicateChatIds = Object.fromEntries(
+      Object.entries(chatIdMap).filter(([, users]) => users.length > 1)
+    );
+
+    // 3. Recent budget_increased logs (last 50)
+    const recentLogs = await ctx.db
+      .query("actionLogs")
+      .order("desc")
+      .filter((q) =>
+        q.eq(q.field("actionType"), "budget_increased")
+      )
+      .take(50);
+
+    const logsWithRuleOwner = [];
+    for (const log of recentLogs) {
+      const rule = log.ruleId ? await ctx.db.get(log.ruleId) : null;
+      logsWithRuleOwner.push({
+        campaignName: log.adName,
+        ruleId: log.ruleId,
+        ruleName: rule?.name,
+        ruleUserId: rule?.userId,
+        logUserId: log.userId,
+        accountId: log.accountId,
+        createdAt: new Date(log.createdAt).toISOString(),
+        reason: log.reason,
+      });
+    }
+
+    // 4. Check if any rule targets accounts owned by different users
+    const crossUserAccounts = rulesWithUsers.filter((r) =>
+      r.accounts.some((a) => a.userId && a.userId !== r.userId)
+    );
+
+    return {
+      totalUzRules: uzRules.length,
+      rules: rulesWithUsers,
+      duplicateChatIds,
+      crossUserAccounts,
+      recentBudgetLogs: logsWithRuleOwner,
+    };
+  },
+});
+
 // getCampaignSpentToday moved to vkApi.ts — now queries VK API directly (real-time)
 
 /** Check if budget was recently increased and spent hasn't grown since.
