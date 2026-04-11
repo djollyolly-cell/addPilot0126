@@ -208,11 +208,12 @@ export const checkBudgetGrowthWithoutSpent = internalQuery({
     for (const rule of uzRules) {
       const logs = await ctx.db
         .query("actionLogs")
-        .withIndex("by_ruleId", (q) => q.eq("ruleId", rule._id))
+        .withIndex("by_ruleId_createdAt", (q) =>
+          q.eq("ruleId", rule._id).gte("createdAt", dayStartUtc)
+        )
         .filter((q) =>
           q.and(
             q.eq(q.field("actionType"), "budget_increased"),
-            q.gte(q.field("createdAt"), dayStartUtc),
             q.eq(q.field("status"), "success")
           )
         )
@@ -346,11 +347,12 @@ export const getRecentBudgetLogs = internalQuery({
     for (const rule of uzRules.slice(0, 10)) {
       const logs = await ctx.db
         .query("actionLogs")
-        .withIndex("by_ruleId", (q) => q.eq("ruleId", rule._id))
+        .withIndex("by_ruleId_createdAt", (q) =>
+          q.eq("ruleId", rule._id).gte("createdAt", twoHoursAgo)
+        )
         .filter((q) =>
           q.and(
             q.eq(q.field("actionType"), "budget_increased"),
-            q.gte(q.field("createdAt"), twoHoursAgo),
             q.eq(q.field("status"), "success")
           )
         )

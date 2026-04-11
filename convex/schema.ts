@@ -229,6 +229,7 @@ export default defineSchema({
     .index("by_userId", ["userId"])
     .index("by_userId_date", ["userId", "createdAt"])
     .index("by_ruleId", ["ruleId"])
+    .index("by_ruleId_createdAt", ["ruleId", "createdAt"])
     .index("by_accountId", ["accountId"]),
 
   systemLogs: defineTable({
