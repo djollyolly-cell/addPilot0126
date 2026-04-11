@@ -722,7 +722,7 @@ export const seedProviders = internalMutation({
         authMethod: "api_key",
         requiredFields: [
           { key: "accessToken", label: "Токен от Витамин", placeholder: "Вставьте токен, полученный от Витамин", type: "textarea" },
-          { key: "apiKey", label: "API-ключ Витамин", placeholder: "Ключ из инструкции Витамин", type: "password" },
+          { key: "apiKey", label: "API-ключ Витамин", placeholder: "Выдаётся Витамин вместе с токеном", type: "password" },
           { key: "cabinetId", label: "ID кабинета в Витамин", placeholder: "Из ЛК Витамин → Реклама → Рекламные аккаунты, столбец ID", type: "text" },
           { key: "accountName", label: "Название кабинета", placeholder: "Например: Клиент Иванов", type: "text" },
         ],
