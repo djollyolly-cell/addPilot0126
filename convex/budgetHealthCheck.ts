@@ -58,9 +58,11 @@ export const checkCascadeBlocks = internalAction({
       }
     }
 
-    let blockedPlans = 0;
+    let manuallyStoppedPlans = 0;
+    let budgetBlockedPlans = 0;
+    let moderationBlockedPlans = 0;
     let blockedBannerGroups = 0;
-    const userProblems = new Map<string, { plans: number; groups: number }>();
+    const userProblems = new Map<string, { stopped: number; budget: number; moderation: number; groups: number }>();
 
     for (const [accId, entry] of accountMap) {
       try {
@@ -95,19 +97,28 @@ export const checkCascadeBlocks = internalAction({
         // Check ad_plans
         for (const planId of planIds) {
           try {
-            const planData = await mtApi<{ items: Array<{ id: number; status: string; name: string }> }>(
-              "ad_plans.json", token, { _id: String(planId), fields: "id,status,name" }
+            const planData = await mtApi<{ items: Array<{ id: number; status: string; name: string; issues?: Array<{ code: string; message: string }> }> }>(
+              "ad_plans.json", token, { _id: String(planId), fields: "id,status,name,issues" }
             );
             const plan = planData.items?.[0];
             if (plan && plan.status === "blocked") {
-              blockedPlans++;
+              const issueCode = plan.issues?.[0]?.code;
+              const isStopped = issueCode === "STOPPED";
+              const isBudget = issueCode === "BUDGET_LIMIT";
+
+              if (isStopped) manuallyStoppedPlans++;
+              else if (isBudget) budgetBlockedPlans++;
+              else moderationBlockedPlans++;
+
               const groupsInPlan = campaigns.filter(c => c.ad_plan_id === planId && matchedCampaigns.has(c.id) && c.status !== "deleted").length;
               // Find user
               const rule = entry.rules[0];
               const user = await ctx.runQuery(internal.budgetHealthCheck.getUserName, { userId: rule.userId });
               const key = user || rule.userId;
-              const prev = userProblems.get(key) || { plans: 0, groups: 0 };
-              prev.plans++;
+              const prev = userProblems.get(key) || { stopped: 0, budget: 0, moderation: 0, groups: 0 };
+              if (isStopped) prev.stopped++;
+              else if (isBudget) prev.budget++;
+              else prev.moderation++;
               prev.groups += groupsInPlan;
               userProblems.set(key, prev);
             }
@@ -137,23 +148,42 @@ export const checkCascadeBlocks = internalAction({
       } catch { /* skip accounts with token errors */ }
     }
 
-    if (blockedPlans > 0) {
+    // Severity: moderation → error, budget → warning, stopped → info only
+    if (moderationBlockedPlans > 0) {
       status = "error";
-      for (const [user, data] of userProblems) {
-        issues.unshift(`${user}: ${data.plans} ad_plans blocked (${data.groups} групп)`);
+    } else if (budgetBlockedPlans > 0 || blockedBannerGroups > 0) {
+      status = "warning";
+    }
+
+    // Build details per user (only for non-stopped problems)
+    for (const [user, data] of userProblems) {
+      const parts: string[] = [];
+      if (data.moderation > 0) parts.push(`${data.moderation} модерация`);
+      if (data.budget > 0) parts.push(`${data.budget} бюджет`);
+      if (parts.length > 0) {
+        issues.unshift(`${user}: ${parts.join(", ")} (${data.groups} групп)`);
       }
     }
 
-    if (blockedBannerGroups > 0) {
-      if (status === "ok") status = "warning";
+    // Build message
+    const totalProblems = moderationBlockedPlans + budgetBlockedPlans;
+    const totalBlocked = totalProblems + manuallyStoppedPlans;
+    let message: string;
+    if (totalBlocked === 0 && blockedBannerGroups === 0) {
+      message = "ок";
+    } else {
+      const parts: string[] = [];
+      if (moderationBlockedPlans > 0) parts.push(`${moderationBlockedPlans} модерация`);
+      if (budgetBlockedPlans > 0) parts.push(`${budgetBlockedPlans} бюджет`);
+      if (blockedBannerGroups > 0) parts.push(`${blockedBannerGroups} групп blocked баннеры`);
+      if (manuallyStoppedPlans > 0) parts.push(`${manuallyStoppedPlans} ручных`);
+      message = parts.join(", ");
     }
 
     return {
       name: "Каскадные блокировки",
       status,
-      message: blockedPlans + blockedBannerGroups > 0
-        ? `${blockedPlans} ad_plans, ${blockedBannerGroups} групп с blocked баннерами`
-        : "ок",
+      message,
       details: issues.slice(0, 15),
     };
   },
