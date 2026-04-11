@@ -231,6 +231,19 @@ export default defineSchema({
     .index("by_ruleId", ["ruleId"])
     .index("by_accountId", ["accountId"]),
 
+  systemLogs: defineTable({
+    userId: v.optional(v.id("users")),
+    accountId: v.optional(v.id("adAccounts")),
+    level: v.union(v.literal("error"), v.literal("warn"), v.literal("info")),
+    source: v.string(),
+    message: v.string(),
+    details: v.optional(v.any()),
+    createdAt: v.number(),
+  })
+    .index("by_userId_createdAt", ["userId", "createdAt"])
+    .index("by_level_createdAt", ["level", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
+
   metricsDaily: defineTable({
     accountId: v.id("adAccounts"),
     adId: v.string(),

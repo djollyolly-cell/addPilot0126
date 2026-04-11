@@ -37,11 +37,23 @@ export const getUnread = query({
   },
 });
 
-// Mark notification as read
+// Mark notification as read — marks root + all unread user_to_admin replies in thread
 export const markRead = mutation({
   args: { notificationId: v.id("userNotifications") },
   handler: async (ctx, args) => {
+    // Mark the root message
     await ctx.db.patch(args.notificationId, { isRead: true });
+
+    // Also mark all unread user_to_admin replies in this thread
+    const replies = await ctx.db
+      .query("userNotifications")
+      .withIndex("by_threadId", (q) => q.eq("threadId", args.notificationId))
+      .collect();
+    for (const reply of replies) {
+      if (!reply.isRead && reply.direction === "user_to_admin") {
+        await ctx.db.patch(reply._id, { isRead: true });
+      }
+    }
   },
 });
 

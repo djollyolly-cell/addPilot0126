@@ -144,7 +144,7 @@ function App() {
         <Route path="/settings/telegram" element={<TelegramSettingsPage />} />
         <Route path="/pricing" element={<PricingPage />} />
         <Route path="/support" element={<SupportPage />} />
-        <Route path="/admin" element={<AdminPage />} />
+        <Route path="/admin" element={<AdminGate><AdminPage /></AdminGate>} />
       </Route>
 
       {/* Fallback */}

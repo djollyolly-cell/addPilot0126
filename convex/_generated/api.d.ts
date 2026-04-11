@@ -10,6 +10,8 @@
 
 import type * as adAccounts from "../adAccounts.js";
 import type * as admin from "../admin.js";
+import type * as adminLogs from "../adminLogs.js";
+import type * as adminMetrics from "../adminMetrics.js";
 import type * as agencyProviders from "../agencyProviders.js";
 import type * as aiCabinet from "../aiCabinet.js";
 import type * as aiGenerate from "../aiGenerate.js";
@@ -20,6 +22,7 @@ import type * as authEmail from "../authEmail.js";
 import type * as authInternal from "../authInternal.js";
 import type * as bannerStyles from "../bannerStyles.js";
 import type * as billing from "../billing.js";
+import type * as budgetHealthCheck from "../budgetHealthCheck.js";
 import type * as businessDirections from "../businessDirections.js";
 import type * as creativeAnalytics from "../creativeAnalytics.js";
 import type * as creatives from "../creatives.js";
@@ -55,6 +58,8 @@ import type {
 declare const fullApi: ApiFromModules<{
   adAccounts: typeof adAccounts;
   admin: typeof admin;
+  adminLogs: typeof adminLogs;
+  adminMetrics: typeof adminMetrics;
   agencyProviders: typeof agencyProviders;
   aiCabinet: typeof aiCabinet;
   aiGenerate: typeof aiGenerate;
@@ -65,6 +70,7 @@ declare const fullApi: ApiFromModules<{
   authInternal: typeof authInternal;
   bannerStyles: typeof bannerStyles;
   billing: typeof billing;
+  budgetHealthCheck: typeof budgetHealthCheck;
   businessDirections: typeof businessDirections;
   creativeAnalytics: typeof creativeAnalytics;
   creatives: typeof creatives;

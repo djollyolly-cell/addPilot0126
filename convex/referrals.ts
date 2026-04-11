@@ -3,6 +3,24 @@ import { query, mutation, internalMutation, internalQuery, action } from "./_gen
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
+const ADMIN_EMAILS = ["13632013@vk.com", "786709647@vk.com"];
+
+async function assertAdmin(ctx: any, sessionToken: string) {
+  const session = await ctx.db
+    .query("sessions")
+    .withIndex("by_token", (q: any) => q.eq("token", sessionToken))
+    .first();
+  if (!session || session.expiresAt < Date.now()) {
+    throw new Error("Unauthorized: invalid session");
+  }
+  const user = await ctx.db.get(session.userId);
+  if (!user) throw new Error("Forbidden: admin access required");
+  if (user.isAdmin !== true && !ADMIN_EMAILS.includes(user.email)) {
+    throw new Error("Forbidden: admin access required");
+  }
+  return user;
+}
+
 // ─── Helpers ─────────────────────────────────────────
 
 function generateReferralCode(): string {
@@ -233,11 +251,13 @@ export const applyReferralBonus = internalMutation({
 /** Admin: update referral type and discount for a user */
 export const adminUpdateReferral = mutation({
   args: {
+    sessionToken: v.string(),
     userId: v.id("users"),
     referralType: v.union(v.literal("basic"), v.literal("discount")),
     referralDiscount: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
     const patch: Record<string, unknown> = { referralType: args.referralType };
     if (args.referralDiscount !== undefined) {
       patch.referralDiscount = args.referralDiscount;
@@ -314,8 +334,9 @@ export const getAllUsersWithReferrals = internalQuery({
 
 /** Admin: get referral details for a specific user */
 export const adminGetUserReferrals = query({
-  args: { userId: v.id("users") },
+  args: { sessionToken: v.string(), userId: v.id("users") },
   handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
     const referrals = await ctx.db
       .query("referrals")
       .withIndex("by_referrerId", (q) => q.eq("referrerId", args.userId))
