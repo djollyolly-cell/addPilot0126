@@ -29,18 +29,24 @@ export const getMetrics = query({
     const completedPayments = payments.filter((p) => p.status === "completed");
 
     const now = Date.now();
-    const oneDayAgo = now - 24 * 60 * 60 * 1000;
+    // Start of today in UTC+3 (Minsk/Moscow)
+    const nowDate = new Date(now);
+    const utc3Now = new Date(nowDate.getTime() + 3 * 60 * 60 * 1000);
+    const startOfTodayUTC3 = new Date(
+      Date.UTC(utc3Now.getUTCFullYear(), utc3Now.getUTCMonth(), utc3Now.getUTCDate())
+    );
+    const todayStart = startOfTodayUTC3.getTime() - 3 * 60 * 60 * 1000; // back to UTC
     const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
     const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
 
     // --- Registrations ---
-    const registrationsToday = users.filter((u) => u.createdAt >= oneDayAgo).length;
+    const registrationsToday = users.filter((u) => u.createdAt >= todayStart).length;
     const registrations7d = users.filter((u) => u.createdAt >= sevenDaysAgo).length;
     const registrations30d = users.filter((u) => u.createdAt >= thirtyDaysAgo).length;
 
     // --- Payments today ---
     const paymentsToday = completedPayments.filter(
-      (p) => (p.completedAt || p.createdAt) >= oneDayAgo
+      (p) => (p.completedAt || p.createdAt) >= todayStart
     );
     const paymentsTodayCount = paymentsToday.length;
     const paymentsTodaySum = paymentsToday.reduce((s, p) => s + p.amount, 0);
