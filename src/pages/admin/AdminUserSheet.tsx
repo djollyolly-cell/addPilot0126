@@ -67,6 +67,7 @@ export function AdminUserSheet({ user: u, sessionToken, onClose }: Props) {
   const adminUpdateReferral = useMutation(api.referrals.adminUpdateReferral);
   const runUserCheck = useAction(api.healthCheck.runManualUserCheck);
   const referralDetails = useQuery(api.referrals.adminGetUserReferrals, {
+    sessionToken,
     userId: u._id as Id<'users'>,
   });
 
@@ -283,6 +284,7 @@ export function AdminUserSheet({ user: u, sessionToken, onClose }: Props) {
                 value={u.referralType ?? 'basic'}
                 onChange={(e) =>
                   adminUpdateReferral({
+                    sessionToken,
                     userId: u._id as Id<'users'>,
                     referralType: e.target.value as 'basic' | 'discount',
                   })
