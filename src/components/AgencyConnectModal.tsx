@@ -344,7 +344,9 @@ export function AgencyConnectModal({ userId, onClose, onConnected }: AgencyConne
           userId: typedUserId,
           providerId,
           accessToken: fieldValues.accessToken.replace(/\s+/g, ''),
+          apiKey: fieldValues.apiKey.trim(),
           cabinetId: fieldValues.cabinetId.trim(),
+          accountName: fieldValues.accountName?.trim() || undefined,
         });
         onConnected();
       } else if (providerName === "targethunter" || providerName === "cerebro" || providerName === "kotbot" || providerName === "elama") {

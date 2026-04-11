@@ -600,45 +600,52 @@ export const zaleycashConnectAccount = action({
 
 // ---- Vitamin flow ----
 
-/** Connect a Vitamin cabinet: user provides VK token from Vitamin support + cabinet ID */
+const VITAMIN_API_URL = "https://app.vitamin.tools/ext/api/v1/external_account/account/get-token-list-by-clients";
+
+/** Connect a Vitamin cabinet: user provides VK token + API key + cabinet ID */
 export const vitaminConnectAccount = action({
   args: {
     userId: v.id("users"),
     providerId: v.id("agencyProviders"),
     accessToken: v.string(),
+    apiKey: v.string(),
     cabinetId: v.string(),
     accountName: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<{ accountId: string }> => {
-    const accessToken = args.accessToken.trim();
+    const vkToken = args.accessToken.replace(/\s+/g, "").trim();
+    const apiKey = args.apiKey.trim();
     const cabinetId = args.cabinetId.trim();
-    if (!accessToken) throw new Error("Введите токен от Витамин");
+
+    if (!vkToken) throw new Error("Вставьте токен от Витамин");
+    if (!apiKey) throw new Error("Введите API-ключ Витамин");
     if (!cabinetId) throw new Error("Введите ID кабинета");
 
     const name = args.accountName?.trim() || `Витамин #${cabinetId}`;
 
-    // Connect directly with the VK token from Vitamin support
+    // Connect using the VK token directly
     const result: { accountId: string } = await ctx.runAction(
       internal.adAccounts.connectAgencyAccountInternal,
       {
         userId: args.userId,
-        accessToken,
+        accessToken: vkToken,
         name,
         agencyProviderId: args.providerId,
         agencyCabinetId: cabinetId,
       }
     );
 
-    // Set vitaminCabinetId for future auto-refresh via server VITAMIN_API_KEY
+    // Save cabinet ID for auto-refresh
     await ctx.runMutation(internal.adAccounts.patchAccount, {
       accountId: result.accountId as any, // eslint-disable-line @typescript-eslint/no-explicit-any
       vitaminCabinetId: cabinetId,
     });
 
-    // Save credentials (no user API key needed — refresh uses server env var)
+    // Save API key for auto-refresh
     await ctx.runMutation(selfInternal.agencyProviders.saveCredentialsInternal, {
       userId: args.userId,
       providerId: args.providerId,
+      apiKey,
     });
 
     return result;
@@ -714,10 +721,12 @@ export const seedProviders = internalMutation({
         hasApi: true,
         authMethod: "api_key",
         requiredFields: [
-          { key: "accessToken", label: "Токен от Витамин", placeholder: "Токен из поддержки Витамин", type: "password" },
-          { key: "cabinetId", label: "ID кабинета в Витамин", placeholder: "Например: 26530229", type: "text" },
+          { key: "accessToken", label: "Токен от Витамин", placeholder: "Вставьте токен, полученный от Витамин", type: "textarea" },
+          { key: "apiKey", label: "API-ключ Витамин", placeholder: "Ключ из инструкции Витамин", type: "password" },
+          { key: "cabinetId", label: "ID кабинета в Витамин", placeholder: "Из ЛК Витамин → Реклама → Рекламные аккаунты, столбец ID", type: "text" },
+          { key: "accountName", label: "Название кабинета", placeholder: "Например: Клиент Иванов", type: "text" },
         ],
-        notes: "Токен получить в поддержке Витамин. ID кабинета — из раздела Реклама → Рекламные аккаунты",
+        notes: "Все данные предоставляет Витамин: токен, API-ключ и ID кабинета.",
       },
       {
         name: "getuniq",
@@ -820,5 +829,80 @@ export const seedProviders = internalMutation({
       }
     }
     return { seeded };
+  },
+});
+
+// ---- TEMP: one-time migration for Vitamin accounts where API key was saved as accessToken ----
+
+/** Migrate Vitamin API key from adAccounts.accessToken → agencyCredentials.apiKey,
+ *  then call Vitamin API to get real VK token and save it back. */
+export const migrateVitaminApiKeys = action({
+  args: {
+    accountId: v.id("adAccounts"),
+  },
+  handler: async (ctx, args): Promise<{ migrated: boolean; apiKeySaved: boolean; vkTokenObtained: boolean; error?: string; accountName?: string }> => {
+    // 1. Get account
+    const account: Record<string, unknown> | null = await ctx.runQuery(internal.auth.getAccountWithCredentials, {
+      accountId: args.accountId,
+    });
+    if (!account) throw new Error("Аккаунт не найден");
+    if (!account.vitaminCabinetId) throw new Error("Нет vitaminCabinetId");
+    if (!account.agencyProviderId) throw new Error("Нет agencyProviderId");
+
+    const vitaminApiKey: string = account.accessToken as string;
+    if (!vitaminApiKey) throw new Error("Нет accessToken для миграции");
+
+    // 2. Save API key to agencyCredentials
+    await ctx.runMutation(selfInternal.agencyProviders.saveCredentialsInternal, {
+      userId: account.userId as string,
+      providerId: account.agencyProviderId as string,
+      apiKey: vitaminApiKey,
+    });
+
+    // 3. Call Vitamin API with this key to get real VK token
+    const resp: Response = await fetch(VITAMIN_API_URL, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": vitaminApiKey,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ id: [parseInt(account.vitaminCabinetId as string)] }),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      return { migrated: true, apiKeySaved: true, vkTokenObtained: false, error: `Vitamin API ${resp.status}: ${text}` };
+    }
+
+    const data = await resp.json();
+
+    if (data.is_ok === false || data.error) {
+      const errMsg = data.error?.message || JSON.stringify(data.error) || "Неизвестная ошибка";
+      return { migrated: true, apiKeySaved: true, vkTokenObtained: false, error: `Vitamin API: ${errMsg}` };
+    }
+
+    // Extract VK token
+    let vkToken: string | null = null;
+    if (Array.isArray(data)) {
+      vkToken = data[0]?.token || data[0]?.access_token || null;
+    } else if (data.data && Array.isArray(data.data)) {
+      vkToken = data.data[0]?.token || data.data[0]?.access_token || null;
+    } else if (data.token) {
+      vkToken = data.token;
+    } else if (data.access_token) {
+      vkToken = data.access_token;
+    }
+
+    if (!vkToken) {
+      return { migrated: true, apiKeySaved: true, vkTokenObtained: false, error: `Нет токена в ответе: ${JSON.stringify(data).slice(0, 200)}` };
+    }
+
+    // 4. Save real VK token to adAccount
+    await ctx.runMutation(internal.auth.updateVitaminToken, {
+      accountId: args.accountId,
+      accessToken: vkToken,
+    });
+
+    return { migrated: true, apiKeySaved: true, vkTokenObtained: true, accountName: account.name as string | undefined };
   },
 });
