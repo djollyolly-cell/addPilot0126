@@ -62,7 +62,7 @@ export function VideosPage() {
     api.businessDirections.list,
     accountId ? { accountId: accountId as Id<"adAccounts"> } : 'skip'
   );
-  const activeDirections = directions?.filter((d: any) => d.isActive) || [];
+  const activeDirections = directions?.filter((d: { isActive: boolean }) => d.isActive) || [];
 
   // Queries
   const videos = useQuery(
@@ -252,7 +252,7 @@ export function VideosPage() {
       const storageUrl = await convex.query(api.videos.getStorageUrl, { videoId: id as Id<"videos"> });
       if (!storageUrl) throw new Error('Файл видео не найден в хранилище. Перезагрузите видео.');
 
-      const video = videos?.find((v: any) => v._id === id);
+      const video = videos?.find((v: { _id: string }) => v._id === id);
       if (!video) throw new Error('Видео не найдено. Обновите страницу.');
 
       // Step 1: Extract audio from stored video
@@ -331,7 +331,7 @@ export function VideosPage() {
     setAnalyzingId(id);
     setError(null);
     try {
-      const video = videos?.find((v: any) => v._id === id);
+      const video = videos?.find((v: { _id: string }) => v._id === id);
 
       // Extract frames from video for Vision analysis
       const frameStorageIds: Id<"_storage">[] = [];
@@ -542,7 +542,7 @@ export function VideosPage() {
               onStartUpload={handleStartUpload}
               onClearQueue={handleClearQueue}
               uploading={uploading}
-              directions={directions as any}
+              directions={directions as NonNullable<typeof directions>}
             />
           </CardContent>
         </Card>
@@ -589,7 +589,7 @@ export function VideosPage() {
               </div>
             ) : (
               <div className="space-y-2">
-                {videos.map((video: any) => (
+                {videos.map((video) => (
                   <VideoItem
                     key={video._id}
                     video={video}

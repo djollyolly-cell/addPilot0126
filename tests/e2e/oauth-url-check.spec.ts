@@ -16,7 +16,7 @@ test.describe('OAuth URL Verification', () => {
     await expect(loginButton).toBeVisible();
 
     // Click login and wait for either VK OAuth redirect or error
-    const _responsePromise = page.waitForResponse(
+    void page.waitForResponse(
       (response) => response.url().includes('convex.cloud') || response.url().includes('oauth.vk.com'),
       { timeout: 10000 }
     ).catch(() => null);

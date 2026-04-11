@@ -53,7 +53,7 @@ const BOT_USERNAME = import.meta.env.VITE_TELEGRAM_BOT_USERNAME || 'Addpilot_bot
 export function SettingsPage() {
   const { user } = useAuth();
   const location = useLocation();
-  const initialTab = (location.state as any)?.tab || 'profile';
+  const initialTab = (location.state as { tab?: string })?.tab || 'profile';
   const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral'>(initialTab);
 
   if (!user) {
