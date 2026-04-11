@@ -212,6 +212,20 @@ export const getUserThreads = query({
   },
 });
 
+// Count unread user→admin messages (for admin sidebar badge)
+export const getUnreadFeedbackCount = query({
+  args: {},
+  handler: async (ctx) => {
+    const unread = await ctx.db
+      .query("userNotifications")
+      .withIndex("by_direction", (q) =>
+        q.eq("direction", "user_to_admin").eq("isRead", false)
+      )
+      .collect();
+    return unread.length;
+  },
+});
+
 // Get all feedback threads (for admin panel)
 export const listFeedback = query({
   args: {},

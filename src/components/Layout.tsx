@@ -59,6 +59,13 @@ export function Layout() {
   );
   const supportUnread = supportThreads?.reduce((sum, t) => sum + t.unreadCount, 0) ?? 0;
 
+  // Admin: unread feedback from users (user→admin)
+  const adminUnreadCount = useQuery(
+    api.userNotifications.getUnreadFeedbackCount,
+    isAdmin ? {} : 'skip'
+  );
+  const adminUnread = adminUnreadCount ?? 0;
+
   const navItems = [
     ...navigation,
     ...(isAdmin ? [{ name: 'Админ', href: '/admin', icon: Shield }] : []),
@@ -80,7 +87,9 @@ export function Layout() {
         <nav className="p-4 space-y-1">
           {navItems.map((item) => {
             const isActive = location.pathname === item.href;
-            const badge = item.href === '/support' && supportUnread > 0 ? supportUnread : 0;
+            const badge = item.href === '/support'
+              ? (isAdmin ? adminUnread : supportUnread)
+              : 0;
             return (
               <Link
                 key={item.name}
@@ -170,7 +179,9 @@ export function Layout() {
             const isActive =
               location.pathname === item.href ||
               (item.href === '/settings' && location.pathname.startsWith('/settings'));
-            const badge = item.href === '/support' && supportUnread > 0 ? supportUnread : 0;
+            const badge = item.href === '/support'
+              ? (isAdmin ? adminUnread : supportUnread)
+              : 0;
             return (
               <Link
                 key={item.name}
