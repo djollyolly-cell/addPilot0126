@@ -5,11 +5,11 @@ import { Badge } from '../../components/ui/badge';
 import {
   TrendingUp,
   Users,
-  DollarSign,
   Clock,
   UserMinus,
   ArrowUpRight,
   Loader2,
+  Banknote,
 } from 'lucide-react';
 
 function MetricCard({
@@ -65,7 +65,7 @@ export function AdminMetricsTab({ sessionToken }: Props) {
       {/* Key Metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
-          icon={<DollarSign className="w-5 h-5" />}
+          icon={<Banknote className="w-5 h-5" />}
           label="MRR"
           value={formatCurrency(metrics.mrr)}
           subtitle={`Start: ${metrics.activeStart} | Pro: ${metrics.activePro}`}
@@ -87,12 +87,12 @@ export function AdminMetricsTab({ sessionToken }: Props) {
           value={metrics.medianConversionDays !== null ? `${metrics.medianConversionDays} дн.` : '—'}
         />
         <MetricCard
-          icon={<DollarSign className="w-5 h-5" />}
+          icon={<TrendingUp className="w-5 h-5" />}
           label="LTV (среднее)"
           value={formatCurrency(metrics.avgLtv)}
         />
         <MetricCard
-          icon={<DollarSign className="w-5 h-5" />}
+          icon={<Users className="w-5 h-5" />}
           label="ARPU"
           value={formatCurrency(metrics.arpu)}
         />

@@ -76,6 +76,7 @@ export const listUsers = query({
           lastPromoCode: lastPayment?.promoCode || null,
           lastBonusDays: lastPayment?.bonusDays || null,
           totalPaid: completedPayments.reduce((sum, p) => sum + (p.amount || 0), 0),
+          lastPaymentDate: lastPayment ? (lastPayment.completedAt || lastPayment.createdAt) : null,
           referralCode: user.referralCode ?? null,
           referralType: (user.referralType ?? "basic") as string,
           referralDiscount: user.referralDiscount ?? 10,
