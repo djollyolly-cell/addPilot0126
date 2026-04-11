@@ -10,7 +10,7 @@ import {
   Crown,
   MessageCircle,
   Building2,
-  DollarSign,
+  Banknote,
   Search,
   Loader2,
   Bell,
@@ -174,8 +174,8 @@ export function AdminUsersTab({ sessionToken }: Props) {
           <StatCard icon={<Crown className="w-5 h-5 text-green-500" />} label="Pro" value={stats.proCount} />
           <StatCard icon={<MessageCircle className="w-5 h-5" />} label="Telegram" value={stats.withTelegram} />
           <StatCard icon={<Building2 className="w-5 h-5" />} label="С кабинетами" value={stats.withAccounts} />
-          <StatCard icon={<DollarSign className="w-5 h-5" />} label="Выручка всего" value={formatCurrency(stats.totalRevenue)} />
-          <StatCard icon={<DollarSign className="w-5 h-5" />} label="Выручка 30 дн." value={formatCurrency(stats.recentRevenue)} />
+          <StatCard icon={<Banknote className="w-5 h-5" />} label="Выручка всего" value={formatCurrency(stats.totalRevenue)} />
+          <StatCard icon={<Banknote className="w-5 h-5" />} label="Выручка 30 дн." value={formatCurrency(stats.recentRevenue)} />
         </div>
       )}
 

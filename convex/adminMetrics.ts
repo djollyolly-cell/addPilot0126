@@ -52,7 +52,7 @@ export const getMetrics = query({
     const paymentsTodayCount = paymentsToday.length;
     const paymentsTodaySum = paymentsToday.reduce((s, p) => s + p.amount, 0);
 
-    // --- MRR (active paid users × their tier price) ---
+    // --- Active paid users ---
     const activePaid = users.filter(
       (u) =>
         u.subscriptionTier &&
@@ -60,23 +60,14 @@ export const getMetrics = query({
         u.subscriptionExpiresAt &&
         u.subscriptionExpiresAt > now
     );
-    // Approximate: count active Start and Pro users
     const activeStart = activePaid.filter((u) => u.subscriptionTier === "start").length;
     const activePro = activePaid.filter((u) => u.subscriptionTier === "pro").length;
-    // Use actual average from recent payments per tier
-    const recentStartPayments = completedPayments.filter(
-      (p) => p.tier === "start" && (p.completedAt || p.createdAt) >= thirtyDaysAgo
+
+    // --- MRR = sum of completed payments in last 30 days (actual revenue) ---
+    const payments30d = completedPayments.filter(
+      (p) => (p.completedAt || p.createdAt) >= thirtyDaysAgo
     );
-    const recentProPayments = completedPayments.filter(
-      (p) => p.tier === "pro" && (p.completedAt || p.createdAt) >= thirtyDaysAgo
-    );
-    const avgStartPrice = recentStartPayments.length > 0
-      ? recentStartPayments.reduce((s, p) => s + p.amount, 0) / recentStartPayments.length
-      : 0;
-    const avgProPrice = recentProPayments.length > 0
-      ? recentProPayments.reduce((s, p) => s + p.amount, 0) / recentProPayments.length
-      : 0;
-    const mrr = activeStart * avgStartPrice + activePro * avgProPrice;
+    const mrr = payments30d.reduce((s, p) => s + p.amount, 0);
 
     // --- Churn (last 30 days: expired and not renewed) ---
     const expiredRecently = users.filter(

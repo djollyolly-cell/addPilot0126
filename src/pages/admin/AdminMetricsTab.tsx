@@ -93,7 +93,7 @@ export function AdminMetricsTab({ sessionToken }: Props) {
           label="MRR"
           value={formatCurrency(metrics.mrr)}
           subtitle={`Start: ${metrics.activeStart} | Pro: ${metrics.activePro}`}
-          tooltip="Ежемесячная выручка. Считается как: активные Start × средний чек Start за 30 дн. + активные Pro × средний чек Pro за 30 дн."
+          tooltip="Фактическая выручка за последние 30 дней. Сумма всех успешных оплат."
         />
         <MetricCard
           icon={<UserMinus className="w-5 h-5" />}
