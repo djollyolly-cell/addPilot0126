@@ -19,6 +19,8 @@ export default defineSchema({
       v.literal("pro")
     )),
     subscriptionExpiresAt: v.optional(v.number()),
+    // Pro account limit: 27 for grandfathered users, 20 for new Pro subscribers
+    proAccountLimit: v.optional(v.number()),
     onboardingCompleted: v.optional(v.boolean()),
     createdAt: v.number(),
     vkAccessToken: v.optional(v.string()),
