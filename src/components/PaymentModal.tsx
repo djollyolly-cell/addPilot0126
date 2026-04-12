@@ -55,6 +55,14 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
   const [referralApplied, setReferralApplied] = useState<{ discount: number; referrerName: string } | null>(null);
   const [referralError, setReferralError] = useState<string | null>(null);
 
+  // Auto-fill referral code from localStorage (saved from referral link)
+  useEffect(() => {
+    const savedRef = localStorage.getItem('adpilot_referral_code');
+    if (savedRef && !referralCode) {
+      setReferralCode(savedRef);
+    }
+  }, []);
+
   const createBepaidCheckout = useAction(api.billing.createBepaidCheckout);
   const upgradeInfo = useQuery(
     api.billing.getUpgradePrice,
@@ -156,6 +164,8 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
         referrerName: referralValidation.referrerName ?? 'Пользователь',
       });
       setReferralError(null);
+      // Clear saved referral code from localStorage after successful apply
+      localStorage.removeItem('adpilot_referral_code');
       // Mutual exclusion: clear promo code
       if (promoApplied) {
         setPromoApplied(null);

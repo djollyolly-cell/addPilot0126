@@ -5,6 +5,7 @@ import { api } from '../../convex/_generated/api';
 import { useAuth } from '../lib/useAuth';
 import { BusinessProfileEditor } from '@/components/BusinessProfileEditor';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../components/ui/card';
+import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import {
@@ -1119,6 +1120,7 @@ function ReferralTab({ userId }: { userId: string }) {
     { userId: userId as Id<'users'> }
   );
   const [copied, setCopied] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   if (stats === undefined) {
     return (
@@ -1132,41 +1134,72 @@ function ReferralTab({ userId }: { userId: string }) {
     return <p className="text-sm text-muted-foreground py-4">Реферальный код не найден</p>;
   }
 
+  const referralLink = stats?.referralCode
+    ? `https://aipilot.by/login?ref=${stats.referralCode}`
+    : '';
+
   const handleCopy = () => {
     navigator.clipboard.writeText(stats.referralCode!);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const handleCopyLink = () => {
+    navigator.clipboard.writeText(referralLink);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+  };
+
   return (
     <div data-testid="referral-tab" className="space-y-6 max-w-2xl">
-      {/* Code */}
+      {/* Code & Link */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg">Ваш реферальный код</CardTitle>
+          <CardTitle className="text-lg">Ваш реферальный код и ссылка</CardTitle>
           <CardDescription>
-            Поделитесь кодом — получайте бонусные дни за каждого оплатившего пользователя
+            Поделитесь кодом или ссылкой — получайте бонусные дни за каждого оплатившего пользователя
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex items-center gap-3">
-            <code className="text-lg font-mono bg-muted px-4 py-2 rounded-lg">
-              {stats.referralCode}
-            </code>
-            <Button variant="outline" size="sm" onClick={handleCopy}>
-              {copied ? <CheckCircle2 className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              <span className="ml-1.5">{copied ? 'Скопировано' : 'Копировать'}</span>
-            </Button>
+          {/* Referral code */}
+          <div>
+            <Label className="text-xs text-muted-foreground mb-1.5 block">Код</Label>
+            <div className="flex items-center gap-3">
+              <code className="text-lg font-mono bg-muted px-4 py-2 rounded-lg">
+                {stats.referralCode}
+              </code>
+              <Button variant="outline" size="sm" onClick={handleCopy}>
+                {copied ? <CheckCircle2 className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                <span className="ml-1.5">{copied ? 'Скопировано' : 'Копировать'}</span>
+              </Button>
+            </div>
           </div>
+
+          {/* Referral link */}
+          <div>
+            <Label className="text-xs text-muted-foreground mb-1.5 block">Ссылка</Label>
+            <div className="flex items-center gap-3">
+              <code className="text-sm font-mono bg-muted px-4 py-2 rounded-lg truncate max-w-[320px]" title={referralLink}>
+                {referralLink}
+              </code>
+              <Button variant="outline" size="sm" onClick={handleCopyLink}>
+                {linkCopied ? <CheckCircle2 className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                <span className="ml-1.5">{linkCopied ? 'Скопировано' : 'Копировать'}</span>
+              </Button>
+            </div>
+          </div>
+
           <div className="p-3 bg-muted/50 rounded-lg space-y-1.5 text-sm text-muted-foreground">
             <p className="font-medium text-foreground">Как это работает:</p>
             <ol className="list-decimal list-inside space-y-1">
-              <li>Отправьте этот код другу</li>
-              <li>При оплате подписки он вводит его в поле «Реферальный код»</li>
+              <li>Отправьте код или ссылку другу</li>
+              <li>Друг переходит по ссылке (код подставится автоматически) или вводит код вручную при оплате</li>
               {stats.referralType === 'discount' && (
                 <li>Друг получает <span className="font-medium text-foreground">скидку {stats.referralDiscount}%</span> на оплату</li>
               )}
               <li>Вы получаете <span className="font-medium text-foreground">+7 дней</span> к подписке за каждого оплатившего</li>
+              <li>3 реферала = <span className="font-medium text-foreground">30 дней</span> бесплатного использования (7×3 + 9 бонус)</li>
+              <li>10 рефералов = <span className="font-medium text-foreground">скидка 15%</span> на все последующие оплаты</li>
             </ol>
           </div>
         </CardContent>
@@ -1202,7 +1235,7 @@ function ReferralTab({ userId }: { userId: string }) {
         <CardContent className="space-y-4">
           <div>
             <div className="flex justify-between text-sm mb-1">
-              <span>Бесплатный месяц (+30 дней)</span>
+              <span>Бесплатный месяц (30 дней за 3 реферала)</span>
               <span className={stats.milestone3Claimed ? 'text-green-600' : ''}>
                 {Math.min(stats.paid, 3)}/3
               </span>

@@ -216,11 +216,11 @@ export const applyReferralBonus = internalMutation({
       referralBonusDaysEarned: totalBonusDays,
     };
 
-    // Milestone: 3 referrals → +30 days (one-time)
+    // Milestone: 3 referrals → +9 bonus days (итого 7×3 + 9 = 30 дней — бесплатный месяц)
     let milestone3 = false;
     if (newCount >= 3 && !referrer.referralMilestone3Claimed) {
-      newExpires += 30 * 24 * 60 * 60 * 1000;
-      totalBonusDays += 30;
+      newExpires += 9 * 24 * 60 * 60 * 1000;
+      totalBonusDays += 9;
       patch.subscriptionExpiresAt = newExpires;
       patch.referralBonusDaysEarned = totalBonusDays;
       patch.referralMilestone3Claimed = true;

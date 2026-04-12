@@ -2341,13 +2341,13 @@ export const sendReferralNotification = internalAction({
     if (!chatId) return;
 
     // Base message: new referral bonus
-    const message = `🎁 <b>По вашему промокоду подключился новый пользователь!</b>\nВам начислено +${args.bonusDays} дней к подписке.\nВсего рефералов: ${args.totalReferrals}.`;
+    const message = `🎁 <b>Новый реферал!</b>\nПо вашему коду оплатил подписку новый пользователь.\nВам начислено <b>+${args.bonusDays} дней</b> к подписке.\nВсего оплативших рефералов: ${args.totalReferrals}.`;
 
     await ctx.runAction(internal.telegram.sendMessage, { chatId, text: message });
 
-    // Milestone 3: free month
+    // Milestone 3: free month (7×3 + 9 bonus = 30 days total)
     if (args.milestone3) {
-      const milestoneMsg = `🎉 <b>3 реферала!</b> Вам начислен бесплатный месяц (+30 дней).`;
+      const milestoneMsg = `🎉 <b>3 реферала!</b> Бонус +9 дней — итого 30 дней бесплатного использования!`;
       await ctx.runAction(internal.telegram.sendMessage, { chatId, text: milestoneMsg });
     }
 

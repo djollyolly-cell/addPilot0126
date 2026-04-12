@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { LoginButton } from '../components/LoginButton';
 import { EmailLoginForm } from '../components/EmailLoginForm';
@@ -6,12 +6,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../co
 import { Wallet, Shield, Bell, BarChart3 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
+const REFERRAL_CODE_KEY = 'adpilot_referral_code';
+
 type LoginMode = 'oauth' | 'email';
 
 export function LoginPage() {
   const [searchParams] = useSearchParams();
   const error = searchParams.get('error');
   const [loginMode, setLoginMode] = useState<LoginMode>('oauth');
+
+  // Capture referral code from URL (?ref=REF-XXXXXX) and save to localStorage
+  useEffect(() => {
+    const refCode = searchParams.get('ref');
+    if (refCode) {
+      localStorage.setItem(REFERRAL_CODE_KEY, refCode.toUpperCase());
+    }
+  }, [searchParams]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex flex-col">
