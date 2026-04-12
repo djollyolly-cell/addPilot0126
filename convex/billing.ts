@@ -431,13 +431,13 @@ export const handleBepaidWebhook = internalMutation({
         action: "payment_completed",
         status: "success",
         details: { tier: payment.tier, amount: args.amount / 100, promoCode: payment.promoCode },
-      }); } catch {}
+      }); } catch { /* non-critical */ }
       // Admin alert: payment
       const paidUserName = paidUser?.name || paidUser?.email || "—";
       try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
         category: "payments",
         text: `💰 <b>Оплата</b>\n\nПользователь: ${paidUserName}\nТариф: ${payment.tier}\nСумма: ${args.amount / 100} ${args.currency}`,
-      }); } catch {}
+      }); } catch { /* non-critical */ }
 
       return { success: true };
     }
@@ -455,7 +455,7 @@ export const handleBepaidWebhook = internalMutation({
         level: "warn",
         source: "billing",
         message: `Payment ${args.status}: ${args.trackingId} — ${(args.message ?? "no message").slice(0, 150)}`,
-      }); } catch {}
+      }); } catch { /* non-critical */ }
 
       // Audit log: payment failed
       try { await ctx.runMutation(internal.auditLog.log, {
@@ -464,7 +464,7 @@ export const handleBepaidWebhook = internalMutation({
         action: "payment_failed",
         status: "failed",
         details: { status: args.status, message: args.message },
-      }); } catch {}
+      }); } catch { /* non-critical */ }
 
       return { success: false, error: args.message };
     }

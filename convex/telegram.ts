@@ -706,7 +706,7 @@ export const handleWebhook = internalAction({
               level: "error",
               source: "telegram",
               message: `Failed to restart ad ${actionLog.adId}: ${errMsg.slice(0, 150)}`,
-            }); } catch {}
+            }); } catch { /* non-critical */ }
           }
         }
 
@@ -782,7 +782,7 @@ export const handleWebhook = internalAction({
             level: "warn",
             source: "telegram",
             message: `Forward to support failed: ${errMsg.slice(0, 180)}`,
-          }); } catch {}
+          }); } catch { /* non-critical */ }
           await ctx.runAction(internal.telegram.sendMessage, {
             chatId,
             text: "⚠️ Не удалось переслать сообщение. Попробуйте позже или напишите текстом.",
@@ -829,7 +829,7 @@ export const handleWebhook = internalAction({
               action: "bot_connect_failed",
               status: "failed",
               details: { error: "chatid_taken" },
-            }); } catch {}
+            }); } catch { /* non-critical */ }
             await ctx.runAction(internal.telegram.sendMessage, {
               chatId,
               text: `⚠️ <b>Этот Telegram уже привязан к другому аккаунту</b> (${saveResult.existingUserName || "другой пользователь"}).\n\nКаждый пользователь должен подключать бота из <b>своего</b> Telegram. Попросите владельца аккаунта нажать ссылку подключения самостоятельно.`,
@@ -848,7 +848,7 @@ export const handleWebhook = internalAction({
             category: "telegram",
             action: "bot_connected",
             status: "success",
-          }); } catch {}
+          }); } catch { /* non-critical */ }
 
           // Send confirmation + request phone via contact button
           await ctx.runAction(internal.telegram.sendMessageWithKeyboard, {

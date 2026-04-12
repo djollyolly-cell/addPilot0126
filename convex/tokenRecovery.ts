@@ -144,7 +144,7 @@ export const tryRecoverToken = internalAction({
           level: "info",
           source: "tokenRecovery",
           message: `Token recovered via cascade for «${account.name}»`,
-        }); } catch {}
+        }); } catch { /* non-critical */ }
         return true;
       }
     } catch (cascadeErr) {
@@ -176,7 +176,7 @@ export const tryRecoverToken = internalAction({
             level: "info",
             source: "tokenRecovery",
             message: `Token recovered via user-level fallback for «${account.name}»`,
-          }); } catch {}
+          }); } catch { /* non-critical */ }
           console.log(
             `[tokenRecovery] «${account.name}» (${args.accountId}): recovered via user-level token`
           );
@@ -200,7 +200,7 @@ export const tryRecoverToken = internalAction({
       level: "error",
       source: "tokenRecovery",
       message: `All recovery methods failed for «${account.name}» (attempt ${(account.tokenRecoveryAttempts ?? 0) + 1})`,
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     // Notify user on first failure via Telegram
     if (isFirstAttempt) {

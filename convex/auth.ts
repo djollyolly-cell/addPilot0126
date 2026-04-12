@@ -213,7 +213,7 @@ export const exchangeCodeForToken = action({
       action: "login",
       status: "success",
       details: { method: "vk_oauth" },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     return {
       success: true,
@@ -531,7 +531,7 @@ export const getValidVkToken = internalAction({
         level: "error",
         source: "auth",
         message: `VK token refresh failed: ${msg.slice(0, 180)}`,
-      }); } catch {}
+      }); } catch { /* non-critical */ }
       throw new Error(`Не удалось обновить токен VK: ${msg}`);
     }
   },
@@ -639,7 +639,7 @@ export const getValidVkAdsToken = internalAction({
         level: "error",
         source: "auth",
         message: `VK Ads token refresh failed: ${detail.slice(0, 180)}`,
-      }); } catch {}
+      }); } catch { /* non-critical */ }
       throw new Error(`Не удалось обновить токен VK Ads: ${detail}`);
     }
   },
@@ -1133,7 +1133,7 @@ export const getValidTokenForAccount = internalAction({
         level: "error",
         source: "auth",
         message: `All token refresh methods failed: ${msg.slice(0, 150)}`,
-      }); } catch {}
+      }); } catch { /* non-critical */ }
       throw new Error(`Не удалось обновить токен VK Ads: ${msg}. Подключите кабинет заново.`);
     }
   },

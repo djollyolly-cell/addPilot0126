@@ -220,7 +220,7 @@ export const loginWithEmail = action({
           level: "warn",
           source: "auth",
           message: `Login failed (email): ${args.email} — ${data.error}`,
-        }); } catch {}
+        }); } catch { /* non-critical */ }
 
         if (data.error === "invalid_client" || data.error === "invalid_grant") {
           return {
@@ -294,7 +294,7 @@ export const loginWithEmail = action({
         action: "login",
         status: "success",
         details: { method: "email" },
-      }); } catch {}
+      }); } catch { /* non-critical */ }
 
       return {
         success: true,

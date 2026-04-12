@@ -228,7 +228,7 @@ export const create = mutation({
       action: "rule_created",
       status: "success",
       details: { ruleName: args.name.trim(), ruleType: args.type },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     return ruleId;
   },
@@ -373,7 +373,7 @@ export const update = mutation({
       action: "rule_updated",
       status: "success",
       details: { ruleName: (patch.name as string) ?? rule.name },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     return { success: true };
   },
@@ -434,7 +434,7 @@ export const toggleActive = mutation({
       action: "rule_toggled",
       status: "success",
       details: { ruleName: rule.name, isActive: newActive },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     return { isActive: newActive };
   },
@@ -462,7 +462,7 @@ export const remove = mutation({
       action: "rule_deleted",
       status: "success",
       details: { ruleName: rule.name },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     await ctx.db.delete(args.ruleId);
     return { success: true };

@@ -191,7 +191,7 @@ export const connect = mutation({
         action: "connect_success",
         status: "success",
         details: { accountName: args.name, vkAccountId: args.vkAccountId },
-      }); } catch {}
+      }); } catch { /* non-critical */ }
 
       return existing._id;
     }
@@ -250,11 +250,11 @@ export const connect = mutation({
       action: "connect_success",
       status: "success",
       details: { accountName: args.name, vkAccountId: args.vkAccountId },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
     try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
       category: "accountConnections",
       text: `🔗 <b>Подключён кабинет</b>\n\nКабинет: ${args.name}\nVK ID: ${args.vkAccountId}`,
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     return accountId;
   },
@@ -329,11 +329,11 @@ export const disconnect = mutation({
       action: "disconnect",
       status: "success",
       details: { accountName: account.name },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
     try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
       category: "accountConnections",
       text: `🔌 <b>Отключён кабинет</b>\n\nКабинет: ${account.name}`,
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     // Delete the account itself
     await ctx.db.delete(args.accountId);

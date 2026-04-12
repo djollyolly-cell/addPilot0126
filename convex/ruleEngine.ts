@@ -1443,7 +1443,7 @@ export const checkAllRules = internalAction({
                     source: "ruleEngine",
                     message: `stopAd failed for ad ${adId}: ${(errorMessage ?? "").slice(0, 150)}`,
                     details: { ruleId: rule._id, adId },
-                  }); } catch {}
+                  }); } catch { /* non-critical */ }
                 }
               }
 
@@ -1478,7 +1478,7 @@ export const checkAllRules = internalAction({
                   category: "ruleErrors",
                   dedupKey: `ruleEngine:${rule._id}:${adId}`,
                   text: `⚠️ <b>Ошибка правила</b>\n\nОбъявление: Ad ${adId}\nОшибка: ${errorMessage ?? "неизвестно"}`,
-                }); } catch {}
+                }); } catch { /* non-critical */ }
               }
 
               // Update rule trigger count
@@ -1530,7 +1530,7 @@ export const checkAllRules = internalAction({
                     source: "ruleEngine",
                     message: `TG notification failed for ad ${adId}: ${notifMsg.slice(0, 150)}`,
                     details: { ruleId: rule._id, adId },
-                  }); } catch {}
+                  }); } catch { /* non-critical */ }
                 }
               } else {
                 console.warn(
@@ -1553,7 +1553,7 @@ export const checkAllRules = internalAction({
           level: "error",
           source: "ruleEngine",
           message: `Rule check failed for user: ${errMsg.slice(0, 180)}`,
-        }); } catch {}
+        }); } catch { /* non-critical */ }
       }
     }
 

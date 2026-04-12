@@ -45,7 +45,7 @@ export const log = internalMutation({
           `<b>Сообщение:</b> ${args.message}`,
           details ? `<pre>${JSON.stringify(details, null, 2).slice(0, 300)}</pre>` : '',
         ].filter(Boolean).join('\n'),
-      }); } catch {}
+      }); } catch { /* non-critical */ }
     }
   },
 });

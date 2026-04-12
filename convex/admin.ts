@@ -114,7 +114,7 @@ export const toggleAdmin = mutation({
       action: "admin_toggled",
       status: "success",
       details: { targetUserId: args.userId, isAdmin: args.isAdmin },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     return { success: true, isAdmin: args.isAdmin };
   },
@@ -236,7 +236,7 @@ export const updateUserTier = mutation({
       action: "tier_changed",
       status: "success",
       details: { targetUserId: args.userId, oldTier, newTier: args.tier },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     return { success: true, previousTier: oldTier, newTier: args.tier };
   },
@@ -266,7 +266,7 @@ export const updateUserExpiry = mutation({
       action: "expiry_changed",
       status: "success",
       details: { targetUserId: args.userId, newExpiry: args.expiresAt },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     return { success: true };
   },
@@ -326,7 +326,7 @@ export const broadcastTelegram = action({
       action: "broadcast_sent",
       status: "success",
       details: { recipientCount: args.chatIds.length },
-    }); } catch {}
+    }); } catch { /* non-critical */ }
 
     return { sent, failed, total: args.chatIds.length };
   },

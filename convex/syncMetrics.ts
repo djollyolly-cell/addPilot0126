@@ -122,7 +122,7 @@ export const syncAll = internalAction({
             level: "warn",
             source: "syncMetrics",
             message: `Auto-link videos failed: ${errMsg.slice(0, 180)}`,
-          }); } catch {}
+          }); } catch { /* non-critical */ }
         }
 
         if (!stats || stats.length === 0) {
@@ -269,7 +269,7 @@ export const syncAll = internalAction({
             level: "warn",
             source: "syncMetrics",
             message: `Video stats fetch failed: ${errMsg.slice(0, 180)}`,
-          }); } catch {}
+          }); } catch { /* non-critical */ }
         }
 
         // Update sync time and clear any previous error
@@ -299,7 +299,7 @@ export const syncAll = internalAction({
           level: "error",
           source: "syncMetrics",
           message: `Sync failed: ${msg.slice(0, 180)}`,
-        }); } catch {}
+        }); } catch { /* non-critical */ }
 
         // Mark account as error but don't stop the loop
         await ctx.runMutation(api.adAccounts.updateStatus, {
@@ -342,7 +342,7 @@ export const syncAll = internalAction({
         level: "error",
         source: "syncMetrics",
         message: `Rule engine failed: ${errMsg.slice(0, 180)}`,
-      }); } catch {}
+      }); } catch { /* non-critical */ }
     }
 
     // UZ budget rules — moved to separate cron "uz-budget-increase" (crons.ts)
@@ -361,7 +361,7 @@ export const syncAll = internalAction({
         level: "warn",
         source: "syncMetrics",
         message: `AI banner moderation poll failed: ${errMsg.slice(0, 180)}`,
-      }); } catch {}
+      }); } catch { /* non-critical */ }
     }
 
     } catch (err) {
@@ -371,7 +371,7 @@ export const syncAll = internalAction({
         level: "error",
         source: "syncMetrics",
         message: `Fatal syncAll error: ${syncError.slice(0, 180)}`,
-      }); } catch {}
+      }); } catch { /* non-critical */ }
     } finally {
       await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
         name: "syncAll",
@@ -526,7 +526,7 @@ export const pollAiBannerModeration = internalAction({
           level: "warn",
           source: "syncMetrics",
           message: `Moderation poll failed for campaign ${campaign._id}: ${errMsg.slice(0, 150)}`,
-        }); } catch {}
+        }); } catch { /* non-critical */ }
       }
     }
   },
