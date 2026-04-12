@@ -116,7 +116,7 @@ export function ProfilePage() {
                 label="Кабинеты"
                 value={
                   limits
-                    ? `${limits.usage.accounts} / ${limits.limits.accounts === Infinity ? '∞' : limits.limits.accounts}`
+                    ? `${limits.usage.accounts} / ${limits.limits.accounts}`
                     : '—'
                 }
                 available={limits?.canAddAccount}

@@ -59,6 +59,7 @@ services:
       - convex-backend
     env:
       - CONVEX_PROVISION_HOST=http://convex-backend:3210
+      - NEXT_PUBLIC_BIG_BRAIN_URL=http://convex-backend:3210
       - NEXT_PUBLIC_DEPLOYMENT_URL=https://convex.${DOMAIN}
 
   # Frontend

@@ -21,9 +21,9 @@ export const TIERS = {
   pro: {
     name: "Pro",
     price: 2990,
-    accountsLimit: -1, // unlimited
+    accountsLimit: 20, // grandfathered users get 27 via proAccountLimit field
     rulesLimit: -1, // unlimited
-    features: ["Безлимит кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
+    features: ["До 20 кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
   },
 } as const;
 
@@ -415,11 +415,18 @@ export const handleBepaidWebhook = internalMutation({
         }
       }
 
+      // Set proAccountLimit for new Pro subscribers (keep existing if re-subscribing)
+      const proLimitPatch: Record<string, unknown> = {};
+      if (payment.tier === "pro" && !paidUser?.proAccountLimit) {
+        proLimitPatch.proAccountLimit = 20;
+      }
+
       await ctx.db.patch(payment.userId, {
         subscriptionTier: payment.tier,
         subscriptionExpiresAt: expiresAt,
         updatedAt: Date.now(),
         ...lockedUpdate,
+        ...proLimitPatch,
       });
 
       console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId} (${totalDays} days, promo: ${payment.promoCode || "none"})`);
@@ -540,12 +547,19 @@ export const processPayment = mutation({
       }
     }
 
+    // Set proAccountLimit for new Pro subscribers (keep existing if re-subscribing)
+    const proLimitPatch: Record<string, unknown> = {};
+    if (args.tier === "pro" && !user.proAccountLimit) {
+      proLimitPatch.proAccountLimit = 20;
+    }
+
     // Update user subscription
     await ctx.db.patch(args.userId, {
       subscriptionTier: args.tier,
       subscriptionExpiresAt: expiresAt,
       updatedAt: Date.now(),
       ...lockedUpdate,
+      ...proLimitPatch,
     });
 
     return {
@@ -817,7 +831,14 @@ export const updateLimitsOnDowngrade = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
-    const newLimit = TIERS[args.newTier].accountsLimit;
+    // For Pro tier, use user's personal limit; for others, use TIERS constant
+    let newLimit: number;
+    if (args.newTier === "pro") {
+      const user = await ctx.db.get(args.userId);
+      newLimit = user?.proAccountLimit ?? TIERS.pro.accountsLimit;
+    } else {
+      newLimit = TIERS[args.newTier].accountsLimit;
+    }
 
     // Get user's active accounts sorted by createdAt (oldest first to keep)
     const accounts = await ctx.db
@@ -830,8 +851,7 @@ export const updateLimitsOnDowngrade = internalMutation({
       .sort((a, b) => a.createdAt - b.createdAt);
 
     // Deactivate excess accounts (keep oldest ones active)
-    // -1 means unlimited — no accounts to deactivate
-    const accountsToDeactivate = newLimit === -1 ? [] : activeAccounts.slice(newLimit);
+    const accountsToDeactivate = newLimit < 0 ? [] : activeAccounts.slice(newLimit);
     const deactivatedIds: string[] = [];
 
     for (const account of accountsToDeactivate) {

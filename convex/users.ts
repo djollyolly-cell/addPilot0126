@@ -5,6 +5,10 @@ import type { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 
 // Subscription tier limits
+// Pro account limit is dynamic: 27 for grandfathered users, 20 for new
+export const PRO_ACCOUNTS_DEFAULT = 20;
+export const PRO_ACCOUNTS_GRANDFATHERED = 27;
+
 export const TIER_LIMITS = {
   freemium: {
     accounts: 1,
@@ -17,11 +21,16 @@ export const TIER_LIMITS = {
     autoStop: true,
   },
   pro: {
-    accounts: Infinity,
+    accounts: PRO_ACCOUNTS_DEFAULT, // overridden by user.proAccountLimit if set
     rules: Infinity,
     autoStop: true,
   },
 } as const;
+
+/** Get effective Pro account limit for a specific user */
+export function getProAccountLimit(user: { proAccountLimit?: number }): number {
+  return user.proAccountLimit ?? PRO_ACCOUNTS_DEFAULT;
+}
 
 // Create a new user
 export const create = mutation({
@@ -146,6 +155,11 @@ export const updateTier = mutation({
 
     if (args.expiresAt !== undefined) {
       patchData.subscriptionExpiresAt = args.expiresAt;
+    }
+
+    // Set proAccountLimit when upgrading to Pro (keep existing if re-subscribing)
+    if (args.tier === "pro" && !user.proAccountLimit) {
+      patchData.proAccountLimit = 20;
     }
 
     await ctx.db.patch(args.userId, patchData);
@@ -273,7 +287,10 @@ export const getLimits = query({
       throw new Error("User not found");
     }
 
-    const limits = TIER_LIMITS[user.subscriptionTier ?? "freemium"];
+    const tier = user.subscriptionTier ?? "freemium";
+    const baseLimits = TIER_LIMITS[tier];
+    const effectiveAccountLimit =
+      tier === "pro" ? getProAccountLimit(user) : baseLimits.accounts;
 
     // Count current usage
     const accounts = await ctx.db
@@ -289,18 +306,18 @@ export const getLimits = query({
     const activeRules = rules.filter((r) => r.isActive);
 
     return {
-      tier: user.subscriptionTier ?? "freemium",
+      tier,
       limits: {
-        accounts: limits.accounts,
-        rules: limits.rules,
-        autoStop: limits.autoStop,
+        accounts: effectiveAccountLimit,
+        rules: baseLimits.rules,
+        autoStop: baseLimits.autoStop,
       },
       usage: {
         accounts: accounts.length,
         rules: activeRules.length,
       },
-      canAddAccount: accounts.length < limits.accounts,
-      canAddRule: activeRules.length < limits.rules,
+      canAddAccount: accounts.length < effectiveAccountLimit,
+      canAddRule: activeRules.length < baseLimits.rules,
     };
   },
 });

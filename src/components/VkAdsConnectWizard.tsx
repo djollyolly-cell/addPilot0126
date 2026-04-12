@@ -27,7 +27,7 @@ interface AccountWithCustomName extends AvailableAccount {
 const TIER_LIMITS = {
   freemium: { accounts: 1, name: 'Freemium' },
   start: { accounts: 3, name: 'Start' },
-  pro: { accounts: Infinity, name: 'Pro' },
+  pro: { accounts: 20, name: 'Pro' },
 };
 
 export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnectWizardProps) {
@@ -234,7 +234,7 @@ export function VkAdsConnectWizard({ userId, onClose, onConnected }: VkAdsConnec
                 >
                   <Crown className="h-6 w-6 text-amber-500" />
                   <span className="font-medium">Pro</span>
-                  <span className="text-xs text-muted-foreground">Безлимит кабинетов</span>
+                  <span className="text-xs text-muted-foreground">До 20 кабинетов</span>
                   <span className="text-sm font-bold">2490 ₽/мес</span>
                 </button>
               )}

@@ -77,6 +77,9 @@ services:
     ports:
       - "6792:6791"
     environment:
+      # Без этих переменных UI зовёт _system/* как обычный клиент → "Operation query not permitted"
+      - CONVEX_PROVISION_HOST=http://backend:3210
+      - NEXT_PUBLIC_BIG_BRAIN_URL=http://backend:3210
       - NEXT_PUBLIC_DEPLOYMENT_URL=https://convex.aipilot.by
     depends_on:
       backend:

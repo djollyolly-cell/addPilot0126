@@ -66,6 +66,23 @@ export const patchAccountToken = internalMutation({
     tokenExpiresAt: v.number(),
   },
   handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (account) {
+      const oldVal = account.accessToken as string | undefined;
+      const newVal = args.accessToken;
+      if (oldVal !== newVal) {
+        const mask = (val: string | undefined) =>
+          val && val.length > 8 ? val.slice(0, 4) + "..." + val.slice(-4) : val;
+        await ctx.db.insert("credentialHistory", {
+          accountId: args.accountId,
+          field: "accessToken",
+          oldValue: mask(oldVal),
+          newValue: mask(newVal),
+          changedAt: Date.now(),
+          changedBy: "patchAccountToken",
+        });
+      }
+    }
     await ctx.db.patch(args.accountId, {
       accessToken: args.accessToken,
       tokenExpiresAt: args.tokenExpiresAt,

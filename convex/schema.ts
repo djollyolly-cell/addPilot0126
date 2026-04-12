@@ -670,6 +670,7 @@ export default defineSchema({
     providerId: v.id("agencyProviders"),
     // API key auth (Витамин)
     apiKey: v.optional(v.string()),
+    previousApiKey: v.optional(v.string()), // Audit: old apiKey before last overwrite
     // OAuth2 auth (GetUNIQ)
     oauthClientId: v.optional(v.string()),
     oauthClientSecret: v.optional(v.string()),
