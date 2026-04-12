@@ -150,6 +150,33 @@ export const replyToFeedback = mutation({
   },
 });
 
+// Admin initiates a new support thread to a user
+export const startThreadToUser = mutation({
+  args: {
+    userId: v.id("users"),
+    title: v.string(),
+    message: v.string(),
+  },
+  handler: async (ctx, args) => {
+    if (!args.message.trim()) throw new Error("Введите сообщение");
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("Пользователь не найден");
+
+    await ctx.db.insert("userNotifications", {
+      userId: args.userId,
+      title: args.title.trim() || "Сообщение от поддержки",
+      message: args.message.trim(),
+      type: "feedback",
+      direction: "admin_to_user",
+      isRead: false,
+      createdAt: Date.now(),
+    });
+
+    return { success: true };
+  },
+});
+
 // Get thread messages (all messages in a conversation)
 export const getThread = query({
   args: { threadId: v.id("userNotifications") },
@@ -226,20 +253,19 @@ export const getUnreadFeedbackCount = query({
   },
 });
 
-// Get all feedback threads (for admin panel)
+// Get all feedback threads (for admin panel) — includes both user-initiated and admin-initiated
 export const listFeedback = query({
   args: {},
   handler: async (ctx) => {
-    // Get all feedback root messages (no threadId = thread starters)
+    // Get ALL feedback messages (both directions)
     const allFeedback = await ctx.db
       .query("userNotifications")
-      .withIndex("by_direction", (q) =>
-        q.eq("direction", "user_to_admin")
-      )
       .collect();
 
-    // Root messages only (thread starters)
-    const rootMessages = allFeedback.filter((m) => !m.threadId);
+    // Root messages only: type=feedback, no threadId
+    const rootMessages = allFeedback.filter(
+      (m) => m.type === "feedback" && !m.threadId
+    );
 
     const result = await Promise.all(
       rootMessages.map(async (f) => {

@@ -87,8 +87,9 @@ export function Layout() {
         <nav className="p-4 space-y-1">
           {navItems.map((item) => {
             const isActive = location.pathname === item.href;
-            const badge = item.href === '/support'
-              ? (isAdmin ? adminUnread : supportUnread)
+            const badge =
+              item.href === '/support' ? supportUnread
+              : item.href === '/admin' ? adminUnread
               : 0;
             return (
               <Link
@@ -179,8 +180,9 @@ export function Layout() {
             const isActive =
               location.pathname === item.href ||
               (item.href === '/settings' && location.pathname.startsWith('/settings'));
-            const badge = item.href === '/support'
-              ? (isAdmin ? adminUnread : supportUnread)
+            const badge =
+              item.href === '/support' ? supportUnread
+              : item.href === '/admin' ? adminUnread
               : 0;
             return (
               <Link

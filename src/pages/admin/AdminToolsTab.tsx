@@ -47,7 +47,7 @@ export function AdminToolsTab({ sessionToken }: Props) {
               <div className="px-4 pb-4">
                 {section.id === 'promos' && <PromoCodesSection sessionToken={sessionToken} />}
                 {section.id === 'broadcast' && <BroadcastSection sessionToken={sessionToken} />}
-                {section.id === 'feedback' && <FeedbackListSection />}
+                {section.id === 'feedback' && <FeedbackListSection sessionToken={sessionToken} />}
                 {section.id === 'diagnostic' && <DiagnosticSection />}
               </div>
             )}
