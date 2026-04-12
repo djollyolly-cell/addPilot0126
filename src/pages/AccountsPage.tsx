@@ -147,9 +147,7 @@ export function AccountsPage() {
 
   // Format usage/limit label
   const usageLabel = limits
-    ? limits.limits.accounts === Infinity
-      ? `${limits.usage.accounts} / ∞`
-      : `${limits.usage.accounts} / ${limits.limits.accounts}`
+    ? `${limits.usage.accounts} / ${limits.limits.accounts}`
     : null;
 
   return (

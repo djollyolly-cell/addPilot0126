@@ -203,15 +203,15 @@ describe("adAccounts", () => {
       ).rejects.toThrow("Лимит кабинетов");
     });
 
-    test("pro tier allows unlimited accounts", async () => {
+    test("pro tier allows up to 20 accounts (default limit)", async () => {
       const t = convexTest(schema);
       const userId = await createTestUser(t);
 
-      // Upgrade to pro
+      // Upgrade to pro (default limit = 20)
       await t.mutation(api.users.updateTier, { userId, tier: "pro" });
 
-      // Connect 10 accounts — all should succeed
-      for (let i = 1; i <= 10; i++) {
+      // Connect 20 accounts — all should succeed
+      for (let i = 1; i <= 20; i++) {
         const accountId = await t.mutation(api.adAccounts.connect, {
           userId,
           vkAccountId: `300${String(i).padStart(3, "0")}`,
@@ -222,7 +222,49 @@ describe("adAccounts", () => {
       }
 
       const accounts = await t.query(api.adAccounts.list, { userId });
-      expect(accounts).toHaveLength(10);
+      expect(accounts).toHaveLength(20);
+
+      // 21st should fail
+      await expect(
+        t.mutation(api.adAccounts.connect, {
+          userId,
+          vkAccountId: "300021",
+          name: "Кабинет 21",
+          accessToken: "token_21",
+        })
+      ).rejects.toThrow("Лимит кабинетов");
+    });
+
+    test("grandfathered pro user allows up to 27 accounts", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      await t.mutation(api.users.updateTier, { userId, tier: "pro" });
+      // Simulate migration: set grandfathered limit
+      await t.run(async (ctx) => {
+        await ctx.db.patch(userId, { proAccountLimit: 27 });
+      });
+
+      // Connect 27 accounts — all should succeed
+      for (let i = 1; i <= 27; i++) {
+        const accountId = await t.mutation(api.adAccounts.connect, {
+          userId,
+          vkAccountId: `400${String(i).padStart(3, "0")}`,
+          name: `Кабинет ${i}`,
+          accessToken: `token_${i}`,
+        });
+        expect(accountId).toBeDefined();
+      }
+
+      // 28th should fail
+      await expect(
+        t.mutation(api.adAccounts.connect, {
+          userId,
+          vkAccountId: "400028",
+          name: "Кабинет 28",
+          accessToken: "token_28",
+        })
+      ).rejects.toThrow("Лимит кабинетов");
     });
 
     test("throws when another user tries to connect same account", async () => {

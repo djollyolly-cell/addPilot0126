@@ -26,7 +26,7 @@ const TIER_INFO = {
   },
   pro: {
     label: 'Pro',
-    accounts: '∞',
+    accounts: 20,
     rules: '∞',
     autoStop: true,
   },

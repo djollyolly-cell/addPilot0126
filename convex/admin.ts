@@ -224,10 +224,15 @@ export const updateUserTier = mutation({
       }
     }
 
-    await ctx.db.patch(args.userId, {
+    const tierPatch: Record<string, unknown> = {
       subscriptionTier: args.tier,
       updatedAt: Date.now(),
-    });
+    };
+    // Set proAccountLimit when admin assigns Pro (keep existing if already set)
+    if (args.tier === "pro" && !user.proAccountLimit) {
+      tierPatch.proAccountLimit = 20;
+    }
+    await ctx.db.patch(args.userId, tierPatch);
 
     // Audit log
     try { await ctx.runMutation(internal.auditLog.log, {
