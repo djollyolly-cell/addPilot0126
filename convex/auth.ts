@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
+import { quickTokenCheck } from "./tokenRecovery";
 import { Id } from "./_generated/dataModel";
 
 // VK ID OAuth 2.1 (login — id.vk.com)
@@ -894,10 +895,29 @@ export const getValidTokenForAccount = internalAction({
 
     // No credentials at all — agency/manual API keys
     if (!clientId && !clientSecret) {
-      // If token has no expiry (undefined/null), treat as non-expiring
+      // If token has no expiry (undefined/null), check liveness before returning
       // tokenExpiresAt=0 means "invalidated", must NOT return here
       if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
-        return account.accessToken;
+        const alive = await quickTokenCheck(account.accessToken);
+        if (alive) {
+          // Auto-set expiry so proactiveRefresh picks it up — no more blind returns
+          await ctx.runMutation(internal.tokenRecovery.setTokenExpiry, {
+            accountId: args.accountId,
+            tokenExpiresAt: Date.now() + 24 * 60 * 60 * 1000,
+          });
+          return account.accessToken;
+        }
+        // Token is dead — try recovery
+        try {
+          const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId: args.accountId });
+          if (recovered) {
+            const fresh = await ctx.runQuery(api.adAccounts.get, { accountId: args.accountId });
+            if (fresh?.accessToken) return fresh.accessToken;
+          }
+        } catch (recErr) {
+          console.log(`[getValidTokenForAccount] «${account.name}» (${args.accountId}): recovery failed: ${recErr}`);
+        }
+        throw new Error("TOKEN_EXPIRED: токен недействителен и не удалось восстановить");
       }
       // If token is still valid, return it
       if (account.tokenExpiresAt > now + BUFFER_MS) {
@@ -950,10 +970,29 @@ export const getValidTokenForAccount = internalAction({
       return account.accessToken;
     }
 
-    // Token without expiry (undefined/null) doesn't expire — return as-is
+    // Token without expiry (undefined/null) — check liveness before returning
     // But tokenExpiresAt=0 is "invalidated", must NOT return here
     if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
-      return account.accessToken;
+      const alive = await quickTokenCheck(account.accessToken);
+      if (alive) {
+        // Auto-set expiry so proactiveRefresh picks it up — no more blind returns
+        await ctx.runMutation(internal.tokenRecovery.setTokenExpiry, {
+          accountId: args.accountId,
+          tokenExpiresAt: Date.now() + 24 * 60 * 60 * 1000,
+        });
+        return account.accessToken;
+      }
+      // Token is dead — try recovery
+      try {
+        const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId: args.accountId });
+        if (recovered) {
+          const fresh = await ctx.runQuery(api.adAccounts.get, { accountId: args.accountId });
+          if (fresh?.accessToken) return fresh.accessToken;
+        }
+      } catch (recErr) {
+        console.log(`[getValidTokenForAccount] «${account.name}» (${args.accountId}): recovery failed: ${recErr}`);
+      }
+      throw new Error("TOKEN_EXPIRED: токен недействителен и не удалось восстановить");
     }
 
     // Token expired or invalidated — log and proceed to refresh
@@ -1513,7 +1552,19 @@ export const proactiveTokenRefresh = internalAction({
         if (isUnrecoverable(err)) {
           // Clear refresh token so we don't retry forever
           await ctx.runMutation(internal.auth.clearAccountRefreshToken, { accountId: acc._id });
-          failures.push(`Account "${acc.name}": НЕИСПРАВИМО — ${errMsg}. Refresh token очищен.`);
+          // Try full recovery cascade before giving up
+          try {
+            const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId: acc._id });
+            if (recovered) {
+              console.log(`[proactiveRefresh] Account "${acc.name}": восстановлен через каскад после ${errMsg}`);
+              failed--;
+              refreshed++;
+            } else {
+              failures.push(`Account "${acc.name}": НЕИСПРАВИМО — ${errMsg}. Автовосстановление запущено (7 дней).`);
+            }
+          } catch (recoveryErr) {
+            failures.push(`Account "${acc.name}": НЕИСПРАВИМО — ${errMsg}. Recovery error: ${recoveryErr}`);
+          }
         } else {
           failures.push(`Account "${acc.name}": ${errMsg}`);
         }
@@ -1599,6 +1650,13 @@ export const proactiveTokenRefresh = internalAction({
       await ctx.runMutation(internal.auth.scheduleProactiveRetry, {
         delayMs: 30 * 60_000,
       });
+    }
+
+    // Retry recovery for accounts stuck in error state
+    try {
+      await ctx.runAction(internal.tokenRecovery.retryRecovery, {});
+    } catch (retryErr) {
+      console.error(`[proactiveRefresh] retryRecovery failed: ${retryErr}`);
     }
 
     // Record heartbeat — completed (even with partial failures, the cron itself ran)

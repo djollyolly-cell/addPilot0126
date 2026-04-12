@@ -94,6 +94,9 @@ export default defineSchema({
     ),
     lastSyncAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
+    // Token recovery tracking
+    tokenErrorSince: v.optional(v.number()),
+    tokenRecoveryAttempts: v.optional(v.number()),
     createdAt: v.number(),
   })
     .index("by_userId", ["userId"])

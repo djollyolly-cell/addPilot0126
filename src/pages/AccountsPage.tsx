@@ -273,6 +273,27 @@ export function AccountsPage() {
         </div>
       )}
 
+      {/* Token recovery warnings */}
+      {accounts && accounts.filter(a => a.status === "error" && a.tokenErrorSince).map(acc => {
+        const daysPassed = Math.floor((Date.now() - (acc.tokenErrorSince ?? 0)) / (24 * 60 * 60 * 1000));
+        const daysLeft = Math.max(0, 7 - daysPassed);
+        return (
+          <div key={acc._id} className="flex items-start gap-3 p-4 rounded-lg bg-warning/10 border border-warning/20">
+            <AlertCircle className="h-5 w-5 text-warning shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground">
+                Кабинет «{acc.name}» — токен недействителен
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {daysLeft > 0
+                  ? `Автовосстановление: попытка ${acc.tokenRecoveryAttempts ?? 1}, осталось ${daysLeft} дн.`
+                  : "Автовосстановление не удалось. Переподключите кабинет."}
+              </p>
+            </div>
+          </div>
+        );
+      })}
+
       {/* Content */}
       <Card>
         <CardHeader>

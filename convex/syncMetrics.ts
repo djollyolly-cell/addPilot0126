@@ -292,6 +292,14 @@ export const syncAll = internalAction({
           await ctx.runMutation(internal.adAccounts.invalidateAccountToken, {
             accountId: account._id,
           });
+          // Try immediate recovery
+          try {
+            await ctx.runAction(internal.tokenRecovery.tryRecoverToken, {
+              accountId: account._id,
+            });
+          } catch (recErr) {
+            console.log(`[syncMetrics] Recovery for ${account._id} failed: ${recErr}`);
+          }
         }
       }
     }
