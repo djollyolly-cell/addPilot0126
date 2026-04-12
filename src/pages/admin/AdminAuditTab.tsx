@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery } from 'convex/react';
 import { api } from '../../../convex/_generated/api';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
@@ -63,10 +63,13 @@ export function AdminAuditTab({ sessionToken }: Props) {
   const [hours, setHours] = useState(168); // 7 дней
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
+  // Стабилизируем since — Date.now() на каждый рендер менял args → бесконечная переподписка
+  const since = useMemo(() => Date.now() - hours * 60 * 60 * 1000, [hours]);
+
   const logs = useQuery(api.auditLog.list, {
     sessionToken,
     category: category === 'all' ? undefined : category,
-    since: Date.now() - hours * 60 * 60 * 1000,
+    since,
     limit: 200,
   });
 
