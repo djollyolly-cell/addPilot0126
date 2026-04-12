@@ -1,9 +1,10 @@
 import { useState } from 'react';
-import { Tag, Send, MessageSquare, Stethoscope, ChevronDown, ChevronRight } from 'lucide-react';
+import { Tag, Send, MessageSquare, Stethoscope, Bell, ChevronDown, ChevronRight } from 'lucide-react';
 import { PromoCodesSection } from './sections/PromoCodesSection';
 import { BroadcastSection } from './sections/BroadcastSection';
 import { FeedbackListSection } from './sections/FeedbackListSection';
 import { DiagnosticSection } from './sections/DiagnosticSection';
+import { AlertSettingsSection } from './sections/AlertSettingsSection';
 
 interface Props {
   sessionToken: string;
@@ -14,6 +15,7 @@ const SECTIONS = [
   { id: 'broadcast', label: 'Рассылка', icon: Send },
   { id: 'feedback', label: 'Обратная связь', icon: MessageSquare },
   { id: 'diagnostic', label: 'Диагностика', icon: Stethoscope },
+  { id: 'alerts', label: 'Уведомления', icon: Bell },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]['id'];
@@ -49,6 +51,7 @@ export function AdminToolsTab({ sessionToken }: Props) {
                 {section.id === 'broadcast' && <BroadcastSection sessionToken={sessionToken} />}
                 {section.id === 'feedback' && <FeedbackListSection sessionToken={sessionToken} />}
                 {section.id === 'diagnostic' && <DiagnosticSection />}
+                {section.id === 'alerts' && <AlertSettingsSection sessionToken={sessionToken} />}
               </div>
             )}
           </div>
