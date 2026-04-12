@@ -35,7 +35,7 @@ export const log = internalMutation({
 
     // Авто-алерт админам при критических ошибках
     if (args.level === "error") {
-      await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+      try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
         category: "criticalErrors",
         dedupKey: `${args.source}:${args.message.slice(0, 50)}`,
         text: [
@@ -45,7 +45,7 @@ export const log = internalMutation({
           `<b>Сообщение:</b> ${args.message}`,
           details ? `<pre>${JSON.stringify(details, null, 2).slice(0, 300)}</pre>` : '',
         ].filter(Boolean).join('\n'),
-      });
+      }); } catch {}
     }
   },
 });

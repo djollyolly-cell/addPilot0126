@@ -3,11 +3,7 @@ import { internalMutation, query } from "./_generated/server";
 
 // ─── Типы ───
 
-const AUDIT_CATEGORIES = [
-  "account", "rule", "payment", "telegram", "settings", "auth", "admin",
-] as const;
-
-type AuditCategory = typeof AUDIT_CATEGORIES[number];
+type AuditCategory = "account" | "rule" | "payment" | "telegram" | "settings" | "auth" | "admin";
 
 const ADMIN_EMAILS = ["13632013@vk.com", "786709647@vk.com"];
 

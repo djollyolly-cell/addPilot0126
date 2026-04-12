@@ -702,11 +702,11 @@ export const handleWebhook = internalAction({
               `[telegram] Failed to restart ad ${actionLog.adId}:`,
               errMsg
             );
-            await ctx.runMutation(internal.systemLogger.log, {
+            try { await ctx.runMutation(internal.systemLogger.log, {
               level: "error",
               source: "telegram",
               message: `Failed to restart ad ${actionLog.adId}: ${errMsg.slice(0, 150)}`,
-            });
+            }); } catch {}
           }
         }
 
@@ -778,11 +778,11 @@ export const handleWebhook = internalAction({
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
           console.error("[telegram] Failed to forward non-text to support:", errMsg);
-          await ctx.runMutation(internal.systemLogger.log, {
+          try { await ctx.runMutation(internal.systemLogger.log, {
             level: "warn",
             source: "telegram",
             message: `Forward to support failed: ${errMsg.slice(0, 180)}`,
-          });
+          }); } catch {}
           await ctx.runAction(internal.telegram.sendMessage, {
             chatId,
             text: "⚠️ Не удалось переслать сообщение. Попробуйте позже или напишите текстом.",
@@ -823,13 +823,13 @@ export const handleWebhook = internalAction({
 
           if (saveResult && !saveResult.saved) {
             // chatId already belongs to another user
-            await ctx.runMutation(internal.auditLog.log, {
+            try { await ctx.runMutation(internal.auditLog.log, {
               userId: link.userId,
               category: "telegram",
               action: "bot_connect_failed",
               status: "failed",
               details: { error: "chatid_taken" },
-            });
+            }); } catch {}
             await ctx.runAction(internal.telegram.sendMessage, {
               chatId,
               text: `⚠️ <b>Этот Telegram уже привязан к другому аккаунту</b> (${saveResult.existingUserName || "другой пользователь"}).\n\nКаждый пользователь должен подключать бота из <b>своего</b> Telegram. Попросите владельца аккаунта нажать ссылку подключения самостоятельно.`,
@@ -843,12 +843,12 @@ export const handleWebhook = internalAction({
           });
 
           // Audit log: bot connected
-          await ctx.runMutation(internal.auditLog.log, {
+          try { await ctx.runMutation(internal.auditLog.log, {
             userId: link.userId,
             category: "telegram",
             action: "bot_connected",
             status: "success",
-          });
+          }); } catch {}
 
           // Send confirmation + request phone via contact button
           await ctx.runAction(internal.telegram.sendMessageWithKeyboard, {

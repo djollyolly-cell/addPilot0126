@@ -425,19 +425,19 @@ export const handleBepaidWebhook = internalMutation({
       console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId} (${totalDays} days, promo: ${payment.promoCode || "none"})`);
 
       // Audit log: payment completed
-      await ctx.runMutation(internal.auditLog.log, {
+      try { await ctx.runMutation(internal.auditLog.log, {
         userId: payment.userId,
         category: "payment",
         action: "payment_completed",
         status: "success",
         details: { tier: payment.tier, amount: args.amount / 100, promoCode: payment.promoCode },
-      });
+      }); } catch {}
       // Admin alert: payment
       const paidUserName = paidUser?.name || paidUser?.email || "—";
-      await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+      try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
         category: "payments",
         text: `💰 <b>Оплата</b>\n\nПользователь: ${paidUserName}\nТариф: ${payment.tier}\nСумма: ${args.amount / 100} ${args.currency}`,
-      });
+      }); } catch {}
 
       return { success: true };
     }
@@ -450,21 +450,21 @@ export const handleBepaidWebhook = internalMutation({
       });
 
       console.log(`bePaid: Payment failed for ${args.trackingId}: ${args.message}`);
-      await ctx.scheduler.runAfter(0, internal.systemLogger.log, {
+      try { await ctx.scheduler.runAfter(0, internal.systemLogger.log, {
         userId: payment.userId,
         level: "warn",
         source: "billing",
         message: `Payment ${args.status}: ${args.trackingId} — ${(args.message ?? "no message").slice(0, 150)}`,
-      });
+      }); } catch {}
 
       // Audit log: payment failed
-      await ctx.runMutation(internal.auditLog.log, {
+      try { await ctx.runMutation(internal.auditLog.log, {
         userId: payment.userId,
         category: "payment",
         action: "payment_failed",
         status: "failed",
         details: { status: args.status, message: args.message },
-      });
+      }); } catch {}
 
       return { success: false, error: args.message };
     }

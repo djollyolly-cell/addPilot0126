@@ -12,7 +12,6 @@ import { internalAction, internalMutation, internalQuery } from "./_generated/se
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
-const ADMIN_CHAT_ID = "325307765";
 const RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 /**
@@ -140,12 +139,12 @@ export const tryRecoverToken = internalAction({
         await ctx.runMutation(internal.tokenRecovery.markRecoverySuccess, {
           accountId: args.accountId,
         });
-        await ctx.runMutation(internal.systemLogger.log, {
+        try { await ctx.runMutation(internal.systemLogger.log, {
           accountId: args.accountId,
           level: "info",
           source: "tokenRecovery",
           message: `Token recovered via cascade for «${account.name}»`,
-        });
+        }); } catch {}
         return true;
       }
     } catch (cascadeErr) {
@@ -172,12 +171,12 @@ export const tryRecoverToken = internalAction({
           await ctx.runMutation(internal.tokenRecovery.markRecoverySuccess, {
             accountId: args.accountId,
           });
-          await ctx.runMutation(internal.systemLogger.log, {
+          try { await ctx.runMutation(internal.systemLogger.log, {
             accountId: args.accountId,
             level: "info",
             source: "tokenRecovery",
             message: `Token recovered via user-level fallback for «${account.name}»`,
-          });
+          }); } catch {}
           console.log(
             `[tokenRecovery] «${account.name}» (${args.accountId}): recovered via user-level token`
           );
@@ -196,12 +195,12 @@ export const tryRecoverToken = internalAction({
       accountId: args.accountId,
       errorMessage: "Все методы восстановления токена исчерпаны",
     });
-    await ctx.runMutation(internal.systemLogger.log, {
+    try { await ctx.runMutation(internal.systemLogger.log, {
       accountId: args.accountId,
       level: "error",
       source: "tokenRecovery",
       message: `All recovery methods failed for «${account.name}» (attempt ${(account.tokenRecoveryAttempts ?? 0) + 1})`,
-    });
+    }); } catch {}
 
     // Notify user on first failure via Telegram
     if (isFirstAttempt) {

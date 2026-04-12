@@ -1436,14 +1436,14 @@ export const checkAllRules = internalAction({
                     err instanceof Error
                       ? err.message
                       : "Unknown error";
-                  await ctx.runMutation(internal.systemLogger.log, {
+                  try { await ctx.runMutation(internal.systemLogger.log, {
                     userId: account.userId,
                     accountId: targetAccountId,
                     level: "error",
                     source: "ruleEngine",
                     message: `stopAd failed for ad ${adId}: ${(errorMessage ?? "").slice(0, 150)}`,
                     details: { ruleId: rule._id, adId },
-                  });
+                  }); } catch {}
                 }
               }
 
@@ -1474,11 +1474,11 @@ export const checkAllRules = internalAction({
 
               // Alert admin on failed rule actions
               if (status === "failed") {
-                await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+                try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
                   category: "ruleErrors",
                   dedupKey: `ruleEngine:${rule._id}:${adId}`,
                   text: `⚠️ <b>Ошибка правила</b>\n\nОбъявление: Ad ${adId}\nОшибка: ${errorMessage ?? "неизвестно"}`,
-                });
+                }); } catch {}
               }
 
               // Update rule trigger count
@@ -1524,13 +1524,13 @@ export const checkAllRules = internalAction({
                     `[ruleEngine] Failed to send TG notification for rule ${rule._id}, ad ${adId}:`,
                     notifMsg
                   );
-                  await ctx.runMutation(internal.systemLogger.log, {
+                  try { await ctx.runMutation(internal.systemLogger.log, {
                     userId: account.userId,
                     level: "error",
                     source: "ruleEngine",
                     message: `TG notification failed for ad ${adId}: ${notifMsg.slice(0, 150)}`,
                     details: { ruleId: rule._id, adId },
-                  });
+                  }); } catch {}
                 }
               } else {
                 console.warn(
@@ -1548,12 +1548,12 @@ export const checkAllRules = internalAction({
           `[ruleEngine] Error checking rules for user ${userIdStr}:`,
           errMsg
         );
-        await ctx.runMutation(internal.systemLogger.log, {
+        try { await ctx.runMutation(internal.systemLogger.log, {
           userId: account.userId,
           level: "error",
           source: "ruleEngine",
           message: `Rule check failed for user: ${errMsg.slice(0, 180)}`,
-        });
+        }); } catch {}
       }
     }
 

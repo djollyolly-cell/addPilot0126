@@ -207,13 +207,13 @@ export const exchangeCodeForToken = action({
     });
 
     // Audit log: VK OAuth login success
-    await ctx.runMutation(internal.auditLog.log, {
+    try { await ctx.runMutation(internal.auditLog.log, {
       userId: dbUserId,
       category: "auth",
       action: "login",
       status: "success",
       details: { method: "vk_oauth" },
-    });
+    }); } catch {}
 
     return {
       success: true,
@@ -526,12 +526,12 @@ export const getValidVkToken = internalAction({
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[getValidVkToken] Refresh failed for user ${args.userId}: ${msg}`);
-      await ctx.runMutation(internal.systemLogger.log, {
+      try { await ctx.runMutation(internal.systemLogger.log, {
         userId: args.userId,
         level: "error",
         source: "auth",
         message: `VK token refresh failed: ${msg.slice(0, 180)}`,
-      });
+      }); } catch {}
       throw new Error(`Не удалось обновить токен VK: ${msg}`);
     }
   },
@@ -634,12 +634,12 @@ export const getValidVkAdsToken = internalAction({
       return refreshed.accessToken;
     } catch (refreshErr) {
       const detail = refreshErr instanceof Error ? refreshErr.message : String(refreshErr);
-      await ctx.runMutation(internal.systemLogger.log, {
+      try { await ctx.runMutation(internal.systemLogger.log, {
         userId: args.userId,
         level: "error",
         source: "auth",
         message: `VK Ads token refresh failed: ${detail.slice(0, 180)}`,
-      });
+      }); } catch {}
       throw new Error(`Не удалось обновить токен VK Ads: ${detail}`);
     }
   },
@@ -1128,12 +1128,12 @@ export const getValidTokenForAccount = internalAction({
       if (vitaminToken3) return vitaminToken3;
 
       const msg = err instanceof Error ? err.message : String(err);
-      await ctx.runMutation(internal.systemLogger.log, {
+      try { await ctx.runMutation(internal.systemLogger.log, {
         accountId: args.accountId,
         level: "error",
         source: "auth",
         message: `All token refresh methods failed: ${msg.slice(0, 150)}`,
-      });
+      }); } catch {}
       throw new Error(`Не удалось обновить токен VK Ads: ${msg}. Подключите кабинет заново.`);
     }
   },

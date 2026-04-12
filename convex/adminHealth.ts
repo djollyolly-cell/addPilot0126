@@ -6,7 +6,6 @@ const ADMIN_EMAILS = ["13632013@vk.com", "786709647@vk.com"];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function assertAdmin(ctx: any, sessionToken: string) {
   const session = await ctx.db
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .query("sessions")
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .withIndex("by_token", (q: any) => q.eq("token", sessionToken))

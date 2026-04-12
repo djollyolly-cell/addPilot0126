@@ -222,13 +222,13 @@ export const create = mutation({
     });
 
     // Audit log
-    await ctx.runMutation(internal.auditLog.log, {
+    try { await ctx.runMutation(internal.auditLog.log, {
       userId: args.userId,
       category: "rule",
       action: "rule_created",
       status: "success",
       details: { ruleName: args.name.trim(), ruleType: args.type },
-    });
+    }); } catch {}
 
     return ruleId;
   },
@@ -367,13 +367,13 @@ export const update = mutation({
     await ctx.db.patch(args.ruleId, patch);
 
     // Audit log
-    await ctx.runMutation(internal.auditLog.log, {
+    try { await ctx.runMutation(internal.auditLog.log, {
       userId: args.userId,
       category: "rule",
       action: "rule_updated",
       status: "success",
       details: { ruleName: (patch.name as string) ?? rule.name },
-    });
+    }); } catch {}
 
     return { success: true };
   },
@@ -428,13 +428,13 @@ export const toggleActive = mutation({
     });
 
     // Audit log
-    await ctx.runMutation(internal.auditLog.log, {
+    try { await ctx.runMutation(internal.auditLog.log, {
       userId: args.userId,
       category: "rule",
       action: "rule_toggled",
       status: "success",
       details: { ruleName: rule.name, isActive: newActive },
-    });
+    }); } catch {}
 
     return { isActive: newActive };
   },
@@ -456,13 +456,13 @@ export const remove = mutation({
     }
 
     // Audit log
-    await ctx.runMutation(internal.auditLog.log, {
+    try { await ctx.runMutation(internal.auditLog.log, {
       userId: args.userId,
       category: "rule",
       action: "rule_deleted",
       status: "success",
       details: { ruleName: rule.name },
-    });
+    }); } catch {}
 
     await ctx.db.delete(args.ruleId);
     return { success: true };

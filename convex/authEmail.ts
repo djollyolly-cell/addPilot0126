@@ -216,11 +216,11 @@ export const loginWithEmail = action({
         });
 
         // System log: login failed (userId unknown)
-        await ctx.runMutation(internal.systemLogger.log, {
+        try { await ctx.runMutation(internal.systemLogger.log, {
           level: "warn",
           source: "auth",
           message: `Login failed (email): ${args.email} — ${data.error}`,
-        });
+        }); } catch {}
 
         if (data.error === "invalid_client" || data.error === "invalid_grant") {
           return {
@@ -288,13 +288,13 @@ export const loginWithEmail = action({
       });
 
       // Audit log: login success
-      await ctx.runMutation(internal.auditLog.log, {
+      try { await ctx.runMutation(internal.auditLog.log, {
         userId,
         category: "auth",
         action: "login",
         status: "success",
         details: { method: "email" },
-      });
+      }); } catch {}
 
       return {
         success: true,

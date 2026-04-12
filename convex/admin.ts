@@ -108,13 +108,13 @@ export const toggleAdmin = mutation({
     });
 
     // Audit log
-    await ctx.runMutation(internal.auditLog.log, {
+    try { await ctx.runMutation(internal.auditLog.log, {
       userId: admin._id,
       category: "admin",
       action: "admin_toggled",
       status: "success",
       details: { targetUserId: args.userId, isAdmin: args.isAdmin },
-    });
+    }); } catch {}
 
     return { success: true, isAdmin: args.isAdmin };
   },
@@ -230,13 +230,13 @@ export const updateUserTier = mutation({
     });
 
     // Audit log
-    await ctx.runMutation(internal.auditLog.log, {
+    try { await ctx.runMutation(internal.auditLog.log, {
       userId: admin._id,
       category: "admin",
       action: "tier_changed",
       status: "success",
       details: { targetUserId: args.userId, oldTier, newTier: args.tier },
-    });
+    }); } catch {}
 
     return { success: true, previousTier: oldTier, newTier: args.tier };
   },
@@ -260,13 +260,13 @@ export const updateUserExpiry = mutation({
     });
 
     // Audit log
-    await ctx.runMutation(internal.auditLog.log, {
+    try { await ctx.runMutation(internal.auditLog.log, {
       userId: admin._id,
       category: "admin",
       action: "expiry_changed",
       status: "success",
       details: { targetUserId: args.userId, newExpiry: args.expiresAt },
-    });
+    }); } catch {}
 
     return { success: true };
   },
@@ -320,13 +320,13 @@ export const broadcastTelegram = action({
     }
 
     // Audit log
-    await ctx.runMutation(internal.auditLog.log, {
+    try { await ctx.runMutation(internal.auditLog.log, {
       userId: adminUserId,
       category: "admin",
       action: "broadcast_sent",
       status: "success",
       details: { recipientCount: args.chatIds.length },
-    });
+    }); } catch {}
 
     return { sent, failed, total: args.chatIds.length };
   },
