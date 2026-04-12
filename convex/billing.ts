@@ -345,6 +345,11 @@ export const handleBepaidWebhook = internalMutation({
 
     if (!payment) {
       console.error("bePaid webhook: payment not found for", args.trackingId);
+      await ctx.scheduler.runAfter(0, internal.systemLogger.log, {
+        level: "warn",
+        source: "billing",
+        message: `Webhook: payment not found for trackingId=${args.trackingId}`,
+      });
       return { success: false, error: "Payment not found" };
     }
 
@@ -429,6 +434,12 @@ export const handleBepaidWebhook = internalMutation({
       });
 
       console.log(`bePaid: Payment failed for ${args.trackingId}: ${args.message}`);
+      await ctx.scheduler.runAfter(0, internal.systemLogger.log, {
+        userId: payment.userId,
+        level: "warn",
+        source: "billing",
+        message: `Payment ${args.status}: ${args.trackingId} — ${(args.message ?? "no message").slice(0, 150)}`,
+      });
       return { success: false, error: args.message };
     }
 

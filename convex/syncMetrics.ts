@@ -112,10 +112,17 @@ export const syncAll = internalAction({
             });
           }
         } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
           console.error(
             `[syncMetrics] Auto-link error for account ${account._id}:`,
-            error instanceof Error ? error.message : error
+            errMsg
           );
+          await ctx.runMutation(internal.systemLogger.log, {
+            accountId: account._id,
+            level: "warn",
+            source: "syncMetrics",
+            message: `Auto-link videos failed: ${errMsg.slice(0, 180)}`,
+          });
         }
 
         if (!stats || stats.length === 0) {
@@ -252,10 +259,17 @@ export const syncAll = internalAction({
             }
           }
         } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
           console.error(
             `[syncMetrics] Error fetching video stats for account ${account._id}:`,
-            error instanceof Error ? error.message : error
+            errMsg
           );
+          await ctx.runMutation(internal.systemLogger.log, {
+            accountId: account._id,
+            level: "warn",
+            source: "syncMetrics",
+            message: `Video stats fetch failed: ${errMsg.slice(0, 180)}`,
+          });
         }
 
         // Update sync time and clear any previous error
@@ -279,6 +293,13 @@ export const syncAll = internalAction({
         console.error(
           `[syncMetrics] Error syncing account ${account._id}: ${msg}`
         );
+
+        await ctx.runMutation(internal.systemLogger.log, {
+          accountId: account._id,
+          level: "error",
+          source: "syncMetrics",
+          message: `Sync failed: ${msg.slice(0, 180)}`,
+        });
 
         // Mark account as error but don't stop the loop
         await ctx.runMutation(api.adAccounts.updateStatus, {
@@ -312,10 +333,16 @@ export const syncAll = internalAction({
         "checkAllRules"
       );
     } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
       console.error(
         "[syncMetrics] Error running rule engine:",
-        error instanceof Error ? error.message : error
+        errMsg
       );
+      await ctx.runMutation(internal.systemLogger.log, {
+        level: "error",
+        source: "syncMetrics",
+        message: `Rule engine failed: ${errMsg.slice(0, 180)}`,
+      });
     }
 
     // UZ budget rules — moved to separate cron "uz-budget-increase" (crons.ts)
@@ -325,15 +352,26 @@ export const syncAll = internalAction({
     try {
       await ctx.runAction(internal.syncMetrics.pollAiBannerModeration, {});
     } catch (error) {
+      const errMsg = error instanceof Error ? error.message : String(error);
       console.error(
         "[syncMetrics] Error polling AI banner moderation:",
-        error instanceof Error ? error.message : error
+        errMsg
       );
+      await ctx.runMutation(internal.systemLogger.log, {
+        level: "warn",
+        source: "syncMetrics",
+        message: `AI banner moderation poll failed: ${errMsg.slice(0, 180)}`,
+      });
     }
 
     } catch (err) {
       syncError = err instanceof Error ? err.message : "Unknown error";
       console.error("[syncAll] Fatal error:", syncError);
+      await ctx.runMutation(internal.systemLogger.log, {
+        level: "error",
+        source: "syncMetrics",
+        message: `Fatal syncAll error: ${syncError.slice(0, 180)}`,
+      });
     } finally {
       await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
         name: "syncAll",
@@ -479,10 +517,16 @@ export const pollAiBannerModeration = internalAction({
           }
         }
       } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
         console.error(
           `[pollModeration] Error for campaign ${campaign._id}:`,
-          error instanceof Error ? error.message : error
+          errMsg
         );
+        await ctx.runMutation(internal.systemLogger.log, {
+          level: "warn",
+          source: "syncMetrics",
+          message: `Moderation poll failed for campaign ${campaign._id}: ${errMsg.slice(0, 150)}`,
+        });
       }
     }
   },

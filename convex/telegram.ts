@@ -697,10 +697,16 @@ export const handleWebhook = internalAction({
               accountId: actionLog.accountId,
             });
           } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
             console.error(
               `[telegram] Failed to restart ad ${actionLog.adId}:`,
-              err instanceof Error ? err.message : err
+              errMsg
             );
+            await ctx.runMutation(internal.systemLogger.log, {
+              level: "error",
+              source: "telegram",
+              message: `Failed to restart ad ${actionLog.adId}: ${errMsg.slice(0, 150)}`,
+            });
           }
         }
 
@@ -770,7 +776,13 @@ export const handleWebhook = internalAction({
             text: "✉️ Сообщение передано администратору. Ожидайте ответа.",
           });
         } catch (err) {
-          console.error("[telegram] Failed to forward non-text to support:", err);
+          const errMsg = err instanceof Error ? err.message : String(err);
+          console.error("[telegram] Failed to forward non-text to support:", errMsg);
+          await ctx.runMutation(internal.systemLogger.log, {
+            level: "warn",
+            source: "telegram",
+            message: `Forward to support failed: ${errMsg.slice(0, 180)}`,
+          });
           await ctx.runAction(internal.telegram.sendMessage, {
             chatId,
             text: "⚠️ Не удалось переслать сообщение. Попробуйте позже или напишите текстом.",
