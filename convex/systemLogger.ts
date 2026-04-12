@@ -1,0 +1,81 @@
+import { v } from "convex/values";
+import { internalMutation, internalQuery } from "./_generated/server";
+
+// ─── Запись системного лога ───
+
+export const log = internalMutation({
+  args: {
+    userId: v.optional(v.id("users")),
+    accountId: v.optional(v.id("adAccounts")),
+    level: v.union(v.literal("error"), v.literal("warn"), v.literal("info")),
+    source: v.string(),
+    message: v.string(),
+    details: v.optional(v.any()),
+  },
+  handler: async (ctx, args) => {
+    // Обрезаем details если слишком большой (защита от bloat)
+    let details = args.details;
+    if (details) {
+      const str = JSON.stringify(details);
+      if (str.length > 50000) {
+        details = { truncated: true, preview: str.slice(0, 500) };
+      }
+    }
+
+    await ctx.db.insert("systemLogs", {
+      userId: args.userId,
+      accountId: args.accountId,
+      level: args.level,
+      source: args.source,
+      message: args.message,
+      details,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+// ─── Запросы для админки ───
+
+export const getRecentByLevel = internalQuery({
+  args: {
+    level: v.union(v.literal("error"), v.literal("warn"), v.literal("info")),
+    since: v.number(),
+    limit: v.number(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("systemLogs")
+      .withIndex("by_level_createdAt", (q) =>
+        q.eq("level", args.level).gte("createdAt", args.since)
+      )
+      .order("desc")
+      .take(args.limit);
+  },
+});
+
+export const getRecent = internalQuery({
+  args: { since: v.number(), limit: v.number() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("systemLogs")
+      .withIndex("by_createdAt", (q) => q.gte("createdAt", args.since))
+      .order("desc")
+      .take(args.limit);
+  },
+});
+
+// ─── TTL-чистка (30 дней) ───
+
+export const cleanupOld = internalMutation({
+  handler: async (ctx) => {
+    const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+    const old = await ctx.db
+      .query("systemLogs")
+      .withIndex("by_createdAt", (q) => q.lt("createdAt", thirtyDaysAgo))
+      .take(500);
+    for (const doc of old) {
+      await ctx.db.delete(doc._id);
+    }
+    return { deleted: old.length };
+  },
+});
