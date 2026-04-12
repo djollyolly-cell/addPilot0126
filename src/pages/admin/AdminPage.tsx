@@ -1,11 +1,12 @@
 import { useState } from 'react';
 import { useAuth } from '../../lib/useAuth';
 import { Card, CardContent } from '../../components/ui/card';
-import { Shield, Users, BarChart3, Wrench, ScrollText } from 'lucide-react';
+import { Shield, Users, BarChart3, Wrench, ScrollText, Activity } from 'lucide-react';
 import { AdminUsersTab } from './AdminUsersTab';
 import { AdminMetricsTab } from './AdminMetricsTab';
 import { AdminToolsTab } from './AdminToolsTab';
 import { AdminLogsTab } from './AdminLogsTab';
+import { AdminHealthTab } from './AdminHealthTab';
 
 const ADMIN_EMAILS = ['13632013@vk.com', '786709647@vk.com'];
 const SESSION_KEY = 'adpilot_session';
@@ -15,6 +16,7 @@ const TABS = [
   { id: 'metrics', label: 'Метрики', icon: BarChart3 },
   { id: 'tools', label: 'Инструменты', icon: Wrench },
   { id: 'logs', label: 'Логи', icon: ScrollText },
+  { id: 'health', label: 'Здоровье', icon: Activity },
 ] as const;
 
 type TabId = (typeof TABS)[number]['id'];
@@ -84,6 +86,7 @@ function AdminDashboard() {
       {activeTab === 'metrics' && <AdminMetricsTab sessionToken={sessionToken} />}
       {activeTab === 'tools' && <AdminToolsTab sessionToken={sessionToken} />}
       {activeTab === 'logs' && <AdminLogsTab sessionToken={sessionToken} />}
+      {activeTab === 'health' && <AdminHealthTab sessionToken={sessionToken} />}
     </div>
   );
 }
