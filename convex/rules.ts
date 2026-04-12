@@ -221,6 +221,15 @@ export const create = mutation({
       updatedAt: now,
     });
 
+    // Audit log
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: args.userId,
+      category: "rule",
+      action: "rule_created",
+      status: "success",
+      details: { ruleName: args.name.trim(), ruleType: args.type },
+    });
+
     return ruleId;
   },
 });
@@ -356,6 +365,16 @@ export const update = mutation({
     }
 
     await ctx.db.patch(args.ruleId, patch);
+
+    // Audit log
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: args.userId,
+      category: "rule",
+      action: "rule_updated",
+      status: "success",
+      details: { ruleName: (patch.name as string) ?? rule.name },
+    });
+
     return { success: true };
   },
 });
@@ -408,6 +427,15 @@ export const toggleActive = mutation({
       updatedAt: Date.now(),
     });
 
+    // Audit log
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: args.userId,
+      category: "rule",
+      action: "rule_toggled",
+      status: "success",
+      details: { ruleName: rule.name, isActive: newActive },
+    });
+
     return { isActive: newActive };
   },
 });
@@ -426,6 +454,15 @@ export const remove = mutation({
     if (rule.userId !== args.userId) {
       throw new Error("Нет доступа к этому правилу");
     }
+
+    // Audit log
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: args.userId,
+      category: "rule",
+      action: "rule_deleted",
+      status: "success",
+      details: { ruleName: rule.name },
+    });
 
     await ctx.db.delete(args.ruleId);
     return { success: true };

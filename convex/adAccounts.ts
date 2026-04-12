@@ -183,6 +183,16 @@ export const connect = mutation({
         if (owner?.vkAdsClientSecret) patch.clientSecret = owner.vkAdsClientSecret;
       }
       await ctx.db.patch(existing._id, patch);
+
+      // Audit log: account reconnected/updated
+      await ctx.runMutation(internal.auditLog.log, {
+        userId: args.userId,
+        category: "account",
+        action: "connect_success",
+        status: "success",
+        details: { accountName: args.name, vkAccountId: args.vkAccountId },
+      });
+
       return existing._id;
     }
 
@@ -233,6 +243,18 @@ export const connect = mutation({
       createdAt: Date.now(),
     });
 
+    // Audit log: new account connected
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: args.userId,
+      category: "account",
+      action: "connect_success",
+      status: "success",
+      details: { accountName: args.name, vkAccountId: args.vkAccountId },
+    });
+    await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+      category: "accountConnections",
+      text: `🔗 <b>Подключён кабинет</b>\n\nКабинет: ${args.name}\nVK ID: ${args.vkAccountId}`,
+    });
 
     return accountId;
   },
@@ -299,6 +321,19 @@ export const disconnect = mutation({
         updatedAt: Date.now(),
       });
     }
+
+    // Audit log: account disconnected
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: args.userId,
+      category: "account",
+      action: "disconnect",
+      status: "success",
+      details: { accountName: account.name },
+    });
+    await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+      category: "accountConnections",
+      text: `🔌 <b>Отключён кабинет</b>\n\nКабинет: ${account.name}`,
+    });
 
     // Delete the account itself
     await ctx.db.delete(args.accountId);

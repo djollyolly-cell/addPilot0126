@@ -97,7 +97,7 @@ export const toggleAdmin = mutation({
     isAdmin: v.boolean(),
   },
   handler: async (ctx, args) => {
-    await assertAdmin(ctx, args.sessionToken);
+    const admin = await assertAdmin(ctx, args.sessionToken);
 
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("User not found");
@@ -105,6 +105,15 @@ export const toggleAdmin = mutation({
     await ctx.db.patch(args.userId, {
       isAdmin: args.isAdmin,
       updatedAt: Date.now(),
+    });
+
+    // Audit log
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: admin._id,
+      category: "admin",
+      action: "admin_toggled",
+      status: "success",
+      details: { targetUserId: args.userId, isAdmin: args.isAdmin },
     });
 
     return { success: true, isAdmin: args.isAdmin };
@@ -169,7 +178,7 @@ export const updateUserTier = mutation({
     tier: v.union(v.literal("freemium"), v.literal("start"), v.literal("pro")),
   },
   handler: async (ctx, args) => {
-    await assertAdmin(ctx, args.sessionToken);
+    const admin = await assertAdmin(ctx, args.sessionToken);
 
     const user = await ctx.db.get(args.userId);
     if (!user) {
@@ -220,6 +229,15 @@ export const updateUserTier = mutation({
       updatedAt: Date.now(),
     });
 
+    // Audit log
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: admin._id,
+      category: "admin",
+      action: "tier_changed",
+      status: "success",
+      details: { targetUserId: args.userId, oldTier, newTier: args.tier },
+    });
+
     return { success: true, previousTier: oldTier, newTier: args.tier };
   },
 });
@@ -232,13 +250,22 @@ export const updateUserExpiry = mutation({
     expiresAt: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
-    await assertAdmin(ctx, args.sessionToken);
+    const admin = await assertAdmin(ctx, args.sessionToken);
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("User not found");
 
     await ctx.db.patch(args.userId, {
       subscriptionExpiresAt: args.expiresAt,
       updatedAt: Date.now(),
+    });
+
+    // Audit log
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: admin._id,
+      category: "admin",
+      action: "expiry_changed",
+      status: "success",
+      details: { targetUserId: args.userId, newExpiry: args.expiresAt },
     });
 
     return { success: true };
@@ -272,10 +299,10 @@ export const broadcastTelegram = action({
   },
   handler: async (ctx, args) => {
     // Verify admin
-    const admin = await ctx.runQuery(internal.admin.verifyAdmin, {
+    const adminUserId = await ctx.runQuery(internal.admin.verifyAdminWithId, {
       sessionToken: args.sessionToken,
     });
-    if (!admin) throw new Error("Forbidden: admin access required");
+    if (!adminUserId) throw new Error("Forbidden: admin access required");
 
     let sent = 0;
     let failed = 0;
@@ -291,6 +318,16 @@ export const broadcastTelegram = action({
         failed++;
       }
     }
+
+    // Audit log
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: adminUserId,
+      category: "admin",
+      action: "broadcast_sent",
+      status: "success",
+      details: { recipientCount: args.chatIds.length },
+    });
+
     return { sent, failed, total: args.chatIds.length };
   },
 });
@@ -333,6 +370,19 @@ export const verifyAdmin = internalQuery({
       return true;
     } catch {
       return false;
+    }
+  },
+});
+
+// Internal query: verify admin and return userId (used by actions that need audit logging)
+export const verifyAdminWithId = internalQuery({
+  args: { sessionToken: v.string() },
+  handler: async (ctx, args) => {
+    try {
+      const user = await assertAdmin(ctx, args.sessionToken);
+      return user._id;
+    } catch {
+      return null;
     }
   },
 });

@@ -823,6 +823,13 @@ export const handleWebhook = internalAction({
 
           if (saveResult && !saveResult.saved) {
             // chatId already belongs to another user
+            await ctx.runMutation(internal.auditLog.log, {
+              userId: link.userId,
+              category: "telegram",
+              action: "bot_connect_failed",
+              status: "failed",
+              details: { error: "chatid_taken" },
+            });
             await ctx.runAction(internal.telegram.sendMessage, {
               chatId,
               text: `⚠️ <b>Этот Telegram уже привязан к другому аккаунту</b> (${saveResult.existingUserName || "другой пользователь"}).\n\nКаждый пользователь должен подключать бота из <b>своего</b> Telegram. Попросите владельца аккаунта нажать ссылку подключения самостоятельно.`,
@@ -833,6 +840,14 @@ export const handleWebhook = internalAction({
           // Delete used token
           await ctx.runMutation(internal.telegram.deleteLinkToken, {
             linkId: link.linkId,
+          });
+
+          // Audit log: bot connected
+          await ctx.runMutation(internal.auditLog.log, {
+            userId: link.userId,
+            category: "telegram",
+            action: "bot_connected",
+            status: "success",
           });
 
           // Send confirmation + request phone via contact button

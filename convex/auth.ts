@@ -206,6 +206,15 @@ export const exchangeCodeForToken = action({
       userId: dbUserId,
     });
 
+    // Audit log: VK OAuth login success
+    await ctx.runMutation(internal.auditLog.log, {
+      userId: dbUserId,
+      category: "auth",
+      action: "login",
+      status: "success",
+      details: { method: "vk_oauth" },
+    });
+
     return {
       success: true,
       sessionToken,

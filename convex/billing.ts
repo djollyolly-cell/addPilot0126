@@ -423,6 +423,22 @@ export const handleBepaidWebhook = internalMutation({
       });
 
       console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId} (${totalDays} days, promo: ${payment.promoCode || "none"})`);
+
+      // Audit log: payment completed
+      await ctx.runMutation(internal.auditLog.log, {
+        userId: payment.userId,
+        category: "payment",
+        action: "payment_completed",
+        status: "success",
+        details: { tier: payment.tier, amount: args.amount / 100, promoCode: payment.promoCode },
+      });
+      // Admin alert: payment
+      const paidUserName = paidUser?.name || paidUser?.email || "—";
+      await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+        category: "payments",
+        text: `💰 <b>Оплата</b>\n\nПользователь: ${paidUserName}\nТариф: ${payment.tier}\nСумма: ${args.amount / 100} ${args.currency}`,
+      });
+
       return { success: true };
     }
 
@@ -440,6 +456,16 @@ export const handleBepaidWebhook = internalMutation({
         source: "billing",
         message: `Payment ${args.status}: ${args.trackingId} — ${(args.message ?? "no message").slice(0, 150)}`,
       });
+
+      // Audit log: payment failed
+      await ctx.runMutation(internal.auditLog.log, {
+        userId: payment.userId,
+        category: "payment",
+        action: "payment_failed",
+        status: "failed",
+        details: { status: args.status, message: args.message },
+      });
+
       return { success: false, error: args.message };
     }
 

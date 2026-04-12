@@ -215,6 +215,13 @@ export const loginWithEmail = action({
           email: args.email,
         });
 
+        // System log: login failed (userId unknown)
+        await ctx.runMutation(internal.systemLogger.log, {
+          level: "warn",
+          source: "auth",
+          message: `Login failed (email): ${args.email} — ${data.error}`,
+        });
+
         if (data.error === "invalid_client" || data.error === "invalid_grant") {
           return {
             success: false,
@@ -278,6 +285,15 @@ export const loginWithEmail = action({
       // Reset rate limit on success
       await ctx.runMutation(internal.authEmail.resetAttempts, {
         email: args.email,
+      });
+
+      // Audit log: login success
+      await ctx.runMutation(internal.auditLog.log, {
+        userId,
+        category: "auth",
+        action: "login",
+        status: "success",
+        details: { method: "email" },
       });
 
       return {
