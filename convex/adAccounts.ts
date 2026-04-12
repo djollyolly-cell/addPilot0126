@@ -98,6 +98,24 @@ export const list = query({
   },
 });
 
+/** Find existing adAccount by userId + agencyCabinetId (or vitaminCabinetId).
+ *  Used to prevent duplicates on reconnection — cabinetId is stable, vkAccountId is not. */
+export const findByAgencyCabinetId = internalQuery({
+  args: {
+    userId: v.id("users"),
+    agencyCabinetId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const accounts = await ctx.db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    return accounts.find(
+      (a) => a.agencyCabinetId === args.agencyCabinetId || a.vitaminCabinetId === args.agencyCabinetId
+    ) ?? null;
+  },
+});
+
 // Get a single ad account by ID
 export const get = query({
   args: {
@@ -209,13 +227,15 @@ export const connect = mutation({
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .collect();
 
-    const tierLimits: Record<string, number> = {
-      freemium: 1,
-      start: 3,
-      pro: Infinity,
-    };
+    const tier = user.subscriptionTier ?? "freemium";
+    let limit: number;
+    if (tier === "pro") {
+      limit = user.proAccountLimit ?? 20;
+    } else {
+      const tierLimits: Record<string, number> = { freemium: 1, start: 3 };
+      limit = tierLimits[tier] ?? 1;
+    }
 
-    const limit = tierLimits[user.subscriptionTier ?? "freemium"] ?? 1;
     if (accounts.length >= limit) {
       throw new Error(`Лимит кабинетов для тарифа "${user.subscriptionTier}" исчерпан (${limit})`);
     }
@@ -706,6 +726,43 @@ export const connectAgencyAccountInternal = internalAction({
     }
 
     return { accountId: accountId as string };
+  },
+});
+
+/** Internal mutation: update token + status on existing account (for Vitamin reconnection) */
+export const updateAccountToken = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    accessToken: v.string(),
+    name: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) throw new Error("Аккаунт не найден");
+
+    // Audit credential change
+    if (args.accessToken !== account.accessToken) {
+      const mask = (val: string) => val.length > 8 ? val.slice(0, 4) + "..." + val.slice(-4) : val;
+      await ctx.db.insert("credentialHistory", {
+        accountId: args.accountId,
+        field: "accessToken",
+        oldValue: mask(account.accessToken),
+        newValue: mask(args.accessToken),
+        changedAt: Date.now(),
+        changedBy: "vitamin_reconnect",
+      });
+    }
+
+    const patch: Record<string, unknown> = {
+      accessToken: args.accessToken,
+      status: "active",
+      lastError: undefined,
+      tokenErrorSince: undefined,
+      tokenRecoveryAttempts: undefined,
+    };
+    if (args.name) patch.name = args.name;
+
+    await ctx.db.patch(args.accountId, patch);
   },
 });
 

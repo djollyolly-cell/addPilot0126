@@ -152,12 +152,17 @@ export const saveCredentialsInternal = internalMutation({
       .first();
 
     if (existing) {
-      await ctx.db.patch(existing._id, {
-        ...(args.apiKey !== undefined && { apiKey: args.apiKey }),
-        ...(args.oauthClientId !== undefined && { oauthClientId: args.oauthClientId }),
-        ...(args.oauthClientSecret !== undefined && { oauthClientSecret: args.oauthClientSecret }),
-        lastUsedAt: Date.now(),
-      });
+      // Save previous apiKey before overwriting (for audit trail)
+      const patchData: Record<string, unknown> = { lastUsedAt: Date.now() };
+      if (args.apiKey !== undefined) {
+        if (existing.apiKey && existing.apiKey !== args.apiKey) {
+          patchData.previousApiKey = existing.apiKey;
+        }
+        patchData.apiKey = args.apiKey;
+      }
+      if (args.oauthClientId !== undefined) patchData.oauthClientId = args.oauthClientId;
+      if (args.oauthClientSecret !== undefined) patchData.oauthClientSecret = args.oauthClientSecret;
+      await ctx.db.patch(existing._id, patchData);
       return existing._id;
     }
 
@@ -647,17 +652,36 @@ export const vitaminConnectAccount = action({
 
     const name = args.accountName?.trim() || `Витамин #${cabinetId}`;
 
-    // Connect using the VK token directly
-    const result: { accountId: string } = await ctx.runAction(
-      internal.adAccounts.connectAgencyAccountInternal,
-      {
-        userId: args.userId,
+    // Find existing account by stable vitaminCabinetId to prevent duplicates on reconnection.
+    // Old accounts have vkAccountId=agency_{token[0:16]} which changes with each new token.
+    // By finding the existing record first, we reuse its vkAccountId so connect() matches and updates it.
+    const existingAccount = await ctx.runQuery(internal.adAccounts.findByAgencyCabinetId, {
+      userId: args.userId,
+      agencyCabinetId: cabinetId,
+    });
+
+    let result: { accountId: string };
+    if (existingAccount) {
+      // Reconnection: update existing account via connect() using its original vkAccountId
+      result = { accountId: existingAccount._id };
+      await ctx.runMutation(internal.adAccounts.updateAccountToken, {
+        accountId: existingAccount._id,
         accessToken: vkToken,
         name,
-        agencyProviderId: args.providerId,
-        agencyCabinetId: cabinetId,
-      }
-    );
+      });
+    } else {
+      // First connection: use stable vkAccountId based on cabinetId (not token)
+      result = await ctx.runAction(
+        internal.adAccounts.connectAgencyAccountInternal,
+        {
+          userId: args.userId,
+          accessToken: vkToken,
+          name,
+          agencyProviderId: args.providerId,
+          agencyCabinetId: cabinetId,
+        }
+      );
+    }
 
     // Save cabinet ID for auto-refresh
     await ctx.runMutation(internal.adAccounts.patchAccount, {

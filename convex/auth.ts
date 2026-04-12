@@ -945,20 +945,20 @@ export const getValidTokenForAccount = internalAction({
         return account.accessToken;
       }
       // Token expired, no credentials — try agency_client_credentials as last resort
-      // This needs user-level OAuth credentials + vkAccountId
+      // This needs user-level OAuth credentials + mtAdvertiserId (numeric myTarget ID)
       const userCreds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
         userId: account.userId as Id<"users">,
       });
-      if (userCreds?.clientId && userCreds?.clientSecret && account.vkAccountId) {
+      if (userCreds?.clientId && userCreds?.clientSecret && account.mtAdvertiserId) {
         try {
           console.log(
-            `[getValidTokenForAccount] «${account.name}» (${args.accountId}): no credentials, trying agency_client_credentials`
+            `[getValidTokenForAccount] «${account.name}» (${args.accountId}): no credentials, trying agency_client_credentials (mtAdvertiserId=${account.mtAdvertiserId})`
           );
           const generated = await ctx.runAction(internal.auth.generateAgencyToken, {
             accountId: args.accountId,
             clientId: userCreds.clientId,
             clientSecret: userCreds.clientSecret,
-            agencyClientId: account.vkAccountId,
+            agencyClientId: account.mtAdvertiserId,
           });
           return generated.accessToken;
         } catch (agencyErr) {
@@ -1032,7 +1032,7 @@ export const getValidTokenForAccount = internalAction({
     }
     // Helper: try agency_client_credentials as last-resort fallback
     const tryAgencyFallback = async (): Promise<string | null> => {
-      if (!account.vkAccountId) return null;
+      if (!account.mtAdvertiserId) return null;
       // Use user-level credentials (may differ from clientId/clientSecret resolved above)
       const userCreds = await ctx.runQuery(internal.users.getVkAdsCredentials, {
         userId: account.userId as Id<"users">,
@@ -1042,13 +1042,13 @@ export const getValidTokenForAccount = internalAction({
       if (!agencyClientId || !agencyClientSecret) return null;
       try {
         console.log(
-          `[getValidTokenForAccount] «${account.name}» (${args.accountId}): trying agency_client_credentials fallback`
+          `[getValidTokenForAccount] «${account.name}» (${args.accountId}): trying agency_client_credentials fallback (mtAdvertiserId=${account.mtAdvertiserId})`
         );
         const generated = await ctx.runAction(internal.auth.generateAgencyToken, {
           accountId: args.accountId,
           clientId: agencyClientId,
           clientSecret: agencyClientSecret,
-          agencyClientId: account.vkAccountId,
+          agencyClientId: account.mtAdvertiserId,
         });
         return generated.accessToken;
       } catch (agencyErr) {
@@ -1153,6 +1153,7 @@ export const getAccountWithCredentials = internalQuery({
       clientSecret: account.clientSecret,
       userId: account.userId,
       vkAccountId: account.vkAccountId,
+      mtAdvertiserId: (account as Record<string, unknown>).mtAdvertiserId as string | undefined,
       name: account.name,
       vitaminCabinetId: (account as Record<string, unknown>).vitaminCabinetId as string | undefined,
       agencyProviderId: (account as Record<string, unknown>).agencyProviderId as string | undefined,
@@ -1238,8 +1239,26 @@ export const updateVitaminToken = internalMutation({
     accessToken: v.string(),
   },
   handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (account) {
+      const oldVal = account.accessToken as string | undefined;
+      const newVal = args.accessToken;
+      if (oldVal !== newVal) {
+        const mask = (val: string | undefined) =>
+          val && val.length > 8 ? val.slice(0, 4) + "..." + val.slice(-4) : val;
+        await ctx.db.insert("credentialHistory", {
+          accountId: args.accountId,
+          field: "accessToken",
+          oldValue: mask(oldVal),
+          newValue: mask(newVal),
+          changedAt: Date.now(),
+          changedBy: "updateVitaminToken",
+        });
+      }
+    }
     await ctx.db.patch(args.accountId, {
       accessToken: args.accessToken,
+      tokenExpiresAt: Date.now() + 24 * 60 * 60 * 1000,
       status: "active" as const,
       lastError: undefined,
     });
@@ -1356,6 +1375,30 @@ export const updateAgencyAccountTokens = internalMutation({
     clientSecret: v.string(),
   },
   handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (account) {
+      const mask = (val: string | undefined) =>
+        val && val.length > 8 ? val.slice(0, 4) + "..." + val.slice(-4) : val;
+      const trackedFields = [
+        { field: "accessToken" as const, newVal: args.accessToken },
+        { field: "refreshToken" as const, newVal: args.refreshToken },
+        { field: "clientId" as const, newVal: args.clientId },
+        { field: "clientSecret" as const, newVal: args.clientSecret },
+      ];
+      for (const { field, newVal } of trackedFields) {
+        const oldVal = (account as Record<string, unknown>)[field] as string | undefined;
+        if (oldVal !== newVal && newVal) {
+          await ctx.db.insert("credentialHistory", {
+            accountId: args.accountId,
+            field,
+            oldValue: mask(oldVal),
+            newValue: mask(newVal),
+            changedAt: Date.now(),
+            changedBy: "updateAgencyAccountTokens",
+          });
+        }
+      }
+    }
     await ctx.db.patch(args.accountId, {
       accessToken: args.accessToken,
       refreshToken: args.refreshToken,
@@ -1375,6 +1418,23 @@ export const updateAccountToken = internalMutation({
     accessToken: v.string(),
   },
   handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (account) {
+      const oldVal = account.accessToken as string | undefined;
+      const newVal = args.accessToken;
+      if (oldVal !== newVal) {
+        const mask = (val: string | undefined) =>
+          val && val.length > 8 ? val.slice(0, 4) + "..." + val.slice(-4) : val;
+        await ctx.db.insert("credentialHistory", {
+          accountId: args.accountId,
+          field: "accessToken",
+          oldValue: mask(oldVal),
+          newValue: mask(newVal),
+          changedAt: Date.now(),
+          changedBy: "updateAccountToken",
+        });
+      }
+    }
     await ctx.db.patch(args.accountId, {
       accessToken: args.accessToken,
       tokenExpiresAt: Date.now() + 86400 * 1000, // 24h default
