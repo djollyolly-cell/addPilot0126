@@ -138,4 +138,11 @@ crons.interval(
   internal.billing.cleanupStuckPayments
 );
 
+// Clean up old audit/system logs — daily at 02:00 UTC
+crons.cron(
+  "cleanup-old-logs",
+  "0 2 * * *",
+  internal.logCleanup.runDaily
+);
+
 export default crons;
