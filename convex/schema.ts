@@ -718,4 +718,44 @@ export default defineSchema({
     createdAt: v.number(),
   })
     .index("by_forwardedMessageId", ["forwardedMessageId"]),
+
+  // Audit log — все действия пользователей (успех + провал)
+  auditLog: defineTable({
+    userId: v.id("users"),
+    category: v.union(
+      v.literal("account"),
+      v.literal("rule"),
+      v.literal("payment"),
+      v.literal("telegram"),
+      v.literal("settings"),
+      v.literal("auth"),
+      v.literal("admin"),
+    ),
+    action: v.string(),
+    status: v.union(v.literal("success"), v.literal("failed")),
+    details: v.optional(v.any()),
+    createdAt: v.number(),
+  })
+    .index("by_userId_createdAt", ["userId", "createdAt"])
+    .index("by_category_createdAt", ["category", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
+
+  // Настройки Telegram-уведомлений для админов
+  adminAlertSettings: defineTable({
+    userId: v.id("users"),
+    payments: v.boolean(),
+    criticalErrors: v.boolean(),
+    accountConnections: v.boolean(),
+    newUsers: v.boolean(),
+    ruleErrors: v.boolean(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"]),
+
+  // Дедупликация алертов (не спамить одну ошибку)
+  adminAlertDedup: defineTable({
+    key: v.string(),
+    lastSentAt: v.number(),
+  })
+    .index("by_key", ["key"]),
 }, { schemaValidation: false });
