@@ -258,6 +258,62 @@ export const tryRecoverToken = internalAction({
   },
 });
 
+// ─── Centralized TOKEN_EXPIRED handler ──────────────────────
+
+export const handleTokenExpired = internalAction({
+  args: { accountId: v.id("adAccounts") },
+  returns: v.boolean(),
+  handler: async (ctx, args): Promise<boolean> => {
+    // 1. Load account to get current token
+    const account = await ctx.runQuery(api.adAccounts.get, {
+      accountId: args.accountId,
+    });
+    if (!account || !account.accessToken) {
+      console.log(`[handleTokenExpired] Account ${args.accountId}: not found or no token`);
+      return false;
+    }
+
+    // 2. Verify token is actually dead (VK may have returned false 401)
+    const tokenStillAlive = await quickTokenCheck(account.accessToken);
+    if (tokenStillAlive) {
+      console.log(
+        `[handleTokenExpired] «${account.name}» (${args.accountId}): false TOKEN_EXPIRED — token still alive, skipping invalidation`
+      );
+      // Clear error status since token is fine
+      await ctx.runMutation(internal.tokenRecovery.markRecoverySuccess, {
+        accountId: args.accountId,
+      });
+      return true;
+    }
+
+    // 3. Token is really dead — try recovery BEFORE invalidation
+    try {
+      const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, {
+        accountId: args.accountId,
+      });
+      if (recovered) {
+        console.log(
+          `[handleTokenExpired] «${account.name}» (${args.accountId}): recovered successfully`
+        );
+        return true;
+      }
+    } catch (recErr) {
+      console.log(
+        `[handleTokenExpired] «${account.name}» (${args.accountId}): recovery failed: ${recErr}`
+      );
+    }
+
+    // 4. Recovery failed — only NOW invalidate
+    await ctx.runMutation(internal.adAccounts.invalidateAccountToken, {
+      accountId: args.accountId,
+    });
+    console.log(
+      `[handleTokenExpired] «${account.name}» (${args.accountId}): token dead, invalidated after failed recovery`
+    );
+    return false;
+  },
+});
+
 // ─── Periodic retry for error accounts ──────────────────────
 
 export const retryRecovery = internalAction({

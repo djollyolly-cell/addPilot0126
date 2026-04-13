@@ -308,18 +308,14 @@ export const syncAll = internalAction({
           lastError: `Sync failed: ${msg}`,
         });
 
-        // If TOKEN_EXPIRED — invalidate tokenExpiresAt so next call triggers refresh
+        // If TOKEN_EXPIRED — centralized handler: verify → recover → invalidate
         if (msg.includes("TOKEN_EXPIRED")) {
-          await ctx.runMutation(internal.adAccounts.invalidateAccountToken, {
-            accountId: account._id,
-          });
-          // Try immediate recovery
           try {
-            await ctx.runAction(internal.tokenRecovery.tryRecoverToken, {
+            await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
               accountId: account._id,
             });
-          } catch (recErr) {
-            console.log(`[syncMetrics] Recovery for ${account._id} failed: ${recErr}`);
+          } catch (handleErr) {
+            console.log(`[syncMetrics] handleTokenExpired for ${account._id} failed: ${handleErr}`);
           }
         }
       }

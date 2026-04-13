@@ -93,9 +93,13 @@ export const resetBudgets = internalAction({
             console.error(`[uz_budget_reset] Token failed for account "${accName}" (${accountId}): ${tokenMsg}`);
             // Invalidate tokenExpiresAt so next cycle triggers refresh
             if (tokenMsg.includes("TOKEN_EXPIRED")) {
-              await ctx.runMutation(internal.adAccounts.invalidateAccountToken, {
-                accountId,
-              });
+              try {
+                await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
+                  accountId,
+                });
+              } catch (handleErr) {
+                console.log(`[uz_budget_reset] handleTokenExpired for ${accountId} failed: ${handleErr}`);
+              }
             }
             // Notify user about skipped reset via Telegram
             try {

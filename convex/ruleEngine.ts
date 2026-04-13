@@ -1958,9 +1958,13 @@ export const checkUzBudgetRules = internalAction({
             console.error(`[uz_budget] Cannot get token for account ${accountId}: ${tokenMsg}`);
             // Invalidate tokenExpiresAt so next cycle triggers refresh
             if (tokenMsg.includes("TOKEN_EXPIRED")) {
-              await ctx.runMutation(internal.adAccounts.invalidateAccountToken, {
-                accountId: accountId as Id<"adAccounts">,
-              });
+              try {
+                await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
+                  accountId: accountId as Id<"adAccounts">,
+                });
+              } catch (handleErr) {
+                console.log(`[uz_budget] handleTokenExpired for ${accountId} failed: ${handleErr}`);
+              }
             }
             skipped.tokenErr++;
             return;
