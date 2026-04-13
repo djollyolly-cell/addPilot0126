@@ -918,7 +918,7 @@ export const getValidTokenForAccount = internalAction({
     if (!clientId && !clientSecret) {
       // If token has no expiry (undefined/null), check liveness before returning
       // tokenExpiresAt=0 means "invalidated", must NOT return here
-      if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
+      if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null || account.tokenExpiresAt === 0) {
         const alive = await quickTokenCheck(account.accessToken);
         if (alive) {
           // Auto-set expiry so proactiveRefresh picks it up — no more blind returns
@@ -991,9 +991,8 @@ export const getValidTokenForAccount = internalAction({
       return account.accessToken;
     }
 
-    // Token without expiry (undefined/null) — check liveness before returning
-    // But tokenExpiresAt=0 is "invalidated", must NOT return here
-    if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
+    // Token without expiry (undefined/null/0) — check liveness before returning
+    if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null || account.tokenExpiresAt === 0) {
       const alive = await quickTokenCheck(account.accessToken);
       if (alive) {
         // Auto-set expiry so proactiveRefresh picks it up — no more blind returns
@@ -1201,11 +1200,22 @@ export const refreshViaVitamin = internalAction({
     }
 
     // Response format: extract token from response
-    // Vitamin returns array of tokens or object with tokens
+    // Vitamin returns: {"is_ok":true,"data":{"<cabinetId>":"<token>"}}
+    // or array [{id, token, ...}] or {token: "..."} etc.
     let newToken: string | null = null;
     if (Array.isArray(data)) {
       // [{id, token, ...}]
       newToken = data[0]?.token || data[0]?.access_token || null;
+    } else if (data.data && typeof data.data === "object" && !Array.isArray(data.data)) {
+      // {"is_ok":true,"data":{"149904":"token..."}} — object keyed by cabinetId
+      const values = Object.values(data.data) as string[];
+      if (values.length > 0 && typeof values[0] === "string") {
+        newToken = values[0];
+      } else {
+        // Maybe nested objects: {"data":[{token: "..."}]}
+        const first = values[0] as unknown as Record<string, unknown> | undefined;
+        newToken = (first?.token as string) || (first?.access_token as string) || null;
+      }
     } else if (data.data && Array.isArray(data.data)) {
       newToken = data.data[0]?.token || data.data[0]?.access_token || null;
     } else if (data.token) {
