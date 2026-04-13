@@ -45,16 +45,30 @@ export async function quickTokenCheck(accessToken: string): Promise<boolean> {
 // ─── Mutations for recovery state ───────────────────────────
 
 export const markRecoverySuccess = internalMutation({
-  args: { accountId: v.id("adAccounts") },
+  args: {
+    accountId: v.id("adAccounts"),
+    tokenExpiresAt: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
     const account = await ctx.db.get(args.accountId);
     if (!account) return;
-    await ctx.db.patch(args.accountId, {
+
+    const patch: Record<string, unknown> = {
       status: "active",
       lastError: undefined,
       tokenErrorSince: undefined,
       tokenRecoveryAttempts: undefined,
-    });
+    };
+
+    // Сбросить tokenExpiresAt: если передан — используем, иначе чистим артефакт инвалидации
+    if (args.tokenExpiresAt !== undefined) {
+      patch.tokenExpiresAt = args.tokenExpiresAt;
+    } else if (account.tokenExpiresAt === 0) {
+      // tokenExpiresAt=0 — артефакт инвалидации, сбросить в undefined (permanent)
+      patch.tokenExpiresAt = undefined;
+    }
+
+    await ctx.db.patch(args.accountId, patch);
     console.log(`[tokenRecovery] «${account.name}» (${args.accountId}): recovered successfully`);
   },
 });
