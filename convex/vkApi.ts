@@ -232,6 +232,11 @@ async function callMtApi<T>(
     }
 
     if (response.status === 401) {
+      if (attempt < 1) {
+        console.log(`[callMtApi] ${endpoint}: got 401, retrying once in 2s`);
+        await sleep(2000);
+        continue;
+      }
       throw new Error("TOKEN_EXPIRED");
     }
 
@@ -274,6 +279,11 @@ async function postMtApi<T>(
     }
 
     if (response.status === 401) {
+      if (attempt < 1) {
+        console.log(`[postMtApi] ${endpoint}: got 401, retrying once in 2s`);
+        await sleep(2000);
+        continue;
+      }
       throw new Error("TOKEN_EXPIRED");
     }
 
@@ -310,7 +320,22 @@ async function uploadMtContent(
     body: formData,
   }, UPLOAD_TIMEOUT_MS);
 
-  if (response.status === 401) throw new Error("TOKEN_EXPIRED");
+  if (response.status === 401) {
+    // One retry for upload
+    console.log(`[uploadToMt] ${endpoint}: got 401, retrying once in 2s`);
+    await sleep(2000);
+    const retryResponse = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body: formData,
+    }, UPLOAD_TIMEOUT_MS);
+    if (retryResponse.status === 401) throw new Error("TOKEN_EXPIRED");
+    if (!retryResponse.ok) {
+      const text = await retryResponse.text();
+      throw new Error(`VK Ads upload error ${retryResponse.status}: ${text}`);
+    }
+    return retryResponse.json();
+  }
   if (!response.ok) {
     const text = await response.text();
     throw new Error(`VK Ads upload error ${response.status}: ${text}`);
@@ -639,6 +664,11 @@ export const stopAd = action({
       }
 
       if (response.status === 401) {
+        if (attempt < 1) {
+          console.log(`[stopAd] banner ${args.adId}: got 401, retrying once in 2s`);
+          await sleep(2000);
+          continue;
+        }
         throw new Error("TOKEN_EXPIRED");
       }
 
@@ -685,6 +715,11 @@ export const restartAd = action({
       }
 
       if (response.status === 401) {
+        if (attempt < 1) {
+          console.log(`[restartAd] banner ${args.adId}: got 401, retrying once in 2s`);
+          await sleep(2000);
+          continue;
+        }
         throw new Error("TOKEN_EXPIRED");
       }
 
