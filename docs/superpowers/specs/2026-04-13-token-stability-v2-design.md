@@ -77,6 +77,29 @@ handleTokenExpired(ctx, accountId):
 
 Расширить фильтр: включить аккаунты с `tokenExpiresAt === undefined || null || 0` в proactive refresh. Они будут рефрешиться каждые 4 часа наравне с expiring-токенами, что даёт 5 попыток в пределах 24-часового окна artificial expiry.
 
+## КРИТИЧЕСКОЕ ТРЕБОВАНИЕ: Сохранность токенов и credentials
+
+Ни один фикс НЕ записывает и НЕ затирает следующие поля:
+
+- `accessToken` — VK Ads токен аккаунта
+- `refreshToken` — refresh-токен для OAuth
+- `clientId`, `clientSecret` — OAuth credentials (per-account или user-level)
+- `agencyProviderId`, `agencyCabinetId` — привязка к агентству (GetUNIQ, Click.ru, ZaleyCash)
+- `vitaminCabinetId` — привязка к Vitamin
+- `mtAdvertiserId` — ID рекламодателя в myTarget
+- `oauthAccessToken`, `oauthRefreshToken`, `oauthClientId`, `oauthClientSecret` — credentials агентских провайдеров
+
+Единственные поля, которые затрагиваются фиксами:
+
+| Поле | Где меняется | Что происходит |
+|---|---|---|
+| `tokenExpiresAt` | Fix #2 (markRecoverySuccess) | `0` → `undefined` после УСПЕШНОГО recovery |
+| `tokenExpiresAt` | Fix #4 (handleTokenExpired→invalidate) | → `0`, только если токен мёртв И recovery провалился |
+| `status` | Fix #4 (handleTokenExpired) | `error` → `active` при ложном 401 |
+| `lastError`, `tokenErrorSince`, `tokenRecoveryAttempts` | Fix #2 | Очистка после успешного recovery |
+
+Все agency-специфичные функции (`tryVitaminRefresh`, `tryGetuniqRefresh`, `tryClickruRefresh`, `tryZaleycashRefresh`) и каскад recovery в `getValidTokenForAccount` — НЕ ТРОГАЮТСЯ.
+
 ## Что НЕ меняется
 
 - **schema.ts** — ноль новых полей, ноль изменений схемы
@@ -84,6 +107,8 @@ handleTokenExpired(ctx, accountId):
 - **Telegram-уведомления** — без изменений
 - **Фронтенд** — без изменений
 - **Публичные API** — без изменений
+- **Agency refresh-функции** — `tryVitaminRefresh`, `tryGetuniqRefresh`, `tryClickruRefresh`, `tryZaleycashRefresh` — без изменений
+- **`getValidTokenForAccount` каскад** — без изменений, все провайдеры работают как раньше
 
 ## Восстановление существующих аккаунтов
 
