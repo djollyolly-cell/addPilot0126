@@ -1791,13 +1791,16 @@ export const getExpiringAccounts = internalQuery({
     return accounts.filter(
       (a) =>
         (a.status === "active" || a.status === "error") &&
-        a.tokenExpiresAt &&
-        a.refreshToken &&
         (
-          // About to expire (within proactive window)
-          (a.tokenExpiresAt > now && a.tokenExpiresAt < args.threshold) ||
-          // Already expired but within 30 days (refresh token still usable)
-          (a.tokenExpiresAt <= now && a.tokenExpiresAt > now - MAX_EXPIRED_AGE_MS)
+          // Has refresh token and about to expire or already expired
+          (a.refreshToken && a.tokenExpiresAt && a.tokenExpiresAt > 0 && (
+            // About to expire (within proactive window)
+            (a.tokenExpiresAt > now && a.tokenExpiresAt < args.threshold) ||
+            // Already expired but within 30 days (refresh token still usable)
+            (a.tokenExpiresAt <= now && a.tokenExpiresAt > now - MAX_EXPIRED_AGE_MS)
+          )) ||
+          // Permanent tokens (undefined/null/0) — include for periodic refresh
+          (a.tokenExpiresAt === undefined || a.tokenExpiresAt === null || a.tokenExpiresAt === 0)
         )
     );
   },
