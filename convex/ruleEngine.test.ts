@@ -7,6 +7,7 @@ import {
   calculateSavings,
   minutesUntilEndOfDay,
   matchesCampaignFilter,
+  computeRealtimeDelta,
 } from "./ruleEngine";
 
 // Helper: create user + account for testing
@@ -1962,6 +1963,60 @@ describe("campaign filter dual matching", () => {
       ["13038509"],
       null,
       null
+    );
+    expect(result).toBe(false);
+  });
+});
+
+describe("computeRealtimeDelta", () => {
+  test("returns delta between newest and oldest snapshot", () => {
+    const snapshots = [
+      { impressions: 100, clicks: 10, spent: 50, leads: 0, timestamp: 1000 },
+      { impressions: 150, clicks: 15, spent: 70, leads: 1, timestamp: 2000 },
+      { impressions: 200, clicks: 20, spent: 90, leads: 1, timestamp: 3000 },
+    ];
+    const result = computeRealtimeDelta(snapshots);
+    expect(result).toEqual({ impressions: 100, clicks: 10, spent: 40, leads: 1 });
+  });
+
+  test("returns zeros for single snapshot", () => {
+    const snapshots = [
+      { impressions: 100, clicks: 10, spent: 50, leads: 0, timestamp: 1000 },
+    ];
+    const result = computeRealtimeDelta(snapshots);
+    expect(result).toEqual({ impressions: 0, clicks: 0, spent: 0, leads: 0 });
+  });
+
+  test("returns zeros for empty array", () => {
+    const result = computeRealtimeDelta([]);
+    expect(result).toEqual({ impressions: 0, clicks: 0, spent: 0, leads: 0 });
+  });
+});
+
+describe("evaluateCondition — low_impressions", () => {
+  test("triggers when impressions below threshold", () => {
+    const result = evaluateCondition(
+      "low_impressions",
+      { metric: "impressions", operator: "<", value: 1000 },
+      { spent: 100, leads: 0, impressions: 500, clicks: 10 }
+    );
+    expect(result).toBe(true);
+  });
+
+  test("does not trigger when impressions above threshold", () => {
+    const result = evaluateCondition(
+      "low_impressions",
+      { metric: "impressions", operator: "<", value: 1000 },
+      { spent: 100, leads: 0, impressions: 1500, clicks: 10 }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("does not trigger when impressions equal threshold", () => {
+    const result = evaluateCondition(
+      "low_impressions",
+      { metric: "impressions", operator: "<", value: 1000 },
+      { spent: 100, leads: 0, impressions: 1000, clicks: 10 }
     );
     expect(result).toBe(false);
   });

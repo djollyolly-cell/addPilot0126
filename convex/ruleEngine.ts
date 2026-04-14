@@ -38,7 +38,7 @@ export interface RuleCondition {
   operator: string;
   value: number;
   minSamples?: number;
-  timeWindow?: "daily" | "since_launch" | "24h";
+  timeWindow?: "daily" | "since_launch" | "24h" | "1h" | "6h";
 }
 
 export interface SpendSnapshot {
@@ -60,6 +60,28 @@ export function matchesCampaignFilter(
   const matchesDirect = adGroupId !== null && targetCampaignIds.includes(adGroupId);
   const matchesPlan = adPlanId !== null && targetCampaignIds.includes(adPlanId);
   return matchesDirect || matchesPlan;
+}
+
+/**
+ * Compute the delta of cumulative metrics between the oldest and newest
+ * realtime snapshots. Used for 1h/6h time windows where metricsRealtime
+ * stores cumulative values and we need the difference.
+ */
+export function computeRealtimeDelta(
+  snapshots: { impressions: number; clicks: number; spent: number; leads: number; timestamp: number }[]
+): { impressions: number; clicks: number; spent: number; leads: number } {
+  if (snapshots.length <= 1) {
+    return { impressions: 0, clicks: 0, spent: 0, leads: 0 };
+  }
+  const sorted = [...snapshots].sort((a, b) => a.timestamp - b.timestamp);
+  const oldest = sorted[0];
+  const newest = sorted[sorted.length - 1];
+  return {
+    impressions: newest.impressions - oldest.impressions,
+    clicks: newest.clicks - oldest.clicks,
+    spent: newest.spent - oldest.spent,
+    leads: newest.leads - oldest.leads,
+  };
 }
 
 /**
@@ -1147,8 +1169,14 @@ function buildReason(
       return `\u041F\u043E\u0442\u0440\u0430\u0447\u0435\u043D\u043E ${metrics.spent}\u20BD \u0431\u0435\u0437 \u043B\u0438\u0434\u043E\u0432 (\u043B\u0438\u043C\u0438\u0442 ${condition.value}\u20BD)`;
     case "budget_limit":
       return `\u0420\u0430\u0441\u0445\u043E\u0434 ${metrics.spent}\u20BD \u043F\u0440\u0435\u0432\u044B\u0441\u0438\u043B \u0431\u044E\u0434\u0436\u0435\u0442 ${condition.value}\u20BD`;
-    case "low_impressions":
-      return `\u041F\u043E\u043A\u0430\u0437\u043E\u0432 ${metrics.impressions} \u043C\u0435\u043D\u044C\u0448\u0435 \u043C\u0438\u043D\u0438\u043C\u0443\u043C\u0430 ${condition.value}`;
+    case "low_impressions": {
+      const impWindowLabel =
+        timeWindow === "1h" ? " за 1ч" :
+        timeWindow === "6h" ? " за 6ч" :
+        timeWindow === "24h" ? " за 24ч" :
+        timeWindow === "since_launch" ? " с запуска" : " за день";
+      return `Показов ${metrics.impressions}${impWindowLabel} меньше минимума ${condition.value}`;
+    }
     case "clicks_no_leads": {
       const windowLabel =
         timeWindow === "since_launch" ? " с запуска" :
@@ -1195,7 +1223,7 @@ export const checkAllRules = internalAction({
           for (const targetAccountId of rule.targetAccountIds) {
             const timeWindow = rule.conditions.timeWindow;
             const needsAllAds =
-              rule.type === "clicks_no_leads" &&
+              (rule.type === "clicks_no_leads" || rule.type === "low_impressions") &&
               timeWindow &&
               timeWindow !== "daily";
 
@@ -1300,11 +1328,26 @@ export const checkAllRules = internalAction({
                 };
               }
 
-              // Build metrics snapshot (may be aggregated for clicks_no_leads)
+              // Build metrics snapshot (may be aggregated for time-windowed rules)
               let metricsSnapshot: MetricsSnapshot;
 
-              if (needsAllAds) {
-                // For clicks_no_leads with since_launch/24h — use aggregated metrics
+              if (needsAllAds && (timeWindow === "1h" || timeWindow === "6h")) {
+                // For 1h/6h — use metricsRealtime cumulative snapshots, compute delta
+                const windowMs = timeWindow === "1h" ? 60 * 60 * 1000 : 6 * 60 * 60 * 1000;
+                const sinceTs = Date.now() - windowMs;
+                const history = await ctx.runQuery(
+                  internal.ruleEngine.getRealtimeHistory,
+                  { adId, sinceTimestamp: sinceTs }
+                );
+                const delta = computeRealtimeDelta(history);
+                metricsSnapshot = {
+                  spent: delta.spent,
+                  leads: delta.leads,
+                  impressions: delta.impressions,
+                  clicks: delta.clicks,
+                };
+              } else if (needsAllAds) {
+                // For since_launch/24h — use aggregated metricsDaily
                 let sinceDate: string | undefined;
                 if (timeWindow === "24h") {
                   const yesterday = new Date();

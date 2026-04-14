@@ -166,7 +166,9 @@ export default defineSchema({
         v.union(
           v.literal("daily"),
           v.literal("since_launch"),
-          v.literal("24h")
+          v.literal("24h"),
+          v.literal("1h"),
+          v.literal("6h")
         )
       ),
       // uz_budget_manage fields

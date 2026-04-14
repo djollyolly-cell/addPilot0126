@@ -77,7 +77,7 @@ export const create = mutation({
     operator: v.optional(v.string()),
     minSamples: v.optional(v.number()),
     timeWindow: v.optional(
-      v.union(v.literal("daily"), v.literal("since_launch"), v.literal("24h"))
+      v.union(v.literal("daily"), v.literal("since_launch"), v.literal("24h"), v.literal("1h"), v.literal("6h"))
     ),
     actions: v.object({
       stopAd: v.boolean(),
@@ -244,7 +244,7 @@ export const update = mutation({
     operator: v.optional(v.string()),
     minSamples: v.optional(v.number()),
     timeWindow: v.optional(
-      v.union(v.literal("daily"), v.literal("since_launch"), v.literal("24h"))
+      v.union(v.literal("daily"), v.literal("since_launch"), v.literal("24h"), v.literal("1h"), v.literal("6h"))
     ),
     actions: v.optional(
       v.object({

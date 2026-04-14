@@ -14,12 +14,14 @@ import { ActionRadio, ActionMode, actionModeToFlags } from '../components/Action
 import { UpgradeModal } from '../components/UpgradeModal';
 
 type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'new_lead' | 'uz_budget_manage';
-type TimeWindow = 'daily' | 'since_launch' | '24h';
+type TimeWindow = 'daily' | 'since_launch' | '24h' | '1h' | '6h';
 
 const TIME_WINDOW_OPTIONS: { value: TimeWindow; label: string; description: string }[] = [
   { value: 'daily', label: 'За сегодня', description: 'Только дневная статистика' },
-  { value: 'since_launch', label: 'С запуска', description: 'Все клики с момента запуска объявления' },
+  { value: '1h', label: 'За 1 час', description: 'Показы за последний час' },
+  { value: '6h', label: 'За 6 часов', description: 'Показы за последние 6 часов' },
   { value: '24h', label: 'За 24 часа', description: 'Сумма за последние 24 часа' },
+  { value: 'since_launch', label: 'С запуска', description: 'Все данные с момента запуска объявления' },
 ];
 
 const RULE_TYPE_LABELS: Record<RuleType, string> = {
@@ -282,8 +284,8 @@ export function RulesPage() {
                               ? ` · ${rule.conditions.initialBudget ?? 0}₽ +${rule.conditions.budgetStep ?? 0}₽`
                               : ` · ${rule.conditions.operator} ${rule.conditions.value}${RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}`
                             }
-                            {rule.type === 'clicks_no_leads' && (
-                              <> · {rule.conditions.timeWindow === 'since_launch' ? 'с запуска' : rule.conditions.timeWindow === '24h' ? 'за 24ч' : 'за сегодня'}</>
+                            {(rule.type === 'clicks_no_leads' || rule.type === 'low_impressions') && (
+                              <> · {rule.conditions.timeWindow === '1h' ? 'за 1ч' : rule.conditions.timeWindow === '6h' ? 'за 6ч' : rule.conditions.timeWindow === 'since_launch' ? 'с запуска' : rule.conditions.timeWindow === '24h' ? 'за 24ч' : 'за сегодня'}</>
                             )}
                           </p>
                           {rule.targetAccountIds.length > 0 && (
@@ -558,7 +560,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
         name: name.trim(),
         type,
         value: type === 'new_lead' || type === 'uz_budget_manage' ? 1 : numericValue,
-        timeWindow: type === 'clicks_no_leads' ? timeWindow : undefined,
+        timeWindow: (type === 'clicks_no_leads' || type === 'low_impressions') ? timeWindow : undefined,
         actions: type === 'uz_budget_manage'
           ? { ...flags, notifyOnEveryIncrease, notifyOnKeyEvents }
           : flags,
@@ -765,8 +767,8 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
           )}
         </div>
 
-        {/* Time window (only for clicks_no_leads) */}
-        {type === 'clicks_no_leads' && (
+        {/* Time window (for clicks_no_leads and low_impressions) */}
+        {(type === 'clicks_no_leads' || type === 'low_impressions') && (
           <div className="space-y-2" data-testid="time-window-selector">
             <label className="block text-sm font-medium">Период анализа</label>
             <div className="grid grid-cols-3 gap-2">
