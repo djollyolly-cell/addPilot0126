@@ -146,6 +146,19 @@ export const markRecoveryExpired = internalMutation({
   },
 });
 
+// Check if account's provider has permanent (non-expiring) tokens
+export const isAccountPermanentToken = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args): Promise<boolean> => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return false;
+    const agencyProviderId = (account as Record<string, unknown>).agencyProviderId as string | undefined;
+    if (!agencyProviderId) return false;
+    const provider = await ctx.db.get(agencyProviderId as Id<"agencyProviders">);
+    return provider ? !provider.hasApi : false;
+  },
+});
+
 // ─── Main recovery action ───────────────────────────────────
 
 export const tryRecoverToken = internalAction({
@@ -193,11 +206,18 @@ export const tryRecoverToken = internalAction({
       if (user?.accessToken) {
         const alive = await quickTokenCheck(user.accessToken);
         if (alive) {
+          // Resolve expiry: permanent providers (hasApi=false) → 2099, others → 24h
+          const isPermanent = await ctx.runQuery(internal.tokenRecovery.isAccountPermanentToken, {
+            accountId: args.accountId,
+          });
+          const fallbackExpiry = isPermanent
+            ? new Date("2099-01-01").getTime()
+            : Date.now() + 24 * 60 * 60 * 1000;
           // Write user's token to account via simple patch
           await ctx.runMutation(internal.tokenRecovery.patchAccountToken, {
             accountId: args.accountId,
             accessToken: user.accessToken,
-            tokenExpiresAt: user.expiresAt ?? Date.now() + 24 * 60 * 60 * 1000,
+            tokenExpiresAt: user.expiresAt ?? fallbackExpiry,
           });
           await ctx.runMutation(internal.tokenRecovery.markRecoverySuccess, {
             accountId: args.accountId,

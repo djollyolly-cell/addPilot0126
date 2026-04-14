@@ -916,15 +916,31 @@ export const getValidTokenForAccount = internalAction({
 
     // No credentials at all — agency/manual API keys
     if (!clientId && !clientSecret) {
+      // tokenExpiresAt=0 means "invalidated by TOKEN_EXPIRED" — go straight to recovery
+      if (account.tokenExpiresAt === 0) {
+        try {
+          const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId: args.accountId });
+          if (recovered) {
+            const fresh = await ctx.runQuery(api.adAccounts.get, { accountId: args.accountId });
+            if (fresh?.accessToken) return fresh.accessToken;
+          }
+        } catch (recErr) {
+          console.log(`[getValidTokenForAccount] «${account.name}» (${args.accountId}): recovery from invalidated failed: ${recErr}`);
+        }
+        throw new Error("TOKEN_EXPIRED: токен недействителен и не удалось восстановить");
+      }
       // If token has no expiry (undefined/null), check liveness before returning
-      // tokenExpiresAt=0 means "invalidated", must NOT return here
-      if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null || account.tokenExpiresAt === 0) {
+      if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
         const alive = await quickTokenCheck(account.accessToken);
         if (alive) {
-          // Auto-set expiry so proactiveRefresh picks it up — no more blind returns
+          // Providers with API (hasApi=true, e.g. Vitamin) → 24h expiry, proactive refresh possible
+          // Providers without API (hasApi=false: TargetHunter, Cerebro, KotBot, eLama) → permanent 2099
+          const newExpiry = account.providerHasApi
+            ? Date.now() + 24 * 60 * 60 * 1000
+            : new Date("2099-01-01").getTime();
           await ctx.runMutation(internal.tokenRecovery.setTokenExpiry, {
             accountId: args.accountId,
-            tokenExpiresAt: Date.now() + 24 * 60 * 60 * 1000,
+            tokenExpiresAt: newExpiry,
           });
           return account.accessToken;
         }
@@ -995,10 +1011,14 @@ export const getValidTokenForAccount = internalAction({
     if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null || account.tokenExpiresAt === 0) {
       const alive = await quickTokenCheck(account.accessToken);
       if (alive) {
-        // Auto-set expiry so proactiveRefresh picks it up — no more blind returns
+        // Providers with API (hasApi=true) → 24h expiry, proactive refresh possible
+        // Providers without API (hasApi=false: TargetHunter, Cerebro, KotBot, eLama) → permanent 2099
+        const newExpiry = account.providerHasApi
+          ? Date.now() + 24 * 60 * 60 * 1000
+          : new Date("2099-01-01").getTime();
         await ctx.runMutation(internal.tokenRecovery.setTokenExpiry, {
           accountId: args.accountId,
-          tokenExpiresAt: Date.now() + 24 * 60 * 60 * 1000,
+          tokenExpiresAt: newExpiry,
         });
         return account.accessToken;
       }
@@ -1144,6 +1164,13 @@ export const getAccountWithCredentials = internalQuery({
   handler: async (ctx, args) => {
     const account = await ctx.db.get(args.accountId);
     if (!account) return null;
+    const agencyProviderId = (account as Record<string, unknown>).agencyProviderId as string | undefined;
+    // Resolve provider's hasApi flag to determine if auto-refresh is possible
+    let providerHasApi = false;
+    if (agencyProviderId) {
+      const provider = await ctx.db.get(agencyProviderId as Id<"agencyProviders">);
+      if (provider) providerHasApi = provider.hasApi;
+    }
     return {
       accessToken: account.accessToken,
       refreshToken: account.refreshToken,
@@ -1155,8 +1182,9 @@ export const getAccountWithCredentials = internalQuery({
       mtAdvertiserId: (account as Record<string, unknown>).mtAdvertiserId as string | undefined,
       name: account.name,
       vitaminCabinetId: (account as Record<string, unknown>).vitaminCabinetId as string | undefined,
-      agencyProviderId: (account as Record<string, unknown>).agencyProviderId as string | undefined,
+      agencyProviderId,
       agencyCabinetId: (account as Record<string, unknown>).agencyCabinetId as string | undefined,
+      providerHasApi,
     };
   },
 });
@@ -1445,9 +1473,20 @@ export const updateAccountToken = internalMutation({
         });
       }
     }
+    // Resolve provider to set correct expiry: hasApi=false → permanent 2099
+    let providerHasApi = true; // default: 24h (safe assumption)
+    const agencyProviderId = (account as Record<string, unknown>).agencyProviderId as string | undefined;
+    if (agencyProviderId) {
+      const provider = await ctx.db.get(agencyProviderId as Id<"agencyProviders">);
+      if (provider && !provider.hasApi) providerHasApi = false;
+    }
+    const tokenExpiresAt = providerHasApi
+      ? Date.now() + 86400 * 1000
+      : new Date("2099-01-01").getTime();
+
     await ctx.db.patch(args.accountId, {
       accessToken: args.accessToken,
-      tokenExpiresAt: Date.now() + 86400 * 1000, // 24h default
+      tokenExpiresAt,
       status: "active",
       lastError: undefined,
     });
