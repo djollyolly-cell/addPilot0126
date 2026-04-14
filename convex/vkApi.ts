@@ -826,6 +826,30 @@ export const getMtAdPlans = action({
   },
 });
 
+/** Fetch ad_groups (campaigns.json) for ad_group_id → ad_plan_id mapping */
+export const getMtAdGroups = internalAction({
+  args: { accessToken: v.string() },
+  handler: async (_, args): Promise<{ id: number; ad_plan_id: number }[]> => {
+    const result: { id: number; ad_plan_id: number }[] = [];
+    let offset = 0;
+    const LIMIT = 50;
+    while (true) {
+      const res = await callMtApi<{ items: { id: number; ad_plan_id: number }[] }>(
+        "campaigns.json",
+        args.accessToken,
+        { fields: "id,ad_plan_id", limit: String(LIMIT), offset: String(offset) }
+      );
+      const items = res.items || [];
+      for (const g of items) {
+        result.push({ id: g.id, ad_plan_id: g.ad_plan_id });
+      }
+      if (items.length < LIMIT) break;
+      offset += LIMIT;
+    }
+    return result;
+  },
+});
+
 // Get banners (ads) via myTarget API v2
 export const getMtBanners = action({
   args: {

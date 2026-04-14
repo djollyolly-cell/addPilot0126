@@ -4,6 +4,32 @@ import { api, internal } from "./_generated/api";
 
 const VK_ADS_API_BASE = "https://target.my.com";
 
+/**
+ * Groups banners under ad_plan_ids using ad_group mapping.
+ * banner.campaign_id = ad_group_id, NOT ad_plan_id.
+ * ad_groups provide the mapping: ad_group_id → ad_plan_id.
+ */
+export function groupBannersByAdPlan<T extends { campaign_id: number }>(
+  adGroups: { id: number; ad_plan_id: number }[],
+  banners: T[]
+): Map<number, T[]> {
+  const adGroupToAdPlan = new Map<number, number>();
+  for (const g of adGroups) {
+    adGroupToAdPlan.set(g.id, g.ad_plan_id);
+  }
+
+  const bannersByAdPlan = new Map<number, T[]>();
+  for (const b of banners) {
+    const adPlanId = adGroupToAdPlan.get(b.campaign_id);
+    if (adPlanId === undefined) continue;
+    const list = bannersByAdPlan.get(adPlanId) || [];
+    list.push(b);
+    bannersByAdPlan.set(adPlanId, list);
+  }
+
+  return bannersByAdPlan;
+}
+
 // Internal: get a fresh access token for given clientId/clientSecret
 export const getTokenForCredentials = internalAction({
   args: {
@@ -1001,19 +1027,15 @@ export const fetchLiveCampaigns = action({
       accountId: args.accountId,
     });
 
-    // Fetch ad_plans + banners in parallel
-    const [adPlans, banners] = await Promise.all([
+    // Fetch ad_plans + ad_groups + banners in parallel
+    const [adPlans, adGroups, banners] = await Promise.all([
       ctx.runAction(api.vkApi.getMtAdPlans, { accessToken }),
+      ctx.runAction(internal.vkApi.getMtAdGroups, { accessToken }),
       ctx.runAction(api.vkApi.getMtBanners, { accessToken }),
     ]);
 
-    // Group banners by campaign_id
-    const bannersByCampaign = new Map<number, typeof banners>();
-    for (const b of banners) {
-      const list = bannersByCampaign.get(b.campaign_id) || [];
-      list.push(b);
-      bannersByCampaign.set(b.campaign_id, list);
-    }
+    // Group banners by ad_plan_id (via ad_group mapping)
+    const bannersByAdPlan = groupBannersByAdPlan(adGroups, banners);
 
     return {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1025,7 +1047,7 @@ export const fetchLiveCampaigns = action({
         dailyLimit: plan.budget_limit_day,
         allLimit: plan.budget_limit,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        banners: (bannersByCampaign.get(plan.id) || []).map((b: any) => ({
+        banners: (bannersByAdPlan.get(plan.id) || []).map((b: any) => ({
           id: b.id,
           name: b.textblocks?.title?.text || `Баннер ${b.id}`,
           status: b.status,
@@ -1129,6 +1151,7 @@ export const syncNow = action({
         await ctx.runMutation(api.adAccounts.upsertCampaign, {
           accountId: args.accountId,
           vkCampaignId: String(campaign.id),
+          adPlanId: campaign.ad_plan_id ? String(campaign.ad_plan_id) : undefined,
           name: campaign.name || `Кампания ${campaign.id}`,
           status: campaign.status,
           dailyLimit: parseFloat(campaign.budget_limit_day) || undefined,
@@ -1203,6 +1226,7 @@ export const upsertCampaign = mutation({
   args: {
     accountId: v.id("adAccounts"),
     vkCampaignId: v.string(),
+    adPlanId: v.optional(v.string()),
     name: v.string(),
     status: v.string(),
     dailyLimit: v.optional(v.number()),
@@ -1224,6 +1248,9 @@ export const upsertCampaign = mutation({
         status: args.status,
         updatedAt: Date.now(),
       };
+      if (args.adPlanId !== undefined) {
+        patch.adPlanId = args.adPlanId;
+      }
       if (args.dailyLimit !== undefined) {
         patch.dailyLimit = args.dailyLimit;
       }
@@ -1237,6 +1264,7 @@ export const upsertCampaign = mutation({
     return await ctx.db.insert("campaigns", {
       accountId: args.accountId,
       vkCampaignId: args.vkCampaignId,
+      adPlanId: args.adPlanId,
       name: args.name,
       status: args.status,
       dailyLimit: args.dailyLimit,

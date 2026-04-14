@@ -2,6 +2,7 @@ import { convexTest } from "convex-test";
 import { expect, test, describe } from "vitest";
 import { api } from "./_generated/api";
 import schema from "./schema";
+import { groupBannersByAdPlan } from "./adAccounts";
 
 // Helper to create a test user
 async function createTestUser(t: ReturnType<typeof convexTest>) {
@@ -612,5 +613,41 @@ describe("adAccounts", () => {
       expect(status.connected).toBe(false);
       expect(status.expired).toBe(false);
     });
+  });
+});
+
+describe("groupBannersByAdPlan", () => {
+  test("groups banners under correct ad_plan via ad_group mapping", () => {
+    const adGroups = [
+      { id: 117689095, ad_plan_id: 13038509 },
+      { id: 124938064, ad_plan_id: 15791809 },
+      { id: 125725460, ad_plan_id: 15791809 },
+    ];
+    const banners = [
+      { id: 1001, campaign_id: 117689095, textblocks: { title: { text: "Banner 1" } }, status: "active", moderation_status: "allowed" },
+      { id: 1002, campaign_id: 117689095, textblocks: { title: { text: "Banner 2" } }, status: "active", moderation_status: "allowed" },
+      { id: 1003, campaign_id: 124938064, textblocks: { title: { text: "Banner 3" } }, status: "active", moderation_status: "allowed" },
+      { id: 1004, campaign_id: 125725460, textblocks: { title: { text: "Banner 4" } }, status: "blocked", moderation_status: "allowed" },
+    ];
+
+    const result = groupBannersByAdPlan(adGroups, banners);
+
+    expect(result.get(13038509)?.length).toBe(2);
+    expect(result.get(13038509)?.map(b => b.id)).toEqual([1001, 1002]);
+
+    expect(result.get(15791809)?.length).toBe(2);
+    expect(result.get(15791809)?.map(b => b.id)).toEqual([1003, 1004]);
+  });
+
+  test("banners without matching ad_group are excluded", () => {
+    const adGroups = [
+      { id: 100, ad_plan_id: 1 },
+    ];
+    const banners = [
+      { id: 2001, campaign_id: 999, textblocks: null, status: "active", moderation_status: "allowed" },
+    ];
+
+    const result = groupBannersByAdPlan(adGroups, banners);
+    expect(result.get(1)?.length ?? 0).toBe(0);
   });
 });

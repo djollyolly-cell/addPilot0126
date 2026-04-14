@@ -117,6 +117,7 @@ export default defineSchema({
   campaigns: defineTable({
     accountId: v.id("adAccounts"),
     vkCampaignId: v.string(),
+    adPlanId: v.optional(v.string()),
     name: v.string(),
     status: v.string(),
     dailyLimit: v.optional(v.number()),

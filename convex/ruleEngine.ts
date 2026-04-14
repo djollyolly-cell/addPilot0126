@@ -47,6 +47,22 @@ export interface SpendSnapshot {
 }
 
 /**
+ * Dual-matching campaign filter: checks if an ad's campaign matches
+ * rule.targetCampaignIds by either ad_group_id or ad_plan_id.
+ * Same pattern as uzBudgetHelpers.filterCampaignsForRule.
+ */
+export function matchesCampaignFilter(
+  targetCampaignIds: string[],
+  adGroupId: string | null,
+  adPlanId: string | null
+): boolean {
+  if (!adGroupId && !adPlanId) return false;
+  const matchesDirect = adGroupId !== null && targetCampaignIds.includes(adGroupId);
+  const matchesPlan = adPlanId !== null && targetCampaignIds.includes(adPlanId);
+  return matchesDirect || matchesPlan;
+}
+
+/**
  * Evaluate whether a rule condition is met.
  * Returns true if the rule should trigger (ad should be stopped/notified).
  */
@@ -298,6 +314,20 @@ export const getAdCampaignId = internalQuery({
     if (!ad) return null;
     const campaign = await ctx.db.get(ad.campaignId);
     return campaign?.vkCampaignId ?? null;
+  },
+});
+
+/** Get adPlanId for a given adId (banner) — resolves through ads → campaigns table */
+export const getAdPlanId = internalQuery({
+  args: { adId: v.string() },
+  handler: async (ctx, args) => {
+    const ad = await ctx.db
+      .query("ads")
+      .withIndex("by_vkAdId", (q) => q.eq("vkAdId", args.adId))
+      .first();
+    if (!ad) return null;
+    const campaign = await ctx.db.get(ad.campaignId);
+    return campaign?.adPlanId ?? null;
   },
 });
 
@@ -1199,7 +1229,7 @@ export const checkAllRules = internalAction({
 
             // Build campaignId cache for filtering by targetCampaignIds
             const hasCampaignFilter = rule.targetCampaignIds && rule.targetCampaignIds.length > 0;
-            const adCampaignCache = new Map<string, string | null>();
+            const adCampaignCache = new Map<string, { adGroupId: string | null; adPlanId: string | null }>();
 
             for (const adId of adIdsToCheck) {
               // Filter by targeted ads if specified
@@ -1207,17 +1237,21 @@ export const checkAllRules = internalAction({
                 if (!rule.targetAdIds.includes(adId)) continue;
               }
 
-              // Filter by targeted campaigns if specified
+              // Filter by targeted campaigns if specified (dual matching: ad_group_id OR ad_plan_id)
               if (hasCampaignFilter) {
                 if (!adCampaignCache.has(adId)) {
-                  const campId = await ctx.runQuery(
-                    internal.ruleEngine.getAdCampaignId,
-                    { adId }
-                  );
-                  adCampaignCache.set(adId, campId);
+                  const [campId, planId] = await Promise.all([
+                    ctx.runQuery(internal.ruleEngine.getAdCampaignId, { adId }),
+                    ctx.runQuery(internal.ruleEngine.getAdPlanId, { adId }),
+                  ]);
+                  adCampaignCache.set(adId, { adGroupId: campId, adPlanId: planId });
                 }
-                const adCampId = adCampaignCache.get(adId);
-                if (!adCampId || !rule.targetCampaignIds!.includes(adCampId)) continue;
+                const cached = adCampaignCache.get(adId)!;
+                if (!matchesCampaignFilter(
+                  rule.targetCampaignIds!,
+                  cached.adGroupId,
+                  cached.adPlanId
+                )) continue;
               }
 
               const todayMetric = todayMetricsByAd.get(adId);

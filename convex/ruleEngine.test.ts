@@ -6,6 +6,7 @@ import {
   evaluateCondition,
   calculateSavings,
   minutesUntilEndOfDay,
+  matchesCampaignFilter,
 } from "./ruleEngine";
 
 // Helper: create user + account for testing
@@ -1916,5 +1917,52 @@ describe("ruleEngine", () => {
     });
     expect(result.success).toBe(false);
     expect(result.reason).toBe("timeout");
+  });
+});
+
+describe("campaign filter dual matching", () => {
+  test("matchesCampaignFilter returns true when targetCampaignIds contains adPlanId", () => {
+    const result = matchesCampaignFilter(
+      ["13038509"],
+      "117689095",
+      "13038509"
+    );
+    expect(result).toBe(true);
+  });
+
+  test("matchesCampaignFilter returns true when targetCampaignIds contains adGroupId", () => {
+    const result = matchesCampaignFilter(
+      ["117689095"],
+      "117689095",
+      "13038509"
+    );
+    expect(result).toBe(true);
+  });
+
+  test("matchesCampaignFilter returns false when neither matches", () => {
+    const result = matchesCampaignFilter(
+      ["999999"],
+      "117689095",
+      "13038509"
+    );
+    expect(result).toBe(false);
+  });
+
+  test("matchesCampaignFilter handles null adPlanId", () => {
+    const result = matchesCampaignFilter(
+      ["13038509"],
+      "117689095",
+      null
+    );
+    expect(result).toBe(false);
+  });
+
+  test("matchesCampaignFilter handles both null", () => {
+    const result = matchesCampaignFilter(
+      ["13038509"],
+      null,
+      null
+    );
+    expect(result).toBe(false);
   });
 });
