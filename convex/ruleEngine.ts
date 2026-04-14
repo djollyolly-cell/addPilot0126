@@ -1240,11 +1240,16 @@ export const checkAllRules = internalAction({
               // Filter by targeted campaigns if specified (dual matching: ad_group_id OR ad_plan_id)
               if (hasCampaignFilter) {
                 if (!adCampaignCache.has(adId)) {
-                  const [campId, planId] = await Promise.all([
-                    ctx.runQuery(internal.ruleEngine.getAdCampaignId, { adId }),
-                    ctx.runQuery(internal.ruleEngine.getAdPlanId, { adId }),
-                  ]);
-                  adCampaignCache.set(adId, { adGroupId: campId, adPlanId: planId });
+                  try {
+                    const [campId, planId] = await Promise.all([
+                      ctx.runQuery(internal.ruleEngine.getAdCampaignId, { adId }),
+                      ctx.runQuery(internal.ruleEngine.getAdPlanId, { adId }),
+                    ]);
+                    adCampaignCache.set(adId, { adGroupId: campId, adPlanId: planId });
+                  } catch (err) {
+                    console.error(`[ruleEngine] Campaign lookup failed for ad ${adId}:`, err);
+                    continue; // Skip this ad, continue checking others
+                  }
                 }
                 const cached = adCampaignCache.get(adId)!;
                 if (!matchesCampaignFilter(
