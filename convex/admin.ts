@@ -391,3 +391,51 @@ export const verifyAdminWithId = internalQuery({
     }
   },
 });
+
+// TEMP: One-time migration — fix tokenExpiresAt for permanent-token providers (hasApi=false)
+// Sets tokenExpiresAt=2099 and clears recovery artifacts for affected accounts.
+// Remove after running.
+export const migratePermanentTokenExpiry = mutation({
+  args: { sessionToken: v.string() },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+
+    const PERMANENT_EXPIRY = new Date("2099-01-01").getTime();
+    const allProviders = await ctx.db.query("agencyProviders").collect();
+    const permanentProviderIds = new Set(
+      allProviders.filter((p) => !p.hasApi).map((p) => p._id)
+    );
+
+    const allAccounts = await ctx.db.query("adAccounts").collect();
+    let migrated = 0;
+    const details: { name: string; user: string; provider: string; oldExpiry: string }[] = [];
+
+    for (const acc of allAccounts) {
+      const provId = (acc as Record<string, unknown>).agencyProviderId as string | undefined;
+      if (!provId || !permanentProviderIds.has(provId as any)) continue;
+      // Already correct
+      if (!acc.tokenExpiresAt || acc.tokenExpiresAt >= PERMANENT_EXPIRY - 1000) continue;
+
+      const user = await ctx.db.get(acc.userId);
+      const providerDoc = allProviders.find((p) => p._id === provId);
+
+      await ctx.db.patch(acc._id, {
+        tokenExpiresAt: PERMANENT_EXPIRY,
+        tokenErrorSince: undefined,
+        tokenRecoveryAttempts: undefined,
+        lastError: undefined,
+        ...(acc.status === "error" ? { status: "active" as const } : {}),
+      });
+
+      details.push({
+        name: acc.name,
+        user: user?.name || user?.email || "unknown",
+        provider: providerDoc?.displayName || "unknown",
+        oldExpiry: new Date(acc.tokenExpiresAt).toISOString(),
+      });
+      migrated++;
+    }
+
+    return { migrated, details };
+  },
+});
