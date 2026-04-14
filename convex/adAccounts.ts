@@ -1091,6 +1091,40 @@ export const invalidateAccountToken = internalMutation({
   },
 });
 
+// ─── Transient Sync Error Tracking ────────────────────────────────
+
+/** Increment consecutive sync error counter (for transient, non-TOKEN_EXPIRED errors) */
+export const incrementSyncErrors = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    error: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return;
+    const current = account.consecutiveSyncErrors ?? 0;
+    await ctx.db.patch(args.accountId, {
+      consecutiveSyncErrors: current + 1,
+      lastSyncError: args.error.slice(0, 500),
+    });
+  },
+});
+
+/** Clear consecutive sync error counter (called on successful sync) */
+export const clearSyncErrors = internalMutation({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return;
+    if (account.consecutiveSyncErrors || account.lastSyncError) {
+      await ctx.db.patch(args.accountId, {
+        consecutiveSyncErrors: undefined,
+        lastSyncError: undefined,
+      });
+    }
+  },
+});
+
 // Update account status
 export const updateStatus = mutation({
   args: {
@@ -1341,6 +1375,9 @@ export const updateSyncTime = mutation({
     await ctx.db.patch(args.accountId, {
       lastSyncAt: Date.now(),
       status: "active" as const,
+      lastError: undefined,
+      consecutiveSyncErrors: undefined,
+      lastSyncError: undefined,
     });
   },
 });

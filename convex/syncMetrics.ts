@@ -3,8 +3,15 @@ import { internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { MtVideoStats } from "./vkApi";
 import { withTimeout } from "./vkApi";
+import { quickTokenCheck } from "./tokenRecovery";
 
 const ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account
+const TRANSIENT_ERROR_THRESHOLD = 3; // error status only after 3 consecutive transient failures
+
+/** Permanent errors → immediate error status. Everything else is transient. */
+function isPermanentError(msg: string): boolean {
+  return msg.includes("TOKEN_EXPIRED") || msg.includes("403 Forbidden");
+}
 
 // Today's date in YYYY-MM-DD format
 function todayStr(): string {
@@ -54,6 +61,35 @@ export const syncAll = internalAction({
     for (const account of accounts) {
       try {
         await withTimeout((async () => {
+        // Auto-recovery: if account is in error from a transient (non-TOKEN_EXPIRED) failure,
+        // check if token is still alive and restore to active before syncing
+        if (
+          account.status === "error" &&
+          account.lastError &&
+          !account.lastError.includes("TOKEN_EXPIRED")
+        ) {
+          try {
+            const alive = await quickTokenCheck(account.accessToken);
+            if (alive) {
+              console.log(`[syncMetrics] Auto-recovery: «${account.name}» token alive, restoring to active`);
+              // Set active + clear errors; updateSyncTime at end of successful sync will clear lastError
+              await ctx.runMutation(api.adAccounts.updateStatus, {
+                accountId: account._id,
+                status: "active",
+              });
+              await ctx.runMutation(internal.adAccounts.clearSyncErrors, {
+                accountId: account._id,
+              });
+            } else {
+              // Token actually dead but error wasn't TOKEN_EXPIRED — skip this account
+              console.log(`[syncMetrics] «${account.name}» in error, token dead — skipping`);
+              return;
+            }
+          } catch {
+            // quickTokenCheck failed (network?) — optimistic, try sync anyway
+          }
+        }
+
         // Use per-account token (with fallback to user-level for old accounts)
         const accessToken = await ctx.runAction(
           internal.auth.getValidTokenForAccount,
@@ -301,21 +337,53 @@ export const syncAll = internalAction({
           message: `Sync failed: ${msg.slice(0, 180)}`,
         }); } catch { /* non-critical */ }
 
-        // Mark account as error but don't stop the loop
-        await ctx.runMutation(api.adAccounts.updateStatus, {
-          accountId: account._id,
-          status: "error",
-          lastError: `Sync failed: ${msg}`,
-        });
-
-        // If TOKEN_EXPIRED — centralized handler: verify → recover → invalidate
         if (msg.includes("TOKEN_EXPIRED")) {
+          // TOKEN_EXPIRED — centralized handler owns the full flow:
+          // verify token → recover → set status. No updateStatus here to avoid double-write.
           try {
             await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
               accountId: account._id,
             });
           } catch (handleErr) {
+            // handleTokenExpired failed — ensure account is in error state
+            await ctx.runMutation(api.adAccounts.updateStatus, {
+              accountId: account._id,
+              status: "error",
+              lastError: `Sync failed: ${msg}`,
+            });
             console.log(`[syncMetrics] handleTokenExpired for ${account._id} failed: ${handleErr}`);
+          }
+          // Clear transient error counter so it doesn't carry over after recovery
+          await ctx.runMutation(internal.adAccounts.clearSyncErrors, {
+            accountId: account._id,
+          });
+        } else if (isPermanentError(msg)) {
+          // Permanent non-token error (e.g. 403) — immediate error status
+          await ctx.runMutation(api.adAccounts.updateStatus, {
+            accountId: account._id,
+            status: "error",
+            lastError: `Sync failed: ${msg}`,
+          });
+        } else {
+          // Transient error — increment counter, only set error after threshold
+          const consecutive = (account.consecutiveSyncErrors ?? 0) + 1;
+          await ctx.runMutation(internal.adAccounts.incrementSyncErrors, {
+            accountId: account._id,
+            error: msg,
+          });
+          if (consecutive >= TRANSIENT_ERROR_THRESHOLD) {
+            console.warn(
+              `[syncMetrics] «${account.name}» ${consecutive} consecutive transient errors — marking as error`
+            );
+            await ctx.runMutation(api.adAccounts.updateStatus, {
+              accountId: account._id,
+              status: "error",
+              lastError: `Sync failed (${consecutive}x): ${msg}`,
+            });
+          } else {
+            console.log(
+              `[syncMetrics] «${account.name}» transient error ${consecutive}/${TRANSIENT_ERROR_THRESHOLD} — will retry next cycle`
+            );
           }
         }
       }
