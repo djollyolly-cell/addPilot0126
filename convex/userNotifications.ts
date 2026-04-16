@@ -146,6 +146,17 @@ export const replyToFeedback = mutation({
       await ctx.db.patch(root._id, { isRead: true });
     }
 
+    // Mark all unread user replies as read (admin is replying, so they've seen them)
+    const replies = await ctx.db
+      .query("userNotifications")
+      .withIndex("by_threadId", (q) => q.eq("threadId", threadId))
+      .collect();
+    for (const reply of replies) {
+      if (!reply.isRead && reply.direction === "user_to_admin") {
+        await ctx.db.patch(reply._id, { isRead: true });
+      }
+    }
+
     return { success: true };
   },
 });

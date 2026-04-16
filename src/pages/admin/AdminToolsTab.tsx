@@ -1,5 +1,8 @@
 import { useState } from 'react';
+import { useQuery } from 'convex/react';
+import { api } from '../../../convex/_generated/api';
 import { Tag, Send, MessageSquare, Stethoscope, Bell, ChevronDown, ChevronRight } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
 import { PromoCodesSection } from './sections/PromoCodesSection';
 import { BroadcastSection } from './sections/BroadcastSection';
 import { FeedbackListSection } from './sections/FeedbackListSection';
@@ -22,6 +25,7 @@ type SectionId = (typeof SECTIONS)[number]['id'];
 
 export function AdminToolsTab({ sessionToken }: Props) {
   const [openSections, setOpenSections] = useState<Set<SectionId>>(new Set(['promos']));
+  const unreadFeedback = useQuery(api.userNotifications.getUnreadFeedbackCount) ?? 0;
 
   const toggle = (id: SectionId) => {
     const next = new Set(openSections);
@@ -44,6 +48,11 @@ export function AdminToolsTab({ sessionToken }: Props) {
               {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
               <Icon className="w-4 h-4" />
               {section.label}
+              {section.id === 'feedback' && unreadFeedback > 0 && (
+                <Badge variant="destructive" className="ml-2 text-xs px-1.5 py-0">
+                  {unreadFeedback}
+                </Badge>
+              )}
             </button>
             {isOpen && (
               <div className="px-4 pb-4">
