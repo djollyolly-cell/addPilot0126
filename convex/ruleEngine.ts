@@ -1191,6 +1191,465 @@ function buildReason(
 }
 
 // ═══════════════════════════════════════════════════════════
+// Per-account rule checking — called from syncAll with live API data
+// or from checkAllRules wrapper with DB fallback
+// ═══════════════════════════════════════════════════════════
+
+export const checkRulesForAccount = internalAction({
+  args: {
+    accountId: v.id("adAccounts"),
+    adCampaignMap: v.optional(v.array(v.object({
+      adId: v.string(),
+      adGroupId: v.string(),
+      adPlanId: v.union(v.string(), v.null()),
+      dailyBudget: v.number(),
+    }))),
+  },
+  handler: async (ctx, args) => {
+    // 1. Get account → userId
+    const account = await ctx.runQuery(
+      internal.ruleEngine.getAccountById, { accountId: args.accountId }
+    );
+    if (!account) return;
+
+    // 2. Load active rules for this user, filter to rules targeting this account
+    const allRules = await ctx.runQuery(
+      internal.ruleEngine.listActiveRules, { userId: account.userId }
+    );
+    const rules = allRules.filter((r: { targetAccountIds: string[] }) =>
+      r.targetAccountIds.includes(args.accountId as string)
+    );
+    if (rules.length === 0) return;
+
+    // 3. Rebuild Map from serialized array (if provided)
+    const campaignLookup = new Map<string, {
+      adGroupId: string;
+      adPlanId: string | null;
+      dailyBudget: number;
+    }>();
+    if (args.adCampaignMap) {
+      for (const entry of args.adCampaignMap) {
+        campaignLookup.set(entry.adId, {
+          adGroupId: entry.adGroupId,
+          adPlanId: entry.adPlanId,
+          dailyBudget: entry.dailyBudget,
+        });
+      }
+    }
+    const useMapLookup = campaignLookup.size > 0;
+
+    const date = todayStr();
+    const targetAccountId = args.accountId;
+    let totalTriggered = 0;
+
+    // 4. Per-rule, per-ad evaluation
+    for (const rule of rules) {
+      const timeWindow = rule.conditions.timeWindow;
+      const needsAllAds =
+        (rule.type === "clicks_no_leads" || rule.type === "low_impressions") &&
+        timeWindow &&
+        timeWindow !== "daily";
+
+      let adIdsToCheck: string[];
+      const todayMetricsByAd = new Map<
+        string,
+        { spent: number; leads: number; impressions: number; clicks: number; cpl?: number; ctr?: number }
+      >();
+
+      const dailyMetrics = await ctx.runQuery(
+        internal.ruleEngine.getAccountTodayMetrics,
+        { accountId: targetAccountId, date }
+      );
+      for (const m of dailyMetrics) {
+        todayMetricsByAd.set(m.adId, m);
+      }
+
+      if (needsAllAds) {
+        const allAdIds = await ctx.runQuery(
+          internal.ruleEngine.getAccountAllAdIds,
+          { accountId: targetAccountId }
+        );
+        adIdsToCheck = allAdIds;
+      } else {
+        adIdsToCheck = dailyMetrics.map((m: { adId: string }) => m.adId);
+      }
+
+      // Campaign filter cache (for DB fallback path)
+      const hasCampaignFilter = rule.targetCampaignIds && rule.targetCampaignIds.length > 0;
+      const adCampaignCache = new Map<string, { adGroupId: string | null; adPlanId: string | null }>();
+
+      for (const adId of adIdsToCheck) {
+        // Filter by targeted ads if specified
+        if (rule.targetAdIds && rule.targetAdIds.length > 0) {
+          if (!rule.targetAdIds.includes(adId)) continue;
+        }
+
+        // Filter by targeted campaigns — DUAL PATH (map vs DB fallback)
+        if (hasCampaignFilter) {
+          let adGroupId: string | null;
+          let adPlanId: string | null;
+
+          if (useMapLookup) {
+            // Fast path: O(1) map lookup from live VK API data
+            const mapped = campaignLookup.get(adId);
+            adGroupId = mapped?.adGroupId ?? null;
+            adPlanId = mapped?.adPlanId ?? null;
+          } else {
+            // Fallback: DB lookup (existing functions)
+            if (!adCampaignCache.has(adId)) {
+              try {
+                const [campId, planId] = await Promise.all([
+                  ctx.runQuery(internal.ruleEngine.getAdCampaignId, { adId }),
+                  ctx.runQuery(internal.ruleEngine.getAdPlanId, { adId }),
+                ]);
+                adCampaignCache.set(adId, { adGroupId: campId, adPlanId: planId });
+              } catch (err) {
+                console.error(`[ruleEngine] Campaign lookup failed for ad ${adId}:`, err);
+                continue;
+              }
+            }
+            const cached = adCampaignCache.get(adId)!;
+            adGroupId = cached.adGroupId;
+            adPlanId = cached.adPlanId;
+          }
+
+          if (!matchesCampaignFilter(rule.targetCampaignIds!, adGroupId, adPlanId)) continue;
+        }
+
+        const todayMetric = todayMetricsByAd.get(adId);
+
+        // Check minSamples requirement
+        if (rule.conditions.minSamples) {
+          const history = await ctx.runQuery(
+            internal.ruleEngine.getRealtimeHistory,
+            { adId, sinceTimestamp: Date.now() - 24 * 60 * 60 * 1000 }
+          );
+          if (history.length < rule.conditions.minSamples) continue;
+        }
+
+        // Build context for fast_spend — DUAL PATH (map vs DB fallback)
+        let context:
+          | { spendHistory?: SpendSnapshot[]; dailyBudget?: number }
+          | undefined;
+
+        if (rule.type === "fast_spend") {
+          const fifteenMinAgo = Date.now() - 15 * 60 * 1000;
+          const history = await ctx.runQuery(
+            internal.ruleEngine.getRealtimeHistory,
+            { adId, sinceTimestamp: fifteenMinAgo }
+          );
+
+          let dailyBudget: number | undefined;
+          if (useMapLookup) {
+            // Fast path: from live API map
+            const mapped = campaignLookup.get(adId);
+            dailyBudget = mapped && mapped.dailyBudget > 0 ? mapped.dailyBudget : undefined;
+          } else {
+            // Fallback: DB lookup
+            const dbBudget = await ctx.runQuery(
+              internal.ruleEngine.getCampaignDailyLimit, { adId }
+            );
+            dailyBudget = dbBudget ?? undefined;
+          }
+
+          context = {
+            spendHistory: history.map((h: { spent: number; timestamp: number }) => ({
+              spent: h.spent,
+              timestamp: h.timestamp,
+            })),
+            dailyBudget,
+          };
+        }
+
+        // Build metrics snapshot (may be aggregated for time-windowed rules)
+        let metricsSnapshot: MetricsSnapshot;
+
+        if (needsAllAds && (timeWindow === "1h" || timeWindow === "6h")) {
+          const windowMs = timeWindow === "1h" ? 60 * 60 * 1000 : 6 * 60 * 60 * 1000;
+          const sinceTs = Date.now() - windowMs;
+          const history = await ctx.runQuery(
+            internal.ruleEngine.getRealtimeHistory,
+            { adId, sinceTimestamp: sinceTs }
+          );
+          const delta = computeRealtimeDelta(history);
+          metricsSnapshot = {
+            spent: delta.spent,
+            leads: delta.leads,
+            impressions: delta.impressions,
+            clicks: delta.clicks,
+          };
+        } else if (needsAllAds) {
+          let sinceDate: string | undefined;
+          if (timeWindow === "24h") {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            sinceDate = yesterday.toISOString().slice(0, 10);
+          }
+          const aggregated = await ctx.runQuery(
+            internal.ruleEngine.getAdAggregatedMetrics,
+            { adId, sinceDate }
+          );
+          metricsSnapshot = {
+            spent: aggregated.spent,
+            leads: aggregated.leads,
+            impressions: aggregated.impressions,
+            clicks: aggregated.clicks,
+          };
+        } else if (todayMetric) {
+          metricsSnapshot = {
+            spent: todayMetric.spent,
+            leads: todayMetric.leads,
+            impressions: todayMetric.impressions,
+            clicks: todayMetric.clicks,
+            cpl: todayMetric.cpl ?? undefined,
+            ctr: todayMetric.ctr ?? undefined,
+          };
+        } else {
+          continue;
+        }
+
+        // Dedup: skip if this rule already triggered for this ad today
+        const todayStart = new Date(date + "T00:00:00Z").getTime();
+        const alreadyTriggered = await ctx.runQuery(
+          internal.ruleEngine.isAlreadyTriggeredToday,
+          { ruleId: rule._id, adId, sinceTimestamp: todayStart }
+        );
+        if (alreadyTriggered) continue;
+
+        // Evaluate condition
+        const triggered = evaluateCondition(
+          rule.type,
+          rule.conditions,
+          metricsSnapshot,
+          context
+        );
+
+        if (rule.type === "clicks_no_leads") {
+          console.log(
+            `[ruleEngine] clicks_no_leads check for ad ${adId}: clicks=${metricsSnapshot.clicks}, leads=${metricsSnapshot.leads}, threshold=${rule.conditions.value}, triggered=${triggered}`
+          );
+        }
+
+        if (!triggered) continue;
+
+        // Safety check for clicks_no_leads: re-verify leads via statistics API
+        if (rule.type === "clicks_no_leads" && rule.actions.stopAd && metricsSnapshot.leads === 0) {
+          try {
+            const accessToken = await ctx.runAction(
+              internal.auth.getValidTokenForAccount,
+              { accountId: targetAccountId }
+            );
+
+            let freshLeads = 0;
+            try {
+              const freshStats = await ctx.runAction(api.vkApi.getMtStatistics, {
+                accessToken,
+                dateFrom: "2020-01-01",
+                dateTo: date,
+                bannerIds: adId,
+              });
+              if (freshStats && freshStats.length > 0 && freshStats[0].total) {
+                const vk = (freshStats[0].total as any).base?.vk;
+                if (vk) {
+                  freshLeads = Math.max(Number(vk.result) || 0, Number(vk.goals) || 0);
+                }
+              }
+            } catch (statsErr) {
+              console.error(
+                `[ruleEngine] Safety check stats API failed for ad ${adId}:`,
+                statsErr instanceof Error ? statsErr.message : statsErr
+              );
+            }
+
+            if (freshLeads === 0) {
+              try {
+                const freshLeadCounts = await ctx.runAction(api.vkApi.getMtLeadCounts, {
+                  accessToken,
+                  dateFrom: date,
+                  dateTo: date,
+                });
+                freshLeads = freshLeadCounts[adId] || 0;
+              } catch {
+                // Lead Ads API may not be available (404) — non-fatal
+              }
+            }
+
+            if (freshLeads > 0) {
+              console.log(
+                `[ruleEngine] SAFETY CHECK: ad ${adId} has ${freshLeads} leads (vk.result/Lead Ads). Skipping stop.`
+              );
+              const todayM = todayMetricsByAd.get(adId);
+              if (todayM) {
+                await ctx.runMutation(internal.ruleEngine.updateAdLeads, {
+                  adId,
+                  date,
+                  leads: freshLeads,
+                });
+              }
+              continue;
+            }
+          } catch (verifyErr) {
+            console.error(
+              `[ruleEngine] Lead verification failed for ad ${adId}, proceeding with caution:`,
+              verifyErr instanceof Error ? verifyErr.message : verifyErr
+            );
+          }
+        }
+
+        // Calculate savings
+        const spentToday = todayMetric?.spent ?? 0;
+        const savedAmount = calculateSavings(spentToday);
+
+        // Determine action type
+        const actionType:
+          | "stopped"
+          | "notified"
+          | "stopped_and_notified" =
+          rule.actions.stopAd && rule.actions.notify
+            ? "stopped_and_notified"
+            : rule.actions.stopAd
+              ? "stopped"
+              : "notified";
+
+        const reason = buildReason(
+          rule.type,
+          rule.conditions,
+          metricsSnapshot,
+          timeWindow
+        );
+
+        // Try to stop the ad via VK API
+        let status: "success" | "failed" = "success";
+        let errorMessage: string | undefined;
+
+        if (rule.actions.stopAd) {
+          try {
+            const accessToken = await ctx.runAction(
+              internal.auth.getValidTokenForAccount,
+              { accountId: targetAccountId }
+            );
+            await ctx.runAction(api.vkApi.stopAd, {
+              accessToken,
+              adId,
+              accountId: targetAccountId,
+            });
+          } catch (err) {
+            status = "failed";
+            errorMessage =
+              err instanceof Error ? err.message : "Unknown error";
+            try { await ctx.runMutation(internal.systemLogger.log, {
+              userId: account.userId,
+              accountId: targetAccountId,
+              level: "error",
+              source: "ruleEngine",
+              message: `stopAd failed for ad ${adId}: ${(errorMessage ?? "").slice(0, 150)}`,
+              details: { ruleId: rule._id, adId },
+            }); } catch { /* non-critical */ }
+          }
+        }
+
+        // Create action log
+        const actionLogId = await ctx.runMutation(
+          internal.ruleEngine.createActionLog,
+          {
+            userId: account.userId,
+            ruleId: rule._id,
+            accountId: targetAccountId,
+            adId,
+            adName: `Ad ${adId}`,
+            actionType,
+            reason,
+            metricsSnapshot: {
+              spent: metricsSnapshot.spent,
+              leads: metricsSnapshot.leads,
+              impressions: metricsSnapshot.impressions,
+              clicks: metricsSnapshot.clicks,
+              cpl: metricsSnapshot.cpl ?? undefined,
+              ctr: metricsSnapshot.ctr ?? undefined,
+            },
+            savedAmount,
+            status,
+            errorMessage,
+          }
+        );
+
+        // Alert admin on failed rule actions
+        if (status === "failed") {
+          try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+            category: "ruleErrors",
+            dedupKey: `ruleEngine:${rule._id}:${adId}`,
+            text: `⚠️ <b>Ошибка правила</b>\n\nОбъявление: Ad ${adId}\nОшибка: ${errorMessage ?? "неизвестно"}`,
+          }); } catch { /* non-critical */ }
+        }
+
+        // Update rule trigger count
+        await ctx.runMutation(
+          internal.ruleEngine.incrementTriggerCount,
+          { ruleId: rule._id }
+        );
+
+        // Send Telegram notification if notify is enabled
+        if (rule.actions.notify) {
+          try {
+            console.log(
+              `[ruleEngine] Sending notification for ad ${adId}, rule ${rule._id}, actionLogId=${String(actionLogId)}`
+            );
+            const notifResult = await ctx.runAction(
+              internal.telegram.sendRuleNotification,
+              {
+                userId: account.userId,
+                event: {
+                  ruleName: rule.name,
+                  adName: `Ad ${adId}`,
+                  reason,
+                  actionType,
+                  savedAmount,
+                  metrics: {
+                    spent: metricsSnapshot.spent,
+                    leads: metricsSnapshot.leads,
+                    cpl: metricsSnapshot.cpl ?? undefined,
+                    ctr: metricsSnapshot.ctr ?? undefined,
+                  },
+                },
+                priority: rule.actions.stopAd ? "critical" : "standard",
+                actionLogId: actionLogId as string,
+              }
+            );
+            console.log(
+              `[ruleEngine] Notification result for ad ${adId}:`,
+              JSON.stringify(notifResult)
+            );
+          } catch (notifErr) {
+            const notifMsg = notifErr instanceof Error ? notifErr.message : String(notifErr);
+            console.error(
+              `[ruleEngine] Failed to send TG notification for rule ${rule._id}, ad ${adId}:`,
+              notifMsg
+            );
+            try { await ctx.runMutation(internal.systemLogger.log, {
+              userId: account.userId,
+              level: "error",
+              source: "ruleEngine",
+              message: `TG notification failed for ad ${adId}: ${notifMsg.slice(0, 150)}`,
+              details: { ruleId: rule._id, adId },
+            }); } catch { /* non-critical */ }
+          }
+        } else {
+          console.warn(
+            `[ruleEngine] Rule ${rule._id} has notify=false, skipping notification for ad ${adId}`
+          );
+        }
+
+        totalTriggered++;
+      }
+    }
+
+    if (totalTriggered > 0) {
+      console.log(`[ruleEngine] checkRulesForAccount ${args.accountId}: ${totalTriggered} rules triggered`);
+    }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
 // Main orchestrator — called after metrics sync
 // ═══════════════════════════════════════════════════════════
 
@@ -1202,445 +1661,18 @@ export const checkAllRules = internalAction({
     );
     if (accounts.length === 0) return;
 
-    const date = todayStr();
-    const processedUsers = new Set<string>();
-    let totalTriggered = 0;
-
+    // No processedUsers dedup needed — checkRulesForAccount loads rules
+    // for the account's owner and filters by targetAccountIds.includes(accountId).
+    // Each account processes only its own ads.
     for (const account of accounts) {
-      const userIdStr = account.userId as string;
-      if (processedUsers.has(userIdStr)) continue;
-      processedUsers.add(userIdStr);
-
       try {
-        const rules = await ctx.runQuery(
-          internal.ruleEngine.listActiveRules,
-          { userId: account.userId }
-        );
-
-        if (rules.length === 0) continue;
-
-        for (const rule of rules) {
-          for (const targetAccountId of rule.targetAccountIds) {
-            const timeWindow = rule.conditions.timeWindow;
-            const needsAllAds =
-              (rule.type === "clicks_no_leads" || rule.type === "low_impressions") &&
-              timeWindow &&
-              timeWindow !== "daily";
-
-            // For since_launch / 24h — check ALL ads in account, not just today's
-            let adIdsToCheck: string[];
-            // Map adId → today's metric (if exists) for savings calculation
-            const todayMetricsByAd = new Map<
-              string,
-              { spent: number; leads: number; impressions: number; clicks: number; cpl?: number; ctr?: number }
-            >();
-
-            // Always fetch today's metrics (needed for non-clicks_no_leads rules and savings calc)
-            const dailyMetrics = await ctx.runQuery(
-              internal.ruleEngine.getAccountTodayMetrics,
-              { accountId: targetAccountId, date }
-            );
-            for (const m of dailyMetrics) {
-              todayMetricsByAd.set(m.adId, m);
-            }
-
-            if (needsAllAds) {
-              // Get ALL ad IDs that ever had metrics in this account
-              const allAdIds = await ctx.runQuery(
-                internal.ruleEngine.getAccountAllAdIds,
-                { accountId: targetAccountId }
-              );
-              adIdsToCheck = allAdIds;
-            } else {
-              adIdsToCheck = dailyMetrics.map((m: { adId: string }) => m.adId);
-            }
-
-            // Build campaignId cache for filtering by targetCampaignIds
-            const hasCampaignFilter = rule.targetCampaignIds && rule.targetCampaignIds.length > 0;
-            const adCampaignCache = new Map<string, { adGroupId: string | null; adPlanId: string | null }>();
-
-            for (const adId of adIdsToCheck) {
-              // Filter by targeted ads if specified
-              if (rule.targetAdIds && rule.targetAdIds.length > 0) {
-                if (!rule.targetAdIds.includes(adId)) continue;
-              }
-
-              // Filter by targeted campaigns if specified (dual matching: ad_group_id OR ad_plan_id)
-              if (hasCampaignFilter) {
-                if (!adCampaignCache.has(adId)) {
-                  try {
-                    const [campId, planId] = await Promise.all([
-                      ctx.runQuery(internal.ruleEngine.getAdCampaignId, { adId }),
-                      ctx.runQuery(internal.ruleEngine.getAdPlanId, { adId }),
-                    ]);
-                    adCampaignCache.set(adId, { adGroupId: campId, adPlanId: planId });
-                  } catch (err) {
-                    console.error(`[ruleEngine] Campaign lookup failed for ad ${adId}:`, err);
-                    continue; // Skip this ad, continue checking others
-                  }
-                }
-                const cached = adCampaignCache.get(adId)!;
-                if (!matchesCampaignFilter(
-                  rule.targetCampaignIds!,
-                  cached.adGroupId,
-                  cached.adPlanId
-                )) continue;
-              }
-
-              const todayMetric = todayMetricsByAd.get(adId);
-
-              // Check minSamples requirement
-              if (rule.conditions.minSamples) {
-                const history = await ctx.runQuery(
-                  internal.ruleEngine.getRealtimeHistory,
-                  {
-                    adId,
-                    sinceTimestamp: Date.now() - 24 * 60 * 60 * 1000,
-                  }
-                );
-                if (history.length < rule.conditions.minSamples) continue;
-              }
-
-              // Build context for fast_spend
-              let context:
-                | {
-                    spendHistory?: SpendSnapshot[];
-                    dailyBudget?: number;
-                  }
-                | undefined;
-
-              if (rule.type === "fast_spend") {
-                const fifteenMinAgo = Date.now() - 15 * 60 * 1000;
-                const history = await ctx.runQuery(
-                  internal.ruleEngine.getRealtimeHistory,
-                  { adId, sinceTimestamp: fifteenMinAgo }
-                );
-                const dailyBudget = await ctx.runQuery(
-                  internal.ruleEngine.getCampaignDailyLimit,
-                  { adId }
-                );
-                context = {
-                  spendHistory: history.map((h: { spent: number; timestamp: number }) => ({
-                    spent: h.spent,
-                    timestamp: h.timestamp,
-                  })),
-                  dailyBudget: dailyBudget ?? undefined,
-                };
-              }
-
-              // Build metrics snapshot (may be aggregated for time-windowed rules)
-              let metricsSnapshot: MetricsSnapshot;
-
-              if (needsAllAds && (timeWindow === "1h" || timeWindow === "6h")) {
-                // For 1h/6h — use metricsRealtime cumulative snapshots, compute delta
-                const windowMs = timeWindow === "1h" ? 60 * 60 * 1000 : 6 * 60 * 60 * 1000;
-                const sinceTs = Date.now() - windowMs;
-                const history = await ctx.runQuery(
-                  internal.ruleEngine.getRealtimeHistory,
-                  { adId, sinceTimestamp: sinceTs }
-                );
-                const delta = computeRealtimeDelta(history);
-                metricsSnapshot = {
-                  spent: delta.spent,
-                  leads: delta.leads,
-                  impressions: delta.impressions,
-                  clicks: delta.clicks,
-                };
-              } else if (needsAllAds) {
-                // For since_launch/24h — use aggregated metricsDaily
-                let sinceDate: string | undefined;
-                if (timeWindow === "24h") {
-                  const yesterday = new Date();
-                  yesterday.setDate(yesterday.getDate() - 1);
-                  sinceDate = yesterday.toISOString().slice(0, 10);
-                }
-                // since_launch: sinceDate = undefined → all dates
-
-                const aggregated = await ctx.runQuery(
-                  internal.ruleEngine.getAdAggregatedMetrics,
-                  { adId, sinceDate }
-                );
-
-                metricsSnapshot = {
-                  spent: aggregated.spent,
-                  leads: aggregated.leads,
-                  impressions: aggregated.impressions,
-                  clicks: aggregated.clicks,
-                };
-              } else if (todayMetric) {
-                metricsSnapshot = {
-                  spent: todayMetric.spent,
-                  leads: todayMetric.leads,
-                  impressions: todayMetric.impressions,
-                  clicks: todayMetric.clicks,
-                  cpl: todayMetric.cpl ?? undefined,
-                  ctr: todayMetric.ctr ?? undefined,
-                };
-              } else {
-                // No today's metrics and rule doesn't need aggregation — skip
-                continue;
-              }
-
-              // Dedup: skip if this rule already triggered for this ad today
-              const todayStart = new Date(date + "T00:00:00Z").getTime();
-              const alreadyTriggered = await ctx.runQuery(
-                internal.ruleEngine.isAlreadyTriggeredToday,
-                { ruleId: rule._id, adId, sinceTimestamp: todayStart }
-              );
-              if (alreadyTriggered) continue;
-
-              // Evaluate condition
-              const triggered = evaluateCondition(
-                rule.type,
-                rule.conditions,
-                metricsSnapshot,
-                context
-              );
-
-              if (rule.type === "clicks_no_leads") {
-                console.log(
-                  `[ruleEngine] clicks_no_leads check for ad ${adId}: clicks=${metricsSnapshot.clicks}, leads=${metricsSnapshot.leads}, threshold=${rule.conditions.value}, triggered=${triggered}`
-                );
-              }
-
-              if (!triggered) continue;
-
-              // Safety check for clicks_no_leads: re-verify leads via statistics API
-              // (base.vk.result) and Lead Ads API before stopping.
-              if (rule.type === "clicks_no_leads" && rule.actions.stopAd && metricsSnapshot.leads === 0) {
-                try {
-                  // Use per-account token
-                  const accessToken = await ctx.runAction(
-                    internal.auth.getValidTokenForAccount,
-                    { accountId: targetAccountId }
-                  );
-
-                  // Check statistics API for vk.result (most reliable source)
-                  let freshLeads = 0;
-                  try {
-                    const freshStats = await ctx.runAction(api.vkApi.getMtStatistics, {
-                      accessToken,
-                      dateFrom: "2020-01-01", // all time
-                      dateTo: date,
-                      bannerIds: adId,
-                    });
-                    if (freshStats && freshStats.length > 0 && freshStats[0].total) {
-                      const vk = (freshStats[0].total as any).base?.vk;
-                      if (vk) {
-                        freshLeads = Math.max(Number(vk.result) || 0, Number(vk.goals) || 0);
-                      }
-                    }
-                  } catch (statsErr) {
-                    console.error(
-                      `[ruleEngine] Safety check stats API failed for ad ${adId}:`,
-                      statsErr instanceof Error ? statsErr.message : statsErr
-                    );
-                  }
-
-                  // Also check Lead Ads API as fallback
-                  if (freshLeads === 0) {
-                    try {
-                      const freshLeadCounts = await ctx.runAction(api.vkApi.getMtLeadCounts, {
-                        accessToken,
-                        dateFrom: date,
-                        dateTo: date,
-                      });
-                      freshLeads = freshLeadCounts[adId] || 0;
-                    } catch {
-                      // Lead Ads API may not be available (404) — non-fatal
-                    }
-                  }
-
-                  if (freshLeads > 0) {
-                    console.log(
-                      `[ruleEngine] SAFETY CHECK: ad ${adId} has ${freshLeads} leads (vk.result/Lead Ads). Skipping stop.`
-                    );
-                    // Update metricsDaily with correct lead count
-                    const todayM = todayMetricsByAd.get(adId);
-                    if (todayM) {
-                      await ctx.runMutation(internal.ruleEngine.updateAdLeads, {
-                        adId,
-                        date,
-                        leads: freshLeads,
-                      });
-                    }
-                    continue;
-                  }
-                } catch (verifyErr) {
-                  console.error(
-                    `[ruleEngine] Lead verification failed for ad ${adId}, proceeding with caution:`,
-                    verifyErr instanceof Error ? verifyErr.message : verifyErr
-                  );
-                }
-              }
-
-              // Calculate savings: use spentToday as conservative real estimate
-              const spentToday = todayMetric?.spent ?? 0;
-              const savedAmount = calculateSavings(spentToday);
-
-              // Determine action type
-              const actionType:
-                | "stopped"
-                | "notified"
-                | "stopped_and_notified" =
-                rule.actions.stopAd && rule.actions.notify
-                  ? "stopped_and_notified"
-                  : rule.actions.stopAd
-                    ? "stopped"
-                    : "notified";
-
-              const reason = buildReason(
-                rule.type,
-                rule.conditions,
-                metricsSnapshot,
-                timeWindow
-              );
-
-              // Try to stop the ad via VK API
-              let status: "success" | "failed" = "success";
-              let errorMessage: string | undefined;
-
-              if (rule.actions.stopAd) {
-                try {
-                  // Use per-account token
-                  const accessToken = await ctx.runAction(
-                    internal.auth.getValidTokenForAccount,
-                    { accountId: targetAccountId }
-                  );
-                  await ctx.runAction(api.vkApi.stopAd, {
-                    accessToken,
-                    adId,
-                    accountId: targetAccountId,
-                  });
-                } catch (err) {
-                  status = "failed";
-                  errorMessage =
-                    err instanceof Error
-                      ? err.message
-                      : "Unknown error";
-                  try { await ctx.runMutation(internal.systemLogger.log, {
-                    userId: account.userId,
-                    accountId: targetAccountId,
-                    level: "error",
-                    source: "ruleEngine",
-                    message: `stopAd failed for ad ${adId}: ${(errorMessage ?? "").slice(0, 150)}`,
-                    details: { ruleId: rule._id, adId },
-                  }); } catch { /* non-critical */ }
-                }
-              }
-
-              // Create action log
-              const actionLogId = await ctx.runMutation(
-                internal.ruleEngine.createActionLog,
-                {
-                  userId: account.userId,
-                  ruleId: rule._id,
-                  accountId: targetAccountId,
-                  adId,
-                  adName: `Ad ${adId}`,
-                  actionType,
-                  reason,
-                  metricsSnapshot: {
-                    spent: metricsSnapshot.spent,
-                    leads: metricsSnapshot.leads,
-                    impressions: metricsSnapshot.impressions,
-                    clicks: metricsSnapshot.clicks,
-                    cpl: metricsSnapshot.cpl ?? undefined,
-                    ctr: metricsSnapshot.ctr ?? undefined,
-                  },
-                  savedAmount,
-                  status,
-                  errorMessage,
-                }
-              );
-
-              // Alert admin on failed rule actions
-              if (status === "failed") {
-                try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
-                  category: "ruleErrors",
-                  dedupKey: `ruleEngine:${rule._id}:${adId}`,
-                  text: `⚠️ <b>Ошибка правила</b>\n\nОбъявление: Ad ${adId}\nОшибка: ${errorMessage ?? "неизвестно"}`,
-                }); } catch { /* non-critical */ }
-              }
-
-              // Update rule trigger count
-              await ctx.runMutation(
-                internal.ruleEngine.incrementTriggerCount,
-                { ruleId: rule._id }
-              );
-
-              // Send Telegram notification if notify is enabled
-              if (rule.actions.notify) {
-                try {
-                  console.log(
-                    `[ruleEngine] Sending notification for ad ${adId}, rule ${rule._id}, actionLogId=${String(actionLogId)}`
-                  );
-                  const notifResult = await ctx.runAction(
-                    internal.telegram.sendRuleNotification,
-                    {
-                      userId: account.userId,
-                      event: {
-                        ruleName: rule.name,
-                        adName: `Ad ${adId}`,
-                        reason,
-                        actionType,
-                        savedAmount,
-                        metrics: {
-                          spent: metricsSnapshot.spent,
-                          leads: metricsSnapshot.leads,
-                          cpl: metricsSnapshot.cpl ?? undefined,
-                          ctr: metricsSnapshot.ctr ?? undefined,
-                        },
-                      },
-                      priority: rule.actions.stopAd ? "critical" : "standard",
-                      actionLogId: actionLogId as string,
-                    }
-                  );
-                  console.log(
-                    `[ruleEngine] Notification result for ad ${adId}:`,
-                    JSON.stringify(notifResult)
-                  );
-                } catch (notifErr) {
-                  const notifMsg = notifErr instanceof Error ? notifErr.message : String(notifErr);
-                  console.error(
-                    `[ruleEngine] Failed to send TG notification for rule ${rule._id}, ad ${adId}:`,
-                    notifMsg
-                  );
-                  try { await ctx.runMutation(internal.systemLogger.log, {
-                    userId: account.userId,
-                    level: "error",
-                    source: "ruleEngine",
-                    message: `TG notification failed for ad ${adId}: ${notifMsg.slice(0, 150)}`,
-                    details: { ruleId: rule._id, adId },
-                  }); } catch { /* non-critical */ }
-                }
-              } else {
-                console.warn(
-                  `[ruleEngine] Rule ${rule._id} has notify=false, skipping notification for ad ${adId}`
-                );
-              }
-
-              totalTriggered++;
-            }
-          }
-        }
-      } catch (error) {
-        const errMsg = error instanceof Error ? error.message : String(error);
-        console.error(
-          `[ruleEngine] Error checking rules for user ${userIdStr}:`,
-          errMsg
-        );
-        try { await ctx.runMutation(internal.systemLogger.log, {
-          userId: account.userId,
-          level: "error",
-          source: "ruleEngine",
-          message: `Rule check failed for user: ${errMsg.slice(0, 180)}`,
-        }); } catch { /* non-critical */ }
+        await ctx.runAction(internal.ruleEngine.checkRulesForAccount, {
+          accountId: account._id,
+          // No adCampaignMap — uses DB fallback
+        });
+      } catch (err) {
+        console.error(`[checkAllRules] Failed for account ${account._id}:`, err);
       }
-    }
-
-    if (totalTriggered > 0) {
-      console.log(`[ruleEngine] ${totalTriggered} rules triggered`);
     }
   },
 });

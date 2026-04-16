@@ -1,11 +1,11 @@
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
-import type { MtVideoStats } from "./vkApi";
+import type { MtVideoStats, MtCampaign } from "./vkApi";
 import { withTimeout } from "./vkApi";
 import { quickTokenCheck } from "./tokenRecovery";
 
-const ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account
+const ACCOUNT_TIMEOUT_MS = 120_000; // 120s per account (includes getCampaigns + upsert + rule check)
 const TRANSIENT_ERROR_THRESHOLD = 3; // error status only after 3 consecutive transient failures
 
 /** Permanent errors → immediate error status. Everything else is transient. */
@@ -57,6 +57,8 @@ export const syncAll = internalAction({
     }
 
     const date = todayStr();
+
+    let consecutiveCampaignApiFailures = 0;
 
     for (const account of accounts) {
       try {
@@ -115,6 +117,117 @@ export const syncAll = internalAction({
         const bannerCampaignMap = new Map<string, string>();
         for (const b of banners) {
           bannerCampaignMap.set(String(b.id), String(b.campaign_id));
+        }
+
+        // Fetch campaigns from VK API for campaign filter + fast_spend budget
+        let vkCampaigns: MtCampaign[] = [];
+        if (consecutiveCampaignApiFailures < 3) {
+          try {
+            vkCampaigns = await ctx.runAction(
+              internal.vkApi.getCampaignsForAccount, { accessToken }
+            );
+            consecutiveCampaignApiFailures = 0;
+          } catch (err) {
+            console.warn(`[syncAll] getCampaignsForAccount failed for «${account.name}»: ${err}`);
+            // Retry once
+            try {
+              vkCampaigns = await ctx.runAction(
+                internal.vkApi.getCampaignsForAccount, { accessToken }
+              );
+              consecutiveCampaignApiFailures = 0;
+            } catch (retryErr) {
+              consecutiveCampaignApiFailures++;
+              console.error(`[syncAll] getCampaignsForAccount retry failed for «${account.name}» (${consecutiveCampaignApiFailures}/3): ${retryErr}`);
+              try { await ctx.runMutation(internal.systemLogger.log, {
+                accountId: account._id,
+                level: "error",
+                source: "syncMetrics",
+                message: `getCampaignsForAccount failed after retry: ${String(retryErr).slice(0, 180)}`,
+              }); } catch { /* non-critical */ }
+            }
+          }
+        } else {
+          console.warn(`[syncAll] Circuit breaker active — skipping getCampaignsForAccount for «${account.name}»`);
+        }
+
+        // Build campaign data map: ad_group_id → { adPlanId, dailyBudget }
+        const groupData = new Map<string, { adPlanId: string | null; dailyBudget: number }>();
+        for (const c of vkCampaigns) {
+          groupData.set(String(c.id), {
+            adPlanId: c.ad_plan_id ? String(c.ad_plan_id) : null,
+            dailyBudget: Number(c.budget_limit_day || "0"),
+          });
+        }
+
+        // Build adCampaignMap: adId → { adGroupId, adPlanId, dailyBudget }
+        const adCampaignMap: Array<{ adId: string; adGroupId: string; adPlanId: string | null; dailyBudget: number }> = [];
+        for (const [adId, adGroupId] of bannerCampaignMap) {
+          const data = groupData.get(adGroupId);
+          adCampaignMap.push({
+            adId,
+            adGroupId,
+            adPlanId: data?.adPlanId ?? null,
+            dailyBudget: data?.dailyBudget ?? 0,
+          });
+        }
+
+        if (adCampaignMap.length > 0) {
+          console.log(`[syncAll] Live campaign map: ${adCampaignMap.length} ads, ${vkCampaigns.length} campaigns for «${account.name}»`);
+        }
+
+        // Auto-upsert campaigns from VK API data
+        if (vkCampaigns.length > 0) {
+          try {
+            for (const c of vkCampaigns) {
+              await ctx.runMutation(api.adAccounts.upsertCampaign, {
+                accountId: account._id,
+                vkCampaignId: String(c.id),
+                adPlanId: c.ad_plan_id ? String(c.ad_plan_id) : undefined,
+                name: c.name || `Кампания ${c.id}`,
+                status: c.status,
+                dailyLimit: Number(c.budget_limit_day || "0") || undefined,
+                allLimit: Number(c.budget_limit || "0") || undefined,
+              });
+            }
+          } catch (err) {
+            console.error(`[syncAll] upsertCampaigns failed for «${account.name}»:`, err);
+            try { await ctx.runMutation(internal.systemLogger.log, {
+              accountId: account._id,
+              level: "warn",
+              source: "syncMetrics",
+              message: `Auto-upsert campaigns failed: ${String(err).slice(0, 180)}`,
+            }); } catch { /* non-critical */ }
+          }
+        }
+
+        // Auto-upsert ads from getMtBanners data
+        try {
+          for (const banner of banners) {
+            const campaignVkId = String(banner.campaign_id);
+            const campaign = await ctx.runQuery(api.adAccounts.getCampaignByVkId, {
+              accountId: account._id,
+              vkCampaignId: campaignVkId,
+            });
+            if (campaign) {
+              const bannerName = banner.textblocks?.title?.text || `Баннер ${banner.id}`;
+              await ctx.runMutation(api.adAccounts.upsertAd, {
+                accountId: account._id,
+                campaignId: campaign._id,
+                vkAdId: String(banner.id),
+                name: bannerName,
+                status: banner.status,
+                approved: banner.moderation_status,
+              });
+            }
+          }
+        } catch (err) {
+          console.error(`[syncAll] upsertAds failed for «${account.name}»:`, err);
+          try { await ctx.runMutation(internal.systemLogger.log, {
+            accountId: account._id,
+            level: "warn",
+            source: "syncMetrics",
+            message: `Auto-upsert ads failed: ${String(err).slice(0, 180)}`,
+          }); } catch { /* non-critical */ }
         }
 
         // Auto-link videos to banners by matching content.video_id with videos.vkMediaId
@@ -322,6 +435,22 @@ export const syncAll = internalAction({
         console.log(
           `[syncMetrics] Account ${account._id}: ${stats.length} ads synced`
         );
+
+        // Run rules for this account with live campaign data
+        try {
+          await ctx.runAction(internal.ruleEngine.checkRulesForAccount, {
+            accountId: account._id,
+            adCampaignMap: adCampaignMap.length > 0 ? adCampaignMap : undefined,
+          });
+        } catch (err) {
+          console.error(`[syncAll] checkRulesForAccount failed for «${account.name}»:`, err);
+          try { await ctx.runMutation(internal.systemLogger.log, {
+            accountId: account._id,
+            level: "error",
+            source: "syncMetrics",
+            message: `checkRulesForAccount failed: ${String(err).slice(0, 180)}`,
+          }); } catch { /* non-critical */ }
+        }
         })(), ACCOUNT_TIMEOUT_MS, `syncAll account ${account._id}`);
       } catch (error) {
         const msg =
@@ -389,25 +518,7 @@ export const syncAll = internalAction({
       }
     }
 
-    // After all accounts synced, run rule engine (with 120s timeout)
-    try {
-      await withTimeout(
-        ctx.runAction(internal.ruleEngine.checkAllRules, {}),
-        120_000,
-        "checkAllRules"
-      );
-    } catch (error) {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      console.error(
-        "[syncMetrics] Error running rule engine:",
-        errMsg
-      );
-      try { await ctx.runMutation(internal.systemLogger.log, {
-        level: "error",
-        source: "syncMetrics",
-        message: `Rule engine failed: ${errMsg.slice(0, 180)}`,
-      }); } catch { /* non-critical */ }
-    }
+    // checkAllRules removed — rules now run per-account inside the loop above
 
     // UZ budget rules — moved to separate cron "uz-budget-increase" (crons.ts)
     // to avoid timeout when syncAll takes too long

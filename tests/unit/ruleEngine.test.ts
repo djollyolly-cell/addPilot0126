@@ -8,6 +8,7 @@ import {
   evaluateCondition,
   calculateSavings,
   minutesUntilEndOfDay,
+  matchesCampaignFilter,
   MetricsSnapshot,
   RuleCondition,
 } from "../../convex/ruleEngine";
@@ -305,5 +306,35 @@ describe("minutesUntilEndOfDay", () => {
   it("returns full day at midnight", () => {
     const midnight = new Date("2026-02-25T00:00:00");
     expect(minutesUntilEndOfDay(midnight)).toBe(1080); // 18 hours = 1080 min
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// matchesCampaignFilter — dual matching (ad_group_id OR ad_plan_id)
+// ═══════════════════════════════════════════════════════════
+
+describe("matchesCampaignFilter", () => {
+  it("matches by adGroupId", () => {
+    expect(matchesCampaignFilter(["100", "200"], "100", null)).toBe(true);
+  });
+
+  it("matches by adPlanId", () => {
+    expect(matchesCampaignFilter(["500"], null, "500")).toBe(true);
+  });
+
+  it("matches by adPlanId when adGroupId doesn't match", () => {
+    expect(matchesCampaignFilter(["500"], "999", "500")).toBe(true);
+  });
+
+  it("returns false when neither matches", () => {
+    expect(matchesCampaignFilter(["100", "200"], "300", "400")).toBe(false);
+  });
+
+  it("returns false when both are null", () => {
+    expect(matchesCampaignFilter(["100"], null, null)).toBe(false);
+  });
+
+  it("matches when both adGroupId and adPlanId match", () => {
+    expect(matchesCampaignFilter(["100", "200"], "100", "200")).toBe(true);
   });
 });
