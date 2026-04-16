@@ -186,7 +186,7 @@ export const getRealtimeByAd = query({
   handler: async (ctx, args) => {
     const records = await ctx.db
       .query("metricsRealtime")
-      .withIndex("by_adId", (q) => q.eq("adId", args.adId))
+      .withIndex("by_adId_timestamp", (q) => q.eq("adId", args.adId))
       .order("desc")
       .take(1);
     return records[0] ?? null;

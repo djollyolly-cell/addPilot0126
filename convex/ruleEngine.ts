@@ -287,11 +287,12 @@ export const getRealtimeHistory = internalQuery({
     sinceTimestamp: v.number(),
   },
   handler: async (ctx, args) => {
-    const records = await ctx.db
+    return await ctx.db
       .query("metricsRealtime")
-      .withIndex("by_adId", (q) => q.eq("adId", args.adId))
+      .withIndex("by_adId_timestamp", (q) =>
+        q.eq("adId", args.adId).gte("timestamp", args.sinceTimestamp)
+      )
       .collect();
-    return records.filter((r) => r.timestamp >= args.sinceTimestamp);
   },
 });
 
