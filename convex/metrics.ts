@@ -1,5 +1,15 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation } from "./_generated/server";
+import { mutation, query, internalMutation, internalAction } from "./_generated/server";
+import { internal } from "./_generated/api";
+
+// ── Cleanup constants ──
+const RETENTION_DAYS = 4;
+const DEFAULT_BATCH_SIZE = 500;
+const BATCH_DELAY_MS = 100;
+const LOG_EVERY_N_BATCHES = 100;
+const CLEANUP_MAX_RUNNING_MS = 12 * 60 * 60 * 1000; // 12h zombie threshold
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Save a realtime metrics snapshot for a single ad
 export const saveRealtime = internalMutation({
@@ -219,5 +229,97 @@ export const getDailyByAccount = query({
         q.eq("accountId", args.accountId).eq("date", args.date)
       )
       .collect();
+  },
+});
+
+// ── Cleanup: batch delete old metricsRealtime records ──
+
+export const deleteRealtimeBatch = internalMutation({
+  args: { batchSize: v.number() },
+  handler: async (ctx, args) => {
+    const cutoff = Date.now() - RETENTION_DAYS * 86_400_000;
+    const records = await ctx.db
+      .query("metricsRealtime")
+      .withIndex("by_timestamp", (q) => q.lt("timestamp", cutoff))
+      .take(args.batchSize);
+    for (const record of records) {
+      await ctx.db.delete(record._id);
+    }
+    return { deleted: records.length, hasMore: records.length === args.batchSize };
+  },
+});
+
+export const cleanupOldRealtimeMetrics = internalAction({
+  args: { batchSize: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const batchSize = args.batchSize ?? DEFAULT_BATCH_SIZE;
+
+    // Guard: skip if already running, override if zombie (>12h)
+    const hb = await ctx.runQuery(internal.syncMetrics.getCronHeartbeat, {
+      name: "cleanup-realtime-metrics",
+    });
+    if (hb?.status === "running") {
+      const elapsed = Date.now() - hb.startedAt;
+      const minutesAgo = Math.round(elapsed / 60_000);
+      if (elapsed < CLEANUP_MAX_RUNNING_MS) {
+        console.log(
+          `[cleanup-realtime] Already running (started ${minutesAgo}min ago), skipping`
+        );
+        return;
+      }
+      console.warn(
+        `[cleanup-realtime] Previous run STUCK (${minutesAgo}min ago, >720min). Overriding.`
+      );
+    }
+
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+      name: "cleanup-realtime-metrics",
+      status: "running",
+    });
+
+    let runningTotal = 0;
+    let batchCount = 0;
+    const startedAt = Date.now();
+
+    try {
+      while (true) {
+        const batch = await ctx.runMutation(internal.metrics.deleteRealtimeBatch, {
+          batchSize,
+        });
+        runningTotal += batch.deleted;
+        batchCount++;
+
+        if (batchCount % LOG_EVERY_N_BATCHES === 0) {
+          const elapsed = (Date.now() - startedAt) / 1000;
+          const rate = Math.round(runningTotal / (elapsed / 60));
+          console.log(
+            `[cleanup-realtime] Progress: deleted ${runningTotal}, rate ~${rate}/min, elapsed ${Math.round(elapsed)}s`
+          );
+        }
+
+        if (!batch.hasMore) break;
+        await sleep(BATCH_DELAY_MS);
+      }
+
+      const elapsed = (Date.now() - startedAt) / 1000;
+      console.log(
+        `[cleanup-realtime] Complete. Deleted ${runningTotal} records in ${Math.round(elapsed)}s (~${Math.round(elapsed / 60)} min)`
+      );
+
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "cleanup-realtime-metrics",
+        status: "completed",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      console.error(
+        `[cleanup-realtime] ERROR: ${message}. Stopped at ${runningTotal} deleted. Will retry next cron cycle.`
+      );
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "cleanup-realtime-metrics",
+        status: "failed",
+        error: message,
+      });
+    }
   },
 });

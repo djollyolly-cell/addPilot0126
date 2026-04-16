@@ -74,6 +74,7 @@ export const checkCronHeartbeats = internalQuery({
       name: string;
       label: string;
       maxStaleMin?: number;
+      maxRunningMin?: number;
     }> = [
       { name: "syncAll", label: "sync-metrics", maxStaleMin: 10 },
       { name: "checkUzBudgetRules", label: "uz-budget-increase", maxStaleMin: 15 },
@@ -83,13 +84,15 @@ export const checkCronHeartbeats = internalQuery({
       { name: "sendMonthlyDigest", label: "monthly-digest" },
       { name: "checkAgencyTokenHealth", label: "agency-token-health" },
       { name: "proactiveTokenRefresh", label: "proactive-token-refresh", maxStaleMin: 250 },
+      { name: "cleanup-realtime-metrics", label: "cleanup-realtime", maxStaleMin: 25 * 60, maxRunningMin: 12 * 60 },
     ];
 
     for (const cfg of CRON_CONFIGS) {
       const hb = heartbeats.find((h) => h.name === cfg.name);
       if (!hb) continue;
 
-      if (hb.status === "running" && minutesAgo(hb.startedAt) > 10) {
+      const maxRunMin = cfg.maxRunningMin ?? 10;
+      if (hb.status === "running" && minutesAgo(hb.startedAt) > maxRunMin) {
         issues.push(`${cfg.label}: STUCK (${minutesAgo(hb.startedAt)} мин)`);
         status = "error";
         continue;

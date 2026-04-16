@@ -284,7 +284,9 @@ export default defineSchema({
     clicks: v.number(),
   })
     .index("by_adId", ["adId"])
-    .index("by_accountId_timestamp", ["accountId", "timestamp"]),
+    .index("by_accountId_timestamp", ["accountId", "timestamp"])
+    .index("by_adId_timestamp", ["adId", "timestamp"])
+    .index("by_timestamp", ["timestamp"]),
 
   notifications: defineTable({
     userId: v.id("users"),

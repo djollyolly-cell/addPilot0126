@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { expect, test, describe } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 
 // Helper: create user + account
@@ -300,5 +300,107 @@ describe("metrics", () => {
     });
 
     expect(daily).toHaveLength(2);
+  });
+
+  // ── Cleanup: deleteRealtimeBatch ──
+
+  test("deleteRealtimeBatch deletes records older than 4 days", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+
+    const now = Date.now();
+    const fiveDaysAgo = now - 5 * 86_400_000;
+    const twoDaysAgo = now - 2 * 86_400_000;
+
+    // Insert old record (5 days ago) — should be deleted
+    await t.run(async (ctx) => {
+      await ctx.db.insert("metricsRealtime", {
+        accountId,
+        adId: "ad_old",
+        timestamp: fiveDaysAgo,
+        spent: 100,
+        leads: 1,
+        impressions: 500,
+        clicks: 10,
+      });
+    });
+
+    // Insert fresh record (2 days ago) — should survive
+    await t.run(async (ctx) => {
+      await ctx.db.insert("metricsRealtime", {
+        accountId,
+        adId: "ad_fresh",
+        timestamp: twoDaysAgo,
+        spent: 200,
+        leads: 2,
+        impressions: 1000,
+        clicks: 20,
+      });
+    });
+
+    // Run cleanup batch
+    const result = await t.mutation(internal.metrics.deleteRealtimeBatch, {
+      batchSize: 500,
+    });
+
+    expect(result.deleted).toBe(1);
+    expect(result.hasMore).toBe(false);
+
+    // Verify old record gone, fresh record remains
+    const oldRecord = await t.query(api.metrics.getRealtimeByAd, { adId: "ad_old" });
+    expect(oldRecord).toBeNull();
+
+    const freshRecord = await t.query(api.metrics.getRealtimeByAd, { adId: "ad_fresh" });
+    expect(freshRecord).toBeDefined();
+    expect(freshRecord?.adId).toBe("ad_fresh");
+  });
+
+  test("deleteRealtimeBatch returns hasMore=true when batch is full", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+
+    const tenDaysAgo = Date.now() - 10 * 86_400_000;
+
+    // Insert 3 old records
+    for (let i = 0; i < 3; i++) {
+      await t.run(async (ctx) => {
+        await ctx.db.insert("metricsRealtime", {
+          accountId,
+          adId: `ad_batch_${i}`,
+          timestamp: tenDaysAgo + i * 1000,
+          spent: 100,
+          leads: 0,
+          impressions: 500,
+          clicks: 10,
+        });
+      });
+    }
+
+    // Delete with batchSize=2 — should delete 2, hasMore=true
+    const result = await t.mutation(internal.metrics.deleteRealtimeBatch, {
+      batchSize: 2,
+    });
+
+    expect(result.deleted).toBe(2);
+    expect(result.hasMore).toBe(true);
+
+    // Second batch — should delete 1, hasMore=false
+    const result2 = await t.mutation(internal.metrics.deleteRealtimeBatch, {
+      batchSize: 2,
+    });
+
+    expect(result2.deleted).toBe(1);
+    expect(result2.hasMore).toBe(false);
+  });
+
+  test("deleteRealtimeBatch returns 0 when nothing to delete", async () => {
+    const t = convexTest(schema);
+
+    const result = await t.mutation(internal.metrics.deleteRealtimeBatch, {
+      batchSize: 500,
+    });
+
+    expect(result.deleted).toBe(0);
+    expect(result.hasMore).toBe(false);
   });
 });

@@ -145,4 +145,12 @@ crons.cron(
   internal.logCleanup.runDaily
 );
 
+// Clean up old metricsRealtime records (older than 4 days) — daily at 05:00 UTC
+crons.cron(
+  "cleanup-old-realtime-metrics",
+  "0 5 * * *",
+  internal.metrics.cleanupOldRealtimeMetrics,
+  {}
+);
+
 export default crons;

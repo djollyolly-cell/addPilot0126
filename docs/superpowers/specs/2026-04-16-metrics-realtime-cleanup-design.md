@@ -1,7 +1,7 @@
 # metricsRealtime Cleanup — Design Spec
 
 **Date:** 2026-04-16
-**Status:** Approved (rev.3 — heartbeat lifecycle, duplicate guard, 4-day retention, configurable batch)
+**Status:** Approved (rev.7 — + устойчивость к action timeout, ручной запуск для ускорения)
 **Problem:** metricsRealtime — 24.3 млн записей, 73 ГБ в PostgreSQL. Диск сервера 100%.
 
 ## Причина
@@ -12,7 +12,7 @@
 
 | Потребитель | Файл | Что берёт | Нужен период |
 |---|---|---|---|
-| `fast_spend` / `low_impressions` правило | `ruleEngine.ts:getRealtimeHistory()` | Записи за time window (1h/6h/24h) | макс 24h |
+| `fast_spend` / `low_impressions` / `clicks_no_leads` правило | `ruleEngine.ts:getRealtimeHistory()` | Записи за time window (1h/6h/24h) | макс 24h |
 | Dashboard (последняя точка) | `metrics.ts:getRealtimeByAd()` | 1 последняя запись | последняя |
 | Frontend | — | НЕ используется | — |
 
@@ -42,7 +42,7 @@
 
 Итого: было 2 индекса (один мёртвый), стало 2 индекса (оба используются).
 
-**Результат в schema.ts:**
+**Результат в schema.ts (после Deploy 2):**
 ```ts
 metricsRealtime: defineTable({
   accountId: v.id("adAccounts"),
@@ -57,63 +57,89 @@ metricsRealtime: defineTable({
   .index("by_timestamp", ["timestamp"]),
 ```
 
-### Mutation: `cleanupOldRealtimeMetrics`
+### Архитектура cleanup: Action + Mutation (паттерн syncAll)
+
+Две функции по проверенному паттерну `syncAll`:
+
+#### `cleanupOldRealtimeMetrics` — internalAction (оркестратор)
+
+```
+internalAction в convex/metrics.ts:
+  args: { batchSize?: number }
+
+  Константы (топ metrics.ts):
+    RETENTION_DAYS = 4
+    DEFAULT_BATCH_SIZE = 500
+    BATCH_DELAY_MS = 100
+    LOG_EVERY_N_BATCHES = 100
+    CLEANUP_MAX_RUNNING_MS = 12 * 60 * 60 * 1000  // 12h
+
+  1. batchSize = args.batchSize ?? DEFAULT_BATCH_SIZE
+
+  // Guard от дублирующего запуска
+  2. const hb = await ctx.runQuery(internal.syncMetrics.getCronHeartbeat, { name: "cleanup-realtime-metrics" })
+  3. Если hb?.status === "running":
+     a. elapsed = Date.now() - hb.startedAt
+     b. Если elapsed < CLEANUP_MAX_RUNNING_MS → skip
+        console.log "[cleanup-realtime] Already running (started ${minutesAgo}min ago), skipping"
+        return
+     c. Если elapsed >= CLEANUP_MAX_RUNNING_MS → zombie
+        console.warn "[cleanup-realtime] Previous run STUCK (${minutesAgo}min ago, >720min). Overriding."
+
+  4. await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, { name: "cleanup-realtime-metrics", status: "running" })
+
+  5. try:
+     a. runningTotal = 0, batchCount = 0, startedAt = Date.now()
+     b. Цикл:
+        - batch = await ctx.runMutation(internal.metrics.deleteRealtimeBatch, { batchSize })
+        - runningTotal += batch.deleted
+        - batchCount++
+        - Если batchCount % LOG_EVERY_N_BATCHES === 0:
+          elapsed = (Date.now() - startedAt) / 1000
+          rate = Math.round(runningTotal / (elapsed / 60))
+          console.log "[cleanup-realtime] Progress: deleted ${runningTotal}, rate ~${rate}/min, elapsed ${elapsed}s"
+        - Если batch.hasMore → await sleep(BATCH_DELAY_MS) → продолжаем
+        - Если !batch.hasMore → break
+     c. elapsed = (Date.now() - startedAt) / 1000
+     d. console.log "[cleanup-realtime] Complete. Deleted ${runningTotal} records in ${elapsed}s (~${Math.round(elapsed/60)} min)"
+     e. await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, { name: "cleanup-realtime-metrics", status: "completed" })
+
+  6. catch (error):
+     a. console.error "[cleanup-realtime] ERROR: ${message}. Stopped at ${runningTotal} deleted. Will retry next cron cycle."
+     b. await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, { name: "cleanup-realtime-metrics", status: "failed", error: message })
+     c. НЕ retry — подождать следующий cron через 24h
+```
+
+#### `deleteRealtimeBatch` — internalMutation (чистая транзакция)
 
 ```
 internalMutation в convex/metrics.ts:
-  args: { batchSize?: number, deletedSoFar?: number, startedAt?: number }
+  args: { batchSize: v.number() }
 
-  RETENTION_DAYS = 4
-  DEFAULT_BATCH_SIZE = 500
-  STALE_TIMEOUT = 12 * 60 * 60 * 1000  // 12h
-
-  1. batchSize = args.batchSize ?? DEFAULT_BATCH_SIZE
-  2. cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000
-  3. startedAt = args.startedAt ?? Date.now()
-  4. isFirstBatch = (args.deletedSoFar ?? 0) === 0
-
-  // Guard от дублирующего запуска
-  5. Если isFirstBatch:
-     a. Проверить heartbeat "cleanup-realtime-metrics"
-     b. Если status === "running" И startedAt < 12h назад → skip, console.log "[cleanup-realtime] Already running, skipping"
-     c. Записать heartbeat status: "running", startedAt: startedAt
-
-  6. try:
-     a. Запрос: metricsRealtime.withIndex("by_timestamp", q => q.lt("timestamp", cutoff)).take(batchSize)
-     b. Удалить каждую запись через ctx.db.delete()
-     c. runningTotal = (args.deletedSoFar ?? 0) + deleted
-     d. elapsed = (Date.now() - startedAt) / 1000
-     e. rate = runningTotal / (elapsed / 60)  // записей/мин
-     f. Если удалено == batchSize →
-        - Console log: "[cleanup-realtime] Batch: deleted ${deleted}, total ${runningTotal}, rate ~${rate}/min, continuing..."
-        - ctx.scheduler.runAfter(100, cleanup, { batchSize, deletedSoFar: runningTotal, startedAt })
-     g. Если удалено < batchSize → завершение:
-        - Console log: "[cleanup-realtime] Complete. Deleted ${runningTotal} records in ${elapsed}s"
-        - Записать heartbeat status: "completed"
-  7. catch (error):
-     - Console error: "[cleanup-realtime] ERROR: ${message}. Stopped at ${runningTotal} deleted. Will retry next cron cycle."
-     - Записать heartbeat status: "failed", error: message
-     - НЕ reschedule — подождать следующий cron через 24h
-  8. Return { deleted: count, hasMore: boolean }
+  1. cutoff = Date.now() - RETENTION_DAYS * 86_400_000
+  2. records = await ctx.db
+       .query("metricsRealtime")
+       .withIndex("by_timestamp", q => q.lt("timestamp", cutoff))
+       .take(args.batchSize)
+  3. for (const record of records):
+       await ctx.db.delete(record._id)
+  4. return { deleted: records.length, hasMore: records.length === args.batchSize }
 ```
+
+**sleep в action:** `const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))` — стандартный паттерн, уже используется в `vkApi.ts`, `reports.ts`, `telegram.ts`.
+
+**Почему Action + Mutation (а не одна Mutation):**
+- Mutation транзакционная — при ошибке откатывается ВСЁ, включая heartbeat "failed". Action не транзакционная — catch реально пишет "failed".
+- Паттерн 1:1 с `syncAll` (internalAction) — знакомый, обкатанный в проекте.
+- `sleep(100ms)` в action вместо `ctx.scheduler.runAfter(100)` — не забивает scheduler queue 48K jobs.
 
 **Почему батч 500:** Convex mutation лимит ~8 сек. 500 delete-операций укладывается с запасом.
 
-**Почему `runAfter(100)` а не `runAfter(0)`:** при первом запуске ~48 000 батчей. `runAfter(0)` создаёт все jobs мгновенно в scheduler queue. 100ms throttle распределяет нагрузку и не мешает другим scheduled jobs (syncAll, правила).
-
 **Configurable batch size:** `batchSize` как аргумент с дефолтом 500 — позволяет тюнить при ручном вызове без передеплоя.
 
-**Error handling:** Convex mutation — транзакционная. Если `ctx.db.delete()` падает — весь батч откатывается. try/catch ловит ошибку, записывает failed heartbeat, и cleanup останавливается до следующего cron запуска через 24h. Это предотвращает бесконечный retry при систематических ошибках.
+**Duplicate guard:** Heartbeat "running" + stale timeout 12h. Если cron запускает cleanup, а предыдущий ещё работает — новый skip-ается. Если предыдущий завис > 12h — считается зомби, запускается заново.
 
-**Duplicate guard:** Heartbeat "running" + stale timeout 12h. Если cron запускает cleanup, а предыдущий ещё работает — новый skip-ается. Если предыдущий завис > 12h без записи "failed" — считается зомби, запускается заново.
-
-**Heartbeat lifecycle:**
-1. Первый батч → heartbeat `status: "running"`
-2. Промежуточные батчи → heartbeat не трогается (только console.log)
-3. Последний батч → heartbeat `status: "completed"`
-4. Ошибка → heartbeat `status: "failed"` + error message
-
-Используется `upsertCronHeartbeat` из `syncMetrics.ts` (строки 593-622) — не дублируем код.
+**Порог 12 часов:** используется в двух местах — `CLEANUP_MAX_RUNNING_MS` в action guard и `maxRunningMin: 720` в healthCheck. Оба = 12 часов. При изменении — менять синхронно.
 
 ### Cron
 
@@ -134,31 +160,56 @@ convex/crons.ts:
 ### Мониторинг
 
 **Heartbeat:**
-Записывается через `upsertCronHeartbeat` (из `syncMetrics.ts`) в 3 точках lifecycle:
+Записывается через `upsertCronHeartbeat` в 3 точках lifecycle:
 ```ts
-// 1. Начало (первый батч)
-{ name: "cleanup-realtime-metrics", startedAt, status: "running" }
+// 1. Начало
+upsertCronHeartbeat({ name: "cleanup-realtime-metrics", status: "running" })
 
-// 2. Завершение (последний батч)
-{ name: "cleanup-realtime-metrics", startedAt, finishedAt: Date.now(), status: "completed" }
+// 2. Завершение
+upsertCronHeartbeat({ name: "cleanup-realtime-metrics", status: "completed" })
 
 // 3. Ошибка
-{ name: "cleanup-realtime-metrics", startedAt, finishedAt: Date.now(), status: "failed", error: message }
+upsertCronHeartbeat({ name: "cleanup-realtime-metrics", status: "failed", error: message })
 ```
 
-healthCheck уже умеет детектить stuck "running" heartbeats — cleanup автоматически попадёт под мониторинг.
-
 **Health check:**
-В `healthCheck.ts` добавить проверку:
-- Есть ли heartbeat `cleanup-realtime-metrics` со статусом `completed` за последние 25 часов?
-- Нет → warning: "Cleanup realtime metrics не выполнялся"
-- Статус `running` + startedAt > 12h → warning: "Cleanup realtime metrics завис"
+В `healthCheck.ts:checkCronHeartbeats` добавить в `CRON_CONFIGS`:
 
-**Console log (с rate):**
-- Каждый батч: `[cleanup-realtime] Batch: deleted ${count}, total ${runningTotal}, rate ~${rate}/min, continuing...`
-- Финал: `[cleanup-realtime] Complete. Deleted ${total} records in ${duration}s`
-- Ошибка: `[cleanup-realtime] ERROR: ${message}. Stopped at ${runningTotal} deleted. Will retry next cron cycle.`
-- Skip (duplicate): `[cleanup-realtime] Already running (started ${minutesAgo}min ago), skipping`
+```ts
+{ name: "cleanup-realtime-metrics", label: "cleanup-realtime", maxStaleMin: 25 * 60, maxRunningMin: 12 * 60 },
+```
+
+Текущий stuck detection использует hardcoded `> 10` минут (healthCheck.ts:92). Cleanup может легитимно работать 2-8 часов (первый запуск). Нужно заменить hardcoded порог на `cfg.maxRunningMin ?? 10`:
+
+```ts
+// Было:
+if (hb.status === "running" && minutesAgo(hb.startedAt) > 10) {
+
+// Стало:
+const maxRunMin = cfg.maxRunningMin ?? 10;
+if (hb.status === "running" && minutesAgo(hb.startedAt) > maxRunMin) {
+```
+
+Добавить поле `maxRunningMin` в тип `CRON_CONFIGS`:
+```ts
+const CRON_CONFIGS: Array<{
+  name: string;
+  label: string;
+  maxStaleMin?: number;
+  maxRunningMin?: number;  // ← новое поле
+}> = [
+  { name: "syncAll", label: "sync-metrics", maxStaleMin: 10 },
+  // ... существующие записи без изменений (дефолт 10 мин) ...
+  { name: "cleanup-realtime-metrics", label: "cleanup-realtime", maxStaleMin: 25 * 60, maxRunningMin: 12 * 60 },
+];
+```
+
+**Console log (прореженный):**
+- Каждые 100 батчей (50K записей): `[cleanup-realtime] Progress: deleted ${total}, rate ~${rate}/min, elapsed ${elapsed}s`
+- Финал: `[cleanup-realtime] Complete. Deleted ${total} records in ${elapsed}s (~${min} min)`
+- Ошибка: `[cleanup-realtime] ERROR: ${message}. Stopped at ${total} deleted. Will retry next cron cycle.`
+- Skip: `[cleanup-realtime] Already running (started ${minutesAgo}min ago), skipping`
+- Zombie: `[cleanup-realtime] Previous run STUCK (${minutesAgo}min ago, >720min). Overriding.`
 
 ### Оптимизация запросов (используют новый `by_adId_timestamp`)
 
@@ -206,33 +257,76 @@ return records;
 
 Prefix match по `adId` работает идентично старому `by_adId`. `.order("desc")` сортирует по `timestamp` (второе поле индекса) — получаем последнюю запись за O(1).
 
-### Удаление `saveRealtimePublic`
+### Тестовые мутации (`saveRealtimePublic`, `saveDailyPublic`)
 
-`saveRealtimePublic` (metrics.ts:92-112) — публичная мутация-дубль `saveRealtime`. Тестовый код в проде. Удаляем в этом же PR, т.к. уже трогаем `metrics.ts`. Минимальный риск, один файл.
+НЕ удаляем. Обе используются в тестах:
+- `saveRealtimePublic` → `metrics.test.ts:32,63,73`, `ruleEngine.test.ts:404`
+- `saveDailyPublic` → `metrics.test.ts:98,134,145,172,196,244,277,287`
+
+Удаление сломает тесты. Очистка тестовых мутаций — отдельная задача (перевод тестов на `internal.*`).
 
 ### Первый запуск
 
 ~24 млн записей / 500 за батч = ~48 000 вызовов.
-При 100ms throttle + 50-500ms execution = 150-600ms на батч → **2-8 часов**.
-Разброс зависит от нагрузки на сервер. Работает в фоне через scheduler, не блокирует sync и правила.
+При 100ms delay + 50-500ms execution = 150-600ms на батч → **2-8 часов** (если action не прерывается timeout-ом).
+Разброс зависит от нагрузки на сервер. Работает в фоне внутри action, не блокирует sync и правила.
 
 После первого cleanup: retention 4 дня при 70-280K строк/день = **280K-1.1M записей** (вместо 24 млн).
 
-## Файлы
+### Устойчивость к action timeout
+
+Self-hosted Convex может иметь лимит на длительность action (~10 мин, точное значение зависит от версии backend). Дизайн устойчив к этому:
+
+**Почему безопасно:**
+- Каждый `deleteRealtimeBatch` — отдельная mutation-транзакция, коммитится независимо
+- Если action убит timeout-ом — уже удалённые записи остаются удалёнными, прогресс не теряется
+- Heartbeat остаётся "running" → следующий cron (через 24h) видит elapsed > 12h → zombie override → новый cleanup продолжает с того места
+
+**Оценка при ~10-мин timeout:**
+- За 10 мин: ~100ms delay + ~200ms execution = ~3300 батчей × 500 = **~1.65M записей за запуск**
+- 1 запуск/день (cron 05:00 UTC): ~1.65M/день → **полная очистка 24M за ~14 дней**
+- Каждый запуск освобождает ~5 ГБ (при ~3 КБ/запись)
+- Новые данные: ~280K записей/день (~840 МБ) — чистый выигрыш ~4 ГБ/день
+
+**Ускорение через ручной запуск:**
+Для быстрой первичной очистки можно вызвать `cleanupOldRealtimeMetrics` вручную из Convex Dashboard (Functions → internal.metrics.cleanupOldRealtimeMetrics → Run). Каждый ручной запуск удалит ещё ~1.65M записей. Duplicate guard не мешает: если предыдущий run завершился (status: "completed" или "failed"), новый запустится сразу. Если предыдущий ещё "running" из-за timeout — подождать пока elapsed > 12h или вручную патчнуть heartbeat через Dashboard.
+
+`batchSize` передаётся как аргумент (дефолт 500) — можно увеличить при ручном вызове для ускорения.
+
+## Порядок деплоя (двухэтапный)
+
+**Проблема:** замена индексов в одном деплое сломает рабочие запросы. Старый `by_adId` удаляется, новый `by_adId_timestamp` ещё строится на 24 млн записях (часы) → `getRealtimeHistory` и `getRealtimeByAd` падают.
+
+### Deploy 1: добавить индексы + cleanup код
 
 | Файл | Изменение |
 |---|---|
-| `convex/schema.ts` | Удалить `by_adId` + `by_accountId_timestamp`, добавить `by_adId_timestamp` + `by_timestamp` |
-| `convex/metrics.ts` | + `cleanupOldRealtimeMetrics` (internalMutation с heartbeat lifecycle, guard, configurable batch) |
-| `convex/metrics.ts` | Удалить `saveRealtimePublic` (тестовый код) |
-| `convex/metrics.ts` | `getRealtimeByAd`: обновить на `by_adId_timestamp` (prefix match) |
+| `convex/schema.ts` | **Добавить** `by_adId_timestamp` + `by_timestamp`. Старые `by_adId` и `by_accountId_timestamp` НЕ трогаем |
+| `convex/metrics.ts` | + константы cleanup, + `deleteRealtimeBatch`, + `cleanupOldRealtimeMetrics` |
 | `convex/crons.ts` | + cron `cleanup-old-realtime-metrics` |
-| `convex/healthCheck.ts` | + проверка heartbeat cleanup (completed за 25h, stuck > 12h) |
-| `convex/ruleEngine.ts` | `getRealtimeHistory`: range scan по `by_adId_timestamp` вместо full scan + JS filter |
+| `convex/healthCheck.ts` | + `maxRunningMin` в тип, заменить hardcoded `> 10`, + cleanup в CRON_CONFIGS |
+
+**Риск:** 0. Старые запросы работают на старых индексах. Cleanup использует только новый `by_timestamp`. Cron начнёт чистить данные сразу после построения `by_timestamp`.
+
+### Пауза: дождаться построения индексов
+
+Проверить в Convex dashboard (`http://178.172.235.49:6792`) что `by_adId_timestamp` и `by_timestamp` построены (статус Ready). На 24 млн записях — ориентировочно 10-60 минут.
+
+### Deploy 2: переключить запросы + удалить старые индексы
+
+| Файл | Изменение |
+|---|---|
+| `convex/schema.ts` | **Удалить** `by_adId` + `by_accountId_timestamp` |
+| `convex/ruleEngine.ts` | `getRealtimeHistory`: переключить на `by_adId_timestamp` с range scan |
+| `convex/metrics.ts` | `getRealtimeByAd`: переключить на `by_adId_timestamp` |
 | `.claude/rules/database-schema.md` | Обновить индексы metricsRealtime |
 
-## Что НЕ удаляется
+**Риск:** 0. Новые индексы уже построены, переключение мгновенное.
 
+## Что НЕ меняется
+
+- `saveRealtimePublic` / `saveDailyPublic` — используются в тестах, удаление отдельной задачей
 - `metricsRealtime` моложе 4 дней — нужны для правил
 - `metricsDaily` — историческая аналитика
 - `actionLogs` — отдельная задача (125K записей не критично)
+- `upsertCronHeartbeat` — используется as-is, без модификаций
