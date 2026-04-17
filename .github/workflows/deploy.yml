@@ -87,7 +87,7 @@ jobs:
             const ct = gcmsiv(aesKey, nonce, ver).encrypt(payload);
             console.log(name + '|' + Buffer.concat([ver, nonce, Buffer.from(ct)]).toString('hex'));
           ")
-          CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY" npx convex deploy --yes
+          CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY" npx convex deploy --yes --allow-deleting-large-indexes
         env:
           CONVEX_SELF_HOSTED_URL: ${{ secrets.CONVEX_SELF_HOSTED_URL }}
           CONVEX_INSTANCE_NAME: ${{ secrets.CONVEX_INSTANCE_NAME }}
