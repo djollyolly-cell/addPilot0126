@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, internalMutation, internalAction } from "./_generated/server";
+import { mutation, query, internalMutation, internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 // ── Cleanup constants ──
@@ -321,5 +321,25 @@ export const cleanupOldRealtimeMetrics = internalAction({
         error: message,
       });
     }
+  },
+});
+
+/** Fetch metricsDaily for an account across a date range. Filters out rows with null campaignId. */
+export const getByAccountDateRange = internalQuery({
+  args: {
+    accountId: v.id("adAccounts"),
+    fromDate: v.string(),
+    toDate: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_accountId_date", (q) =>
+        q.eq("accountId", args.accountId)
+          .gte("date", args.fromDate)
+          .lte("date", args.toDate)
+      )
+      .filter((q) => q.neq(q.field("campaignId"), undefined))
+      .collect();
   },
 });
