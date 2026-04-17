@@ -1944,7 +1944,7 @@ export const logBudgetAction = internalMutation({
     accountId: v.id("adAccounts"),
     campaignId: v.string(),
     campaignName: v.string(),
-    actionType: v.union(v.literal("budget_increased"), v.literal("budget_reset")),
+    actionType: v.union(v.literal("budget_increased"), v.literal("budget_reset"), v.literal("zero_spend_alert")),
     oldBudget: v.number(),
     newBudget: v.number(),
     step: v.number(),
@@ -1962,7 +1962,9 @@ export const logBudgetAction = internalMutation({
       actionType: args.actionType,
       reason: args.actionType === "budget_increased"
         ? `Бюджет увеличен: ${args.oldBudget}₽ → ${args.newBudget}₽ (+${args.step}₽)`
-        : `Бюджет сброшен до ${args.newBudget}₽`,
+        : args.actionType === "budget_reset"
+          ? `Бюджет сброшен до ${args.newBudget}₽`
+          : args.error || `Кампания без расхода`,
       metricsSnapshot: {
         spent: args.spentToday ?? 0,
         leads: 0,

@@ -214,7 +214,8 @@ export default defineSchema({
       v.literal("notified"),
       v.literal("stopped_and_notified"),
       v.literal("budget_increased"),
-      v.literal("budget_reset")
+      v.literal("budget_reset"),
+      v.literal("zero_spend_alert")
     ),
     reason: v.string(),
     metricsSnapshot: v.object({
