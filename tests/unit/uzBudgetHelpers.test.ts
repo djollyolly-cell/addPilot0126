@@ -9,6 +9,7 @@ import {
   filterCampaignsForRule,
   shouldTriggerBudgetIncrease,
   calculateNewBudget,
+  getZeroSpendCampaigns,
   type UzRule,
   type VkCampaign,
 } from "../../convex/uzBudgetHelpers";
@@ -227,5 +228,123 @@ describe("calculateNewBudget", () => {
   it("handles large gap correctly", () => {
     // gap = 200 - 100 = 100, effectiveStep = 100 + 10 = 110
     expect(calculateNewBudget(100, 200, 10, 300)).toBe(210);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// getZeroSpendCampaigns
+// ═══════════════════════════════════════════════════════════
+
+describe("getZeroSpendCampaigns", () => {
+  const makeRule = (id: string, accountId: string, campaignIds: string[]): UzRule => ({
+    _id: id as any,
+    userId: "user1" as any,
+    name: `rule-${id}`,
+    targetAccountIds: [accountId] as any[],
+    targetCampaignIds: campaignIds,
+    conditions: { initialBudget: 120, budgetStep: 1, metric: "budget_manage", operator: ">", value: 1, resetDaily: true },
+    actions: { notify: true, stopAd: false, notifyOnEveryIncrease: false, notifyOnKeyEvents: true },
+  });
+
+  function buildMetrics(entries: { accountId: string; date: string; campaignId: string; spent: number }[]): Map<string, { campaignId: string; spent: number }[]> {
+    const map = new Map<string, { campaignId: string; spent: number }[]>();
+    for (const e of entries) {
+      const key = `${e.accountId}|${e.date}`;
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push({ campaignId: e.campaignId, spent: e.spent });
+    }
+    return map;
+  }
+
+  it("detects campaign with 0 spend for 2+ days", () => {
+    const rules = [makeRule("r1", "acc1", ["c1"])];
+    const metrics = buildMetrics([
+      { accountId: "acc1", date: "2026-04-15", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-14", campaignId: "c1", spent: 0 },
+      // Account has data for these 2 days only — function stops at day without data
+    ]);
+    const result = getZeroSpendCampaigns(rules, metrics, "2026-04-16", 2);
+    expect(result).toHaveLength(1);
+    expect(result[0].campaignId).toBe("c1");
+    expect(result[0].zeroDays).toBe(2);
+  });
+
+  it("returns empty when spend exists yesterday", () => {
+    const rules = [makeRule("r1", "acc1", ["c1"])];
+    const metrics = buildMetrics([
+      { accountId: "acc1", date: "2026-04-15", campaignId: "c1", spent: 50 },
+      { accountId: "acc1", date: "2026-04-14", campaignId: "c1", spent: 0 },
+    ]);
+    const result = getZeroSpendCampaigns(rules, metrics, "2026-04-16", 2);
+    expect(result).toHaveLength(0);
+  });
+
+  it("returns empty when only 1 day of zero spend (minDays=2)", () => {
+    const rules = [makeRule("r1", "acc1", ["c1"])];
+    const metrics = buildMetrics([
+      { accountId: "acc1", date: "2026-04-15", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-14", campaignId: "c1", spent: 100 },
+    ]);
+    const result = getZeroSpendCampaigns(rules, metrics, "2026-04-16", 2);
+    expect(result).toHaveLength(0);
+  });
+
+  it("counts consecutive zero days correctly (5 days)", () => {
+    const rules = [makeRule("r1", "acc1", ["c1"])];
+    // Account has data for 5 days — c1 has 0 spend on all 5
+    const metrics = buildMetrics([
+      { accountId: "acc1", date: "2026-04-15", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-14", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-13", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-12", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-11", campaignId: "c1", spent: 0 },
+      // No data for 2026-04-10 and earlier → stops counting at 5
+    ]);
+    const result = getZeroSpendCampaigns(rules, metrics, "2026-04-16", 2);
+    expect(result).toHaveLength(1);
+    expect(result[0].zeroDays).toBe(5);
+  });
+
+  it("stops counting at first non-zero day", () => {
+    const rules = [makeRule("r1", "acc1", ["c1"])];
+    const metrics = buildMetrics([
+      { accountId: "acc1", date: "2026-04-15", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-14", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-13", campaignId: "c1", spent: 50 },
+      { accountId: "acc1", date: "2026-04-12", campaignId: "c1", spent: 0 },
+    ]);
+    const result = getZeroSpendCampaigns(rules, metrics, "2026-04-16", 2);
+    expect(result[0].zeroDays).toBe(2);
+  });
+
+  it("deduplicates by campaignId across rules", () => {
+    const rules = [
+      makeRule("r1", "acc1", ["c1"]),
+      makeRule("r2", "acc1", ["c1"]),
+    ];
+    const metrics = buildMetrics([
+      { accountId: "acc1", date: "2026-04-15", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-14", campaignId: "c1", spent: 0 },
+    ]);
+    const result = getZeroSpendCampaigns(rules, metrics, "2026-04-16", 2);
+    expect(result).toHaveLength(1);
+  });
+
+  it("skips rules without resetDaily", () => {
+    const rule = makeRule("r1", "acc1", ["c1"]);
+    (rule.conditions as any).resetDaily = false;
+    const metrics = buildMetrics([
+      { accountId: "acc1", date: "2026-04-15", campaignId: "c1", spent: 0 },
+      { accountId: "acc1", date: "2026-04-14", campaignId: "c1", spent: 0 },
+    ]);
+    const result = getZeroSpendCampaigns([rule], metrics, "2026-04-16", 2);
+    expect(result).toHaveLength(0);
+  });
+
+  it("handles no metrics data (campaign < 2 days old)", () => {
+    const rules = [makeRule("r1", "acc1", ["c1"])];
+    const metrics = new Map();
+    const result = getZeroSpendCampaigns(rules, metrics, "2026-04-16", 2);
+    expect(result).toHaveLength(0);
   });
 });

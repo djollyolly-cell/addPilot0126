@@ -16,6 +16,7 @@ export interface UzRule {
     initialBudget?: number;
     budgetStep?: number;
     maxDailyBudget?: number;
+    resetDaily?: boolean;
     metric: string;
     operator: string;
     value: number;
@@ -136,4 +137,78 @@ export function calculateNewBudget(
     newLimit = Math.min(newLimit, maxDailyBudget);
   }
   return newLimit;
+}
+
+// ─── Zero-spend detection ───────────────────────────────
+
+export interface ZeroSpendCampaign {
+  ruleId: Id<"rules">;
+  ruleName: string;
+  userId: Id<"users">;
+  accountId: Id<"adAccounts">;
+  campaignId: string;
+  zeroDays: number;
+}
+
+/**
+ * Find campaigns targeted by UZ rules that have 0₽ spend for N+ consecutive days.
+ * Counts backwards from yesterday (today is incomplete).
+ * Pure function — caller provides metrics data.
+ */
+export function getZeroSpendCampaigns(
+  rules: UzRule[],
+  metricsByAccountDate: Map<string, { campaignId: string; spent: number }[]>,
+  today: string,
+  minDays: number = 2
+): ZeroSpendCampaign[] {
+  const seen = new Map<string, ZeroSpendCampaign>();
+
+  // Build date list: yesterday back 7 days
+  const dates: string[] = [];
+  const todayDate = new Date(today + "T00:00:00Z");
+  for (let i = 1; i <= 7; i++) {
+    const d = new Date(todayDate);
+    d.setUTCDate(d.getUTCDate() - i);
+    dates.push(d.toISOString().slice(0, 10));
+  }
+
+  for (const rule of rules) {
+    if (!rule.conditions.resetDaily) continue;
+
+    for (const accountId of rule.targetAccountIds) {
+      const accIdStr = accountId as string;
+
+      for (const campaignId of rule.targetCampaignIds ?? []) {
+        let zeroDays = 0;
+
+        for (const date of dates) {
+          const key = `${accIdStr}|${date}`;
+          const dayMetrics = metricsByAccountDate.get(key);
+          // No data for this account+date means sync didn't run → stop counting
+          if (!dayMetrics || dayMetrics.length === 0) break;
+          const campaignMetrics = dayMetrics.filter((m) => m.campaignId === campaignId);
+          const totalSpent = campaignMetrics.reduce((s, m) => s + m.spent, 0);
+
+          if (totalSpent > 0) break;
+          zeroDays++;
+        }
+
+        if (zeroDays >= minDays) {
+          const existing = seen.get(campaignId);
+          if (!existing || zeroDays > existing.zeroDays) {
+            seen.set(campaignId, {
+              ruleId: rule._id,
+              ruleName: rule.name,
+              userId: rule.userId,
+              accountId,
+              campaignId,
+              zeroDays,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return Array.from(seen.values());
 }
