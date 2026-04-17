@@ -6,6 +6,7 @@
 import { describe, it, expect } from "vitest";
 import {
   evaluateCondition,
+  evaluateConditionTrace,
   calculateSavings,
   minutesUntilEndOfDay,
   matchesCampaignFilter,
@@ -336,5 +337,134 @@ describe("matchesCampaignFilter", () => {
 
   it("matches when both adGroupId and adPlanId match", () => {
     expect(matchesCampaignFilter(["100", "200"], "100", "200")).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// evaluateConditionTrace — returns step code + reason
+// ═══════════════════════════════════════════════════════════
+
+describe("evaluateConditionTrace", () => {
+  describe("cpl_limit", () => {
+    const condition: RuleCondition = { metric: "cpl", operator: ">", value: 500 };
+
+    it("returns triggered when CPL exceeds limit", () => {
+      const metrics: MetricsSnapshot = { spent: 1200, leads: 2, impressions: 1000, clicks: 50 };
+      const result = evaluateConditionTrace("cpl_limit", condition, metrics);
+      expect(result.triggered).toBe(true);
+      expect(result.stoppedAt).toBe("triggered");
+      expect(result.reason).toContain("600");
+    });
+
+    it("returns cpl_undefined when leads=0", () => {
+      const metrics: MetricsSnapshot = { spent: 1000, leads: 0, impressions: 500, clicks: 30 };
+      const result = evaluateConditionTrace("cpl_limit", condition, metrics);
+      expect(result.triggered).toBe(false);
+      expect(result.stoppedAt).toBe("step6_cpl_undefined");
+    });
+
+    it("returns condition_not_met when CPL within limit", () => {
+      const metrics: MetricsSnapshot = { spent: 800, leads: 2, impressions: 1000, clicks: 50 };
+      const result = evaluateConditionTrace("cpl_limit", condition, metrics);
+      expect(result.triggered).toBe(false);
+      expect(result.stoppedAt).toBe("step6_condition_not_met");
+      expect(result.reason).toContain("400");
+    });
+  });
+
+  describe("spend_no_leads", () => {
+    const condition: RuleCondition = { metric: "spent", operator: ">", value: 1000 };
+
+    it("returns triggered when spent > value and leads=0", () => {
+      const metrics: MetricsSnapshot = { spent: 1500, leads: 0, impressions: 500, clicks: 30 };
+      const result = evaluateConditionTrace("spend_no_leads", condition, metrics);
+      expect(result.triggered).toBe(true);
+      expect(result.stoppedAt).toBe("triggered");
+    });
+
+    it("returns condition_not_met when has leads", () => {
+      const metrics: MetricsSnapshot = { spent: 1500, leads: 1, impressions: 500, clicks: 30 };
+      const result = evaluateConditionTrace("spend_no_leads", condition, metrics);
+      expect(result.triggered).toBe(false);
+      expect(result.stoppedAt).toBe("step6_condition_not_met");
+    });
+  });
+
+  describe("clicks_no_leads", () => {
+    const condition: RuleCondition = { metric: "clicks", operator: ">=", value: 100 };
+
+    it("returns triggered when clicks >= value and leads=0", () => {
+      const metrics: MetricsSnapshot = { spent: 500, leads: 0, impressions: 1000, clicks: 150 };
+      const result = evaluateConditionTrace("clicks_no_leads", condition, metrics);
+      expect(result.triggered).toBe(true);
+      expect(result.stoppedAt).toBe("triggered");
+    });
+
+    it("returns condition_not_met when clicks below threshold", () => {
+      const metrics: MetricsSnapshot = { spent: 500, leads: 0, impressions: 1000, clicks: 50 };
+      const result = evaluateConditionTrace("clicks_no_leads", condition, metrics);
+      expect(result.triggered).toBe(false);
+      expect(result.stoppedAt).toBe("step6_condition_not_met");
+    });
+  });
+
+  describe("fast_spend", () => {
+    const condition: RuleCondition = { metric: "spent", operator: ">", value: 50 };
+
+    it("returns condition_not_met when no spend history", () => {
+      const metrics: MetricsSnapshot = { spent: 500, leads: 0, impressions: 100, clicks: 10 };
+      const result = evaluateConditionTrace("fast_spend", condition, metrics);
+      expect(result.triggered).toBe(false);
+      expect(result.stoppedAt).toBe("step6_condition_not_met");
+    });
+
+    it("returns triggered when percent exceeds value", () => {
+      const metrics: MetricsSnapshot = { spent: 500, leads: 0, impressions: 100, clicks: 10 };
+      const context = {
+        spendHistory: [
+          { spent: 100, timestamp: 1000 },
+          { spent: 700, timestamp: 2000 },
+        ],
+        dailyBudget: 1000,
+      };
+      const result = evaluateConditionTrace("fast_spend", condition, metrics, context);
+      expect(result.triggered).toBe(true);
+      expect(result.stoppedAt).toBe("triggered");
+    });
+  });
+
+  describe("min_ctr", () => {
+    const condition: RuleCondition = { metric: "ctr", operator: "<", value: 1.0 };
+
+    it("returns triggered when CTR below minimum", () => {
+      const metrics: MetricsSnapshot = { spent: 100, leads: 0, impressions: 1000, clicks: 5 };
+      const result = evaluateConditionTrace("min_ctr", condition, metrics);
+      expect(result.triggered).toBe(true);
+      expect(result.stoppedAt).toBe("triggered");
+    });
+
+    it("returns ctr_undefined when no impressions", () => {
+      const metrics: MetricsSnapshot = { spent: 0, leads: 0, impressions: 0, clicks: 0 };
+      const result = evaluateConditionTrace("min_ctr", condition, metrics);
+      expect(result.triggered).toBe(false);
+      expect(result.stoppedAt).toBe("step6_ctr_undefined");
+    });
+  });
+
+  describe("new_lead", () => {
+    const condition: RuleCondition = { metric: "leads", operator: ">", value: 0 };
+
+    it("returns triggered when leads > 0", () => {
+      const metrics: MetricsSnapshot = { spent: 100, leads: 1, impressions: 1000, clicks: 50 };
+      const result = evaluateConditionTrace("new_lead", condition, metrics);
+      expect(result.triggered).toBe(true);
+    });
+
+    it("returns condition_not_met when no leads", () => {
+      const metrics: MetricsSnapshot = { spent: 100, leads: 0, impressions: 1000, clicks: 50 };
+      const result = evaluateConditionTrace("new_lead", condition, metrics);
+      expect(result.triggered).toBe(false);
+      expect(result.stoppedAt).toBe("step6_condition_not_met");
+    });
   });
 });
