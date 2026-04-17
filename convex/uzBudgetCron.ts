@@ -125,11 +125,49 @@ export const resetBudgets = internalAction({
           // Use filterCampaignsForRule to resolve ad_plan_id matches
           const matchedCampaigns = filterCampaignsForRule(campaigns, rule);
 
+          // Fetch metrics for last 2 days to detect zero-spend campaigns
+          const { getZeroSpendCampaigns } = await import("./uzBudgetHelpers");
+          const mskFmt = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" });
+          const todayStr = mskFmt.format(new Date());
+          const todayDt = new Date(todayStr + "T00:00:00Z");
+          const twoDaysAgoDt = new Date(todayDt);
+          twoDaysAgoDt.setUTCDate(twoDaysAgoDt.getUTCDate() - 2);
+          const fromDateStr = twoDaysAgoDt.toISOString().slice(0, 10);
+          const yesterdayDt = new Date(todayDt);
+          yesterdayDt.setUTCDate(yesterdayDt.getUTCDate() - 1);
+          const toDateStr = yesterdayDt.toISOString().slice(0, 10);
+
+          const metricsMap = new Map<string, { campaignId: string; spent: number }[]>();
+          try {
+            const rows = await ctx.runQuery(internal.metrics.getByAccountDateRange, {
+              accountId,
+              fromDate: fromDateStr,
+              toDate: toDateStr,
+            });
+            for (const row of rows as any[]) {
+              const key = `${accountId as string}|${row.date}`;
+              if (!metricsMap.has(key)) metricsMap.set(key, []);
+              metricsMap.get(key)!.push({ campaignId: row.campaignId, spent: row.spent });
+            }
+          } catch (err) {
+            console.warn(`[uz_budget_reset] Failed to fetch metrics for skip check:`, err);
+          }
+
+          const zeroSpendCampaigns = getZeroSpendCampaigns([rule] as any[], metricsMap, todayStr, 2);
+          const zeroSpendIds = new Set(zeroSpendCampaigns.map((z) => z.campaignId));
+
           const resetNames: string[] = [];
           for (const campaign of matchedCampaigns) {
             const campaignId = campaign.id;
             const campaignIdStr = String(campaignId);
             const campaignName = campaign.name || `Группа #${campaignIdStr}`;
+
+            // Skip reset for zero-spend campaigns where budget is already at initial
+            const currentBudget = Number(campaign.budget_limit_day || "0");
+            if (zeroSpendIds.has(campaignIdStr) && currentBudget === initialBudget) {
+              console.log(`[uz_budget_reset] Skipped reset for «${campaignName}» — 0₽ spend 2+ days, budget already at ${initialBudget}₽`);
+              continue;
+            }
 
             try {
               await ctx.runAction(internal.vkApi.setCampaignBudget, {
