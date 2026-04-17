@@ -374,6 +374,222 @@ export const getRecentBudgetLogs = internalQuery({
   },
 });
 
+// ─── Block 4: Zero-spend UZ campaigns ───
+
+interface BannerStatus {
+  id: number;
+  status: string;
+  moderation_status: string;
+}
+
+function diagnoseReason(
+  campaignStatus: string | undefined,
+  campaignDelivery: string | undefined,
+  banners: BannerStatus[]
+): string {
+  if (banners.some((b) => b.moderation_status === "banned")) return "баннер отклонён модерацией";
+  if (banners.some((b) => b.moderation_status === "in_progress")) return "баннер на модерации";
+  if (campaignStatus === "blocked") return "кампания заблокирована";
+  if (campaignDelivery === "not_delivering") return "кампания не откручивается";
+  if (banners.length === 0) return "нет баннеров в кампании";
+  return "причина не определена — проверьте ставки и аудиторию";
+}
+
+export const checkZeroSpendUzCampaigns = internalAction({
+  args: {},
+  handler: async (ctx): Promise<CheckResult> => {
+    const { getZeroSpendCampaigns } = await import("./uzBudgetHelpers");
+    const uzRules = await ctx.runQuery(internal.ruleEngine.getActiveUzRules) as any[];
+
+    if (uzRules.length === 0) {
+      return { name: "Кампании без расхода", status: "ok", message: "нет активных УЗ-правил" };
+    }
+
+    // Collect account IDs
+    const accountIds = new Set<string>();
+    for (const r of uzRules) {
+      for (const accId of r.targetAccountIds) accountIds.add(accId as string);
+    }
+
+    // Compute dates in MSK
+    const now = new Date();
+    const mskFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Moscow", year: "numeric", month: "2-digit", day: "2-digit" });
+    const today = mskFormatter.format(now);
+    const sevenDaysAgo = new Date(now);
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const fromDate = mskFormatter.format(sevenDaysAgo);
+    const todayDate = new Date(today + "T00:00:00Z");
+    const yesterday = new Date(todayDate);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    const toDate = yesterday.toISOString().slice(0, 10);
+
+    // Fetch metrics for all accounts
+    const metricsMap = new Map<string, { campaignId: string; spent: number }[]>();
+    for (const accId of accountIds) {
+      try {
+        const rows = await ctx.runQuery(internal.metrics.getByAccountDateRange, {
+          accountId: accId as Id<"adAccounts">,
+          fromDate,
+          toDate,
+        });
+        for (const row of rows as any[]) {
+          const key = `${accId}|${row.date}`;
+          if (!metricsMap.has(key)) metricsMap.set(key, []);
+          metricsMap.get(key)!.push({ campaignId: row.campaignId, spent: row.spent });
+        }
+      } catch (err) {
+        console.warn(`[zeroSpend] Failed to fetch metrics for ${accId}:`, err);
+      }
+    }
+
+    // Find zero-spend campaigns
+    const zeroSpend = getZeroSpendCampaigns(uzRules, metricsMap, today, 2);
+
+    if (zeroSpend.length === 0) {
+      return { name: "Кампании без расхода", status: "ok", message: "все УЗ-кампании с расходом" };
+    }
+
+    // Diagnose each via VK API + check dedup + send user alerts
+    const details: string[] = [];
+    const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
+    // Group by account for API efficiency
+    const byAccount = new Map<string, typeof zeroSpend>();
+    for (const zs of zeroSpend) {
+      const accId = zs.accountId as string;
+      if (!byAccount.has(accId)) byAccount.set(accId, []);
+      byAccount.get(accId)!.push(zs);
+    }
+
+    for (const [accId, campaigns] of byAccount) {
+      let token: string | null = null;
+      let vkCampaigns: any[] = [];
+
+      try {
+        token = await ctx.runAction(internal.auth.getValidTokenForAccount, {
+          accountId: accId as Id<"adAccounts">,
+        });
+        vkCampaigns = await ctx.runAction(internal.vkApi.getCampaignsForAccount, {
+          accessToken: token,
+        }) as any[];
+      } catch {
+        token = null;
+      }
+
+      for (const zs of campaigns) {
+        // Diagnose reason
+        let reason = "не удалось проверить (токен)";
+        if (token) {
+          const vkCamp = vkCampaigns.find((c: any) => String(c.id) === zs.campaignId);
+          if (!vkCamp) {
+            reason = "не найдена в VK";
+          } else {
+            let banners: BannerStatus[] = [];
+            try {
+              const bannersResp = await mtApi<{ items: BannerStatus[] }>(
+                "banners.json",
+                token,
+                { campaign_id: zs.campaignId, limit: "50" }
+              );
+              banners = bannersResp.items || [];
+            } catch { /* best-effort */ }
+            reason = diagnoseReason(vkCamp.status, vkCamp.delivery, banners);
+          }
+        }
+
+        // Check dedup: was alert sent in last 7 days?
+        const recentAlert = await ctx.runQuery(internal.budgetHealthCheck.getRecentZeroSpendAlert, {
+          ruleId: zs.ruleId,
+          campaignId: zs.campaignId,
+          sinceMs: Date.now() - SEVEN_DAYS_MS,
+        });
+
+        const userName = await ctx.runQuery(internal.budgetHealthCheck.getUserName, {
+          userId: zs.userId,
+        });
+        const shortName = typeof userName === "string" ? userName.split(" ")[0] : "—";
+
+        let alertSent = false;
+        if (!recentAlert) {
+          // Send Telegram to user
+          try {
+            const chatId = await ctx.runQuery(internal.telegram.getUserChatId, {
+              userId: zs.userId,
+            });
+            if (chatId) {
+              await ctx.runAction(internal.telegram.sendMessage, {
+                chatId,
+                text: [
+                  `⚠️ <b>Правило «${zs.ruleName}»</b> работает на кампании без расхода ${zs.zeroDays} дн.`,
+                  `Кампания: ${zs.campaignId}`,
+                  `Причина: ${reason}`,
+                  `→ Проверьте кампанию в VK или деактивируйте правило`,
+                ].join("\n"),
+              });
+              alertSent = true;
+            }
+          } catch (err) {
+            console.warn(`[zeroSpend] Failed to send alert to user ${zs.userId}:`, err);
+          }
+
+          // Log to actionLogs for dedup
+          try {
+            await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+              userId: zs.userId,
+              ruleId: zs.ruleId,
+              accountId: zs.accountId,
+              campaignId: zs.campaignId,
+              campaignName: zs.campaignId,
+              actionType: "zero_spend_alert" as any,
+              oldBudget: 0,
+              newBudget: 0,
+              step: 0,
+              error: `Кампания без расхода ${zs.zeroDays} дн. Причина: ${reason}`,
+            });
+          } catch (err) {
+            console.warn(`[zeroSpend] Failed to log alert:`, err);
+          }
+        }
+
+        const alertLabel = recentAlert ? "алерт ранее" : alertSent ? "алерт отправлен" : "нет chatId";
+        details.push(`📤 ${shortName}: «${zs.ruleName}» → ${zs.campaignId} (0₽ ${zs.zeroDays} дн., ${reason}) — ${alertLabel}`);
+      }
+    }
+
+    const plural = zeroSpend.length === 1 ? "кампания" : zeroSpend.length < 5 ? "кампании" : "кампаний";
+    return {
+      name: "Кампании без расхода",
+      status: "warning",
+      message: `${zeroSpend.length} ${plural} без расхода 2+ дн.`,
+      details,
+    };
+  },
+});
+
+/** Check if zero_spend_alert was already sent for this rule+campaign recently */
+export const getRecentZeroSpendAlert = internalQuery({
+  args: {
+    ruleId: v.id("rules"),
+    campaignId: v.string(),
+    sinceMs: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const log = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_ruleId_createdAt", (q) =>
+        q.eq("ruleId", args.ruleId).gte("createdAt", args.sinceMs)
+      )
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("actionType"), "zero_spend_alert"),
+          q.eq(q.field("adId"), args.campaignId)
+        )
+      )
+      .first();
+    return log !== null;
+  },
+});
+
 // ─── Orchestrator ───
 
 export const runBudgetHealthCheck = internalAction({
@@ -413,6 +629,18 @@ export const runBudgetHealthCheck = internalAction({
     } catch (err) {
       blocks.push({
         name: "Budget vs VK",
+        status: "warning",
+        message: `CHECK_FAILED: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+
+    // Block 4: Zero-spend UZ campaigns (VK API + DB)
+    try {
+      const result = await ctx.runAction(internal.budgetHealthCheck.checkZeroSpendUzCampaigns, {});
+      blocks.push(result);
+    } catch (err) {
+      blocks.push({
+        name: "Кампании без расхода",
         status: "warning",
         message: `CHECK_FAILED: ${err instanceof Error ? err.message : String(err)}`,
       });
