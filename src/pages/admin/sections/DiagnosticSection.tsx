@@ -109,14 +109,14 @@ export function DiagnosticSection() {
 
       {/* Zero-spend UZ campaigns from latest budget health check */}
       {(() => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        /* eslint-disable @typescript-eslint/no-explicit-any */
         const budgetCheck = latestResults?.find(
           (r: any) => r.type === 'system' && r.details?.blocks
         );
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const zeroBlock = budgetCheck?.details?.blocks?.find(
           (b: any) => b.name === 'Кампании без расхода'
         );
+        /* eslint-enable @typescript-eslint/no-explicit-any */
         if (!zeroBlock || zeroBlock.status === 'ok') {
           return (
             <div className="p-3 rounded-lg border border-border text-sm text-muted-foreground flex items-center gap-2">
