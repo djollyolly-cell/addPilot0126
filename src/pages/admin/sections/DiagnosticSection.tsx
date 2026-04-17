@@ -106,6 +106,54 @@ export function DiagnosticSection() {
           ))}
         </div>
       )}
+
+      {/* Zero-spend UZ campaigns from latest budget health check */}
+      {(() => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const budgetCheck = latestResults?.find(
+          (r: any) => r.type === 'system' && r.details?.blocks
+        );
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const zeroBlock = budgetCheck?.details?.blocks?.find(
+          (b: any) => b.name === 'Кампании без расхода'
+        );
+        if (!zeroBlock || zeroBlock.status === 'ok') {
+          return (
+            <div className="p-3 rounded-lg border border-border text-sm text-muted-foreground flex items-center gap-2">
+              <Activity className="h-4 w-4" />
+              Все УЗ-кампании с расходом
+            </div>
+          );
+        }
+        return (
+          <div className="space-y-2 mt-4">
+            <h4 className="text-sm font-medium text-muted-foreground">Кампании без расхода (УЗ)</h4>
+            <div className="rounded-lg border border-border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted/30">
+                    <th className="text-left px-3 py-2 font-medium">Детали</th>
+                    <th className="text-left px-3 py-2 font-medium">Статус</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(zeroBlock.details || []).map((detail: string, i: number) => (
+                    <tr key={i} className="border-t border-border">
+                      <td className="px-3 py-2">{detail}</td>
+                      <td className="px-3 py-2">
+                        <Badge variant="warning">warning</Badge>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Данные из последнего health check: {budgetCheck ? new Date(budgetCheck.createdAt).toLocaleString('ru-RU') : '—'}
+            </p>
+          </div>
+        );
+      })()}
     </div>
   );
 }
