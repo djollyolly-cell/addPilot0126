@@ -161,9 +161,10 @@ export const syncAll = internalAction({
 
         // Fetch ad_plan budgets for cascade fallback (group budget → plan budget)
         const adPlanBudgets = new Map<string, number>();
+        let fetchedAdPlans: { id: number; name: string; status: string; budget_limit_day: number | null; budget_limit: number | null }[] = [];
         try {
-          const adPlans = await ctx.runAction(api.vkApi.getMtAdPlans, { accessToken });
-          for (const plan of adPlans) {
+          fetchedAdPlans = await ctx.runAction(api.vkApi.getMtAdPlans, { accessToken });
+          for (const plan of fetchedAdPlans) {
             if (plan.budget_limit_day && plan.budget_limit_day > 0) {
               adPlanBudgets.set(String(plan.id), plan.budget_limit_day);
             }
@@ -197,7 +198,7 @@ export const syncAll = internalAction({
           console.log(`[syncAll] Live campaign map: ${adCampaignMap.length} ads, ${vkCampaigns.length} campaigns for «${account.name}»`);
         }
 
-        // Auto-upsert campaigns from VK API data
+        // Auto-upsert campaigns (ad groups) from VK API data
         if (vkCampaigns.length > 0) {
           try {
             for (const c of vkCampaigns) {
@@ -219,6 +220,24 @@ export const syncAll = internalAction({
               source: "syncMetrics",
               message: `Auto-upsert campaigns failed: ${String(err).slice(0, 180)}`,
             }); } catch { /* non-critical */ }
+          }
+        }
+
+        // Auto-upsert ad_plans (campaigns) — needed for budget cascade in getCampaignDailyLimit
+        if (fetchedAdPlans.length > 0) {
+          try {
+            for (const plan of fetchedAdPlans) {
+              await ctx.runMutation(api.adAccounts.upsertCampaign, {
+                accountId: account._id,
+                vkCampaignId: String(plan.id),
+                name: plan.name || `Кампания ${plan.id}`,
+                status: plan.status,
+                dailyLimit: plan.budget_limit_day && plan.budget_limit_day > 0 ? plan.budget_limit_day : undefined,
+                allLimit: plan.budget_limit && plan.budget_limit > 0 ? plan.budget_limit : undefined,
+              });
+            }
+          } catch (err) {
+            console.warn(`[syncAll] upsert ad_plans failed for «${account.name}»: ${err}`);
           }
         }
 

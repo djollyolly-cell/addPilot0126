@@ -439,11 +439,13 @@ export const getCampaignDailyLimit = internalQuery({
       return campaign.dailyLimit;
     }
 
-    // Fallback: look up ad_plan budget via adPlanId
+    // Fallback: look up ad_plan budget via adPlanId (same account)
     if (campaign.adPlanId) {
       const adPlan = await ctx.db
         .query("campaigns")
-        .withIndex("by_vkCampaignId", (q) => q.eq("vkCampaignId", campaign.adPlanId!))
+        .withIndex("by_accountId_vkCampaignId", (q) =>
+          q.eq("accountId", campaign.accountId).eq("vkCampaignId", campaign.adPlanId!)
+        )
         .first();
       if (adPlan?.dailyLimit && adPlan.dailyLimit > 0) {
         return adPlan.dailyLimit;
