@@ -141,6 +141,9 @@ export function evaluateCondition(
     }
 
     case "low_impressions": {
+      // Все метрики нулевые = нет данных (новое объявление или нет снэпшотов)
+      if (metrics.impressions === 0 && metrics.spent === 0 && metrics.clicks === 0)
+        return false;
       return metrics.impressions < condition.value;
     }
 
@@ -241,6 +244,8 @@ export function evaluateConditionTrace(
     }
 
     case "low_impressions": {
+      if (metrics.impressions === 0 && metrics.spent === 0 && metrics.clicks === 0)
+        return { triggered: false, stoppedAt: "step6_no_data", reason: "Все метрики нулевые — нет данных (объявление не крутится или только запущено)" };
       if (metrics.impressions < condition.value)
         return { triggered: true, stoppedAt: "triggered", reason: `Показов ${metrics.impressions} < порог ${condition.value}` };
       return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Показов ${metrics.impressions} ≥ порог ${condition.value}` };

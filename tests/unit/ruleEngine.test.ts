@@ -181,6 +181,26 @@ describe("evaluateCondition", () => {
       const metrics: MetricsSnapshot = { spent: 100, leads: 1, impressions: 500, clicks: 20 };
       expect(evaluateCondition("low_impressions", condition, metrics)).toBe(false);
     });
+
+    it("does not trigger when all metrics are zero (no data)", () => {
+      const metrics: MetricsSnapshot = { spent: 0, leads: 0, impressions: 0, clicks: 0 };
+      expect(evaluateCondition("low_impressions", condition, metrics)).toBe(false);
+    });
+
+    it("triggers when impressions=0 but has spend (real problem)", () => {
+      const metrics: MetricsSnapshot = { spent: 50, leads: 0, impressions: 0, clicks: 0 };
+      expect(evaluateCondition("low_impressions", condition, metrics)).toBe(true);
+    });
+
+    it("triggers when impressions=0 but has clicks (real problem)", () => {
+      const metrics: MetricsSnapshot = { spent: 0, leads: 0, impressions: 0, clicks: 5 };
+      expect(evaluateCondition("low_impressions", condition, metrics)).toBe(true);
+    });
+
+    it("does not trigger at exact threshold", () => {
+      const metrics: MetricsSnapshot = { spent: 10, leads: 0, impressions: 100, clicks: 5 };
+      expect(evaluateCondition("low_impressions", condition, metrics)).toBe(false);
+    });
   });
 
   // ─── clicks_no_leads (daily — default) ───
@@ -452,6 +472,40 @@ describe("evaluateConditionTrace", () => {
       const result = evaluateConditionTrace("fast_spend", condition, metrics, context);
       expect(result.triggered).toBe(true);
       expect(result.stoppedAt).toBe("triggered");
+    });
+  });
+
+  describe("low_impressions", () => {
+    const condition: RuleCondition = { metric: "impressions", operator: "<", value: 100 };
+
+    it("returns triggered when impressions below minimum", () => {
+      const metrics: MetricsSnapshot = { spent: 50, leads: 0, impressions: 30, clicks: 2 };
+      const result = evaluateConditionTrace("low_impressions", condition, metrics);
+      expect(result.triggered).toBe(true);
+      expect(result.stoppedAt).toBe("triggered");
+      expect(result.reason).toContain("30");
+    });
+
+    it("returns no_data when all metrics zero", () => {
+      const metrics: MetricsSnapshot = { spent: 0, leads: 0, impressions: 0, clicks: 0 };
+      const result = evaluateConditionTrace("low_impressions", condition, metrics);
+      expect(result.triggered).toBe(false);
+      expect(result.stoppedAt).toBe("step6_no_data");
+      expect(result.reason).toContain("нет данных");
+    });
+
+    it("returns triggered when impressions=0 but has spend", () => {
+      const metrics: MetricsSnapshot = { spent: 50, leads: 0, impressions: 0, clicks: 0 };
+      const result = evaluateConditionTrace("low_impressions", condition, metrics);
+      expect(result.triggered).toBe(true);
+      expect(result.stoppedAt).toBe("triggered");
+    });
+
+    it("returns condition_not_met when impressions sufficient", () => {
+      const metrics: MetricsSnapshot = { spent: 100, leads: 1, impressions: 500, clicks: 20 };
+      const result = evaluateConditionTrace("low_impressions", condition, metrics);
+      expect(result.triggered).toBe(false);
+      expect(result.stoppedAt).toBe("step6_condition_not_met");
     });
   });
 
