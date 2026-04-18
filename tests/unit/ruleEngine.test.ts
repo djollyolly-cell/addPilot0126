@@ -35,8 +35,21 @@ describe("evaluateCondition", () => {
       expect(evaluateCondition("cpl_limit", condition, metrics)).toBe(false);
     });
 
-    it("does not trigger when no leads (CPL undefined)", () => {
-      const metrics: MetricsSnapshot = { spent: 1000, leads: 0, impressions: 500, clicks: 30 };
+    it("triggers when leads=0 and spent exceeds CPL limit", () => {
+      const metrics: MetricsSnapshot = { spent: 600, leads: 0, impressions: 500, clicks: 30 };
+      // leads=0, spent 600 > порог 500 → даже 1 лид даст CPL 600 > 500
+      expect(evaluateCondition("cpl_limit", condition, metrics)).toBe(true);
+    });
+
+    it("does not trigger when leads=0 and spent within CPL limit", () => {
+      const metrics: MetricsSnapshot = { spent: 400, leads: 0, impressions: 500, clicks: 30 };
+      // leads=0, spent 400 ≤ порог 500 → 1 лид даст CPL 400 < 500
+      expect(evaluateCondition("cpl_limit", condition, metrics)).toBe(false);
+    });
+
+    it("does not trigger when leads=0 and spent equals CPL limit", () => {
+      const metrics: MetricsSnapshot = { spent: 500, leads: 0, impressions: 500, clicks: 30 };
+      // leads=0, spent 500 = порог 500 → не превышает (строго >)
       expect(evaluateCondition("cpl_limit", condition, metrics)).toBe(false);
     });
   });

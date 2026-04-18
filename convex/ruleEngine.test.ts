@@ -52,13 +52,14 @@ describe("ruleEngine", () => {
     expect(result).toBe(false);
   });
 
-  test("CPL with zero leads does NOT trigger (no division by zero)", () => {
+  test("CPL with zero leads triggers when spent exceeds threshold", () => {
     const result = evaluateCondition(
       "cpl_limit",
       { metric: "cpl", operator: ">", value: 500 },
       { spent: 3000, leads: 0, impressions: 10000, clicks: 200 }
     );
-    expect(result).toBe(false);
+    // leads=0, spent 3000 > порог 500 → даже 1 лид даст CPL 3000 > 500
+    expect(result).toBe(true);
   });
 
   // ═══════════════════════════════════════════════════════════

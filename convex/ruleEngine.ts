@@ -99,10 +99,13 @@ export function evaluateCondition(
 ): boolean {
   switch (ruleType) {
     case "cpl_limit": {
-      const cpl =
-        metrics.leads > 0 ? metrics.spent / metrics.leads : undefined;
-      if (cpl === undefined) return false;
-      return cpl > condition.value;
+      if (metrics.leads > 0) {
+        const cpl = metrics.spent / metrics.leads;
+        return cpl > condition.value;
+      }
+      // leads=0: если расход уже превышает CPL-порог,
+      // даже 1 лид не снизит CPL ниже лимита
+      return metrics.spent > condition.value;
     }
 
     case "min_ctr": {
