@@ -161,6 +161,105 @@ export function evaluateCondition(
   }
 }
 
+export interface TraceResult {
+  triggered: boolean;
+  stoppedAt: string;
+  reason: string;
+}
+
+/**
+ * Trace version of evaluateCondition — returns step code + human-readable reason.
+ * Covers only step 6 (condition evaluation). Steps 1-5 (metrics presence,
+ * campaign filter, dedup) are handled by the diagnostic action caller.
+ */
+export function evaluateConditionTrace(
+  ruleType: string,
+  condition: RuleCondition,
+  metrics: MetricsSnapshot,
+  context?: {
+    spendHistory?: SpendSnapshot[];
+    dailyBudget?: number;
+  }
+): TraceResult {
+  switch (ruleType) {
+    case "cpl_limit": {
+      const cpl =
+        metrics.leads > 0 ? metrics.spent / metrics.leads : undefined;
+      if (cpl === undefined)
+        return { triggered: false, stoppedAt: "step6_cpl_undefined", reason: "CPL невычислим: leads=0" };
+      if (cpl > condition.value)
+        return { triggered: true, stoppedAt: "triggered", reason: `CPL ${Math.round(cpl)}₽ > порог ${condition.value}₽` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `CPL ${Math.round(cpl)}₽ ≤ порог ${condition.value}₽` };
+    }
+
+    case "min_ctr": {
+      const ctr =
+        metrics.impressions > 0
+          ? (metrics.clicks / metrics.impressions) * 100
+          : undefined;
+      if (ctr === undefined)
+        return { triggered: false, stoppedAt: "step6_ctr_undefined", reason: "CTR невычислим: impressions=0" };
+      if (ctr < condition.value)
+        return { triggered: true, stoppedAt: "triggered", reason: `CTR ${ctr.toFixed(2)}% < порог ${condition.value}%` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `CTR ${ctr.toFixed(2)}% ≥ порог ${condition.value}%` };
+    }
+
+    case "fast_spend": {
+      if (!context?.spendHistory || context.spendHistory.length < 2)
+        return { triggered: false, stoppedAt: "step6_condition_not_met", reason: "Недостаточно snapshot-ов расхода" };
+      const sorted = [...context.spendHistory].sort(
+        (a, b) => a.timestamp - b.timestamp
+      );
+      const oldest = sorted[0];
+      const newest = sorted[sorted.length - 1];
+      const spentDiff = newest.spent - oldest.spent;
+      const budget = context.dailyBudget;
+      if (!budget || budget <= 0)
+        return { triggered: false, stoppedAt: "step6_condition_not_met", reason: "Дневной бюджет не задан" };
+      const percentSpent = (spentDiff / budget) * 100;
+      if (percentSpent > condition.value)
+        return { triggered: true, stoppedAt: "triggered", reason: `Потрачено ${percentSpent.toFixed(0)}% бюджета > порог ${condition.value}%` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Потрачено ${percentSpent.toFixed(0)}% бюджета ≤ порог ${condition.value}%` };
+    }
+
+    case "spend_no_leads": {
+      if (metrics.spent > condition.value && metrics.leads === 0)
+        return { triggered: true, stoppedAt: "triggered", reason: `Расход ${Math.round(metrics.spent)}₽ > ${condition.value}₽, лидов: 0` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Расход ${Math.round(metrics.spent)}₽, лидов: ${metrics.leads}` };
+    }
+
+    case "budget_limit": {
+      if (metrics.spent > condition.value)
+        return { triggered: true, stoppedAt: "triggered", reason: `Расход ${Math.round(metrics.spent)}₽ > лимит ${condition.value}₽` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Расход ${Math.round(metrics.spent)}₽ ≤ лимит ${condition.value}₽` };
+    }
+
+    case "low_impressions": {
+      if (metrics.impressions < condition.value)
+        return { triggered: true, stoppedAt: "triggered", reason: `Показов ${metrics.impressions} < порог ${condition.value}` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Показов ${metrics.impressions} ≥ порог ${condition.value}` };
+    }
+
+    case "clicks_no_leads": {
+      if (metrics.clicks >= condition.value && metrics.leads === 0)
+        return { triggered: true, stoppedAt: "triggered", reason: `Кликов ${metrics.clicks} ≥ ${condition.value}, лидов: 0` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Кликов ${metrics.clicks}, лидов: ${metrics.leads}` };
+    }
+
+    case "new_lead": {
+      if (metrics.leads > 0)
+        return { triggered: true, stoppedAt: "triggered", reason: `Новый лид: ${metrics.leads} лид(ов)` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: "Лидов: 0" };
+    }
+
+    case "uz_budget_manage":
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: "uz_budget_manage не участвует в стандартной оценке" };
+
+    default:
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Неизвестный тип правила: ${ruleType}` };
+  }
+}
+
 /**
  * Calculate savings when ad is stopped.
  * Uses spentToday as a conservative real estimate —
