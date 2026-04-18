@@ -5,6 +5,7 @@ import type { Doc } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import {
+  computeRealtimeDelta,
   evaluateConditionTrace,
   matchesCampaignFilter,
   MetricsSnapshot,
@@ -348,6 +349,9 @@ async function diagnoseUser(
 
     for (const c of campaigns) {
       liveCampaignIds.add(String(c.id));
+      if (c.package_id) {
+        liveCampaignIds.add(String(c.package_id));
+      }
     }
 
     // Fetch banners
@@ -371,7 +375,8 @@ async function diagnoseUser(
       });
     }
 
-    // Fetch statistics
+    // VK stats — used ONLY for banner list display, NOT for rule evaluation.
+    // Rule evaluation uses DB metricsDaily (same source as ruleEngine).
     let stats: MtStatItem[] = [];
     if (banners.length > 0) {
       try {
@@ -416,16 +421,32 @@ async function diagnoseUser(
       }
     }
 
-    // Build coverage and tracing per banner with spend
+    // DB metrics (same source as ruleEngine)
+    const todayStr = dateTo;
+    const dailyMetrics = await ctx.runQuery(
+      internal.ruleEngine.getAccountTodayMetrics,
+      { accountId: account._id, date: todayStr }
+    );
+    const todayMetricsByAd = new Map<string, { spent: number; leads: number; impressions: number; clicks: number }>();
+    for (const m of dailyMetrics) {
+      todayMetricsByAd.set(m.adId, m);
+    }
+
+    // Build coverage and tracing per banner
     const rulesForAccount = allRules.filter((r: Doc<"rules">) =>
       r.targetAccountIds?.includes(account._id)
     );
 
-    for (const [bid, bStats] of bannerStats) {
-      if (bStats.spent <= 0) continue;
+    for (const banner of banners) {
+      const bid = String(banner.id);
+      const dbMetric = todayMetricsByAd.get(bid);
+      const vkStats = bannerStats.get(bid);
+      const displayStats = vkStats || { spent: 0, clicks: 0, leads: 0, impressions: 0 };
 
-      const banner = banners.find((b) => String(b.id) === bid);
-      const campaignId = banner ? String(banner.campaign_id) : "";
+      // Skip banners with no data at all
+      if (!dbMetric && !vkStats?.spent) continue;
+
+      const campaignId = String(banner.campaign_id);
       const campaignName =
         campaigns.find((c) => String(c.id) === campaignId)?.name || campaignId;
 
@@ -463,56 +484,152 @@ async function diagnoseUser(
           }
         }
 
-        // Step 5: dedup check
-        const ruleLogs = logsByRule.get(rule._id as string) || [];
-        const hasActiveStop = ruleLogs.some(
-          (l) =>
-            l.adId === bid &&
-            l.status === "success" &&
-            (l.actionType === "stopped" || l.actionType === "stopped_and_notified")
+        // Step 5: dedup check (exact same logic as ruleEngine)
+        const todayStart = new Date(todayStr + "T00:00:00Z").getTime();
+        const alreadyTriggered = await ctx.runQuery(
+          internal.ruleEngine.isAlreadyTriggeredToday,
+          { ruleId: rule._id, adId: bid, sinceTimestamp: todayStart }
         );
-        if (hasActiveStop) {
+        if (alreadyTriggered) {
           allTracing.push({
             bannerId: bid,
             ruleName: rule.name,
-            stoppedAt: "step5_permanent_dedup",
-            reason: "Баннер уже остановлен этим правилом (permanent dedup)",
+            stoppedAt: "step5_dedup",
+            reason: "Дедупликация: правило уже сработало для этого баннера (permanent/daily/retry limit)",
           });
           coveredBy.push(rule.name);
           continue;
         }
 
-        // Step 6: evaluate condition
-        const metricsSnapshot: MetricsSnapshot = {
-          spent: bStats.spent,
-          leads: bStats.leads,
-          impressions: bStats.impressions,
-          clicks: bStats.clicks,
-        };
+        // Step 5b: minSamples check (same as ruleEngine:1531-1538)
+        if (rule.conditions.minSamples) {
+          const history = await ctx.runQuery(
+            internal.ruleEngine.getRealtimeHistory,
+            { adId: bid, sinceTimestamp: Date.now() - 24 * 60 * 60 * 1000 }
+          );
+          if (history.length < rule.conditions.minSamples) {
+            allTracing.push({
+              bannerId: bid,
+              ruleName: rule.name,
+              stoppedAt: "step5b_min_samples",
+              reason: `Недостаточно данных: ${history.length} снимков за 24ч < minSamples ${rule.conditions.minSamples}`,
+            });
+            continue;
+          }
+        }
 
+        // Step 6: build metricsSnapshot (timeWindow-aware, same as ruleEngine:1574-1619)
+        const timeWindow = rule.conditions.timeWindow;
+        const needsAllAds =
+          (rule.type === "clicks_no_leads" || rule.type === "low_impressions") &&
+          timeWindow && timeWindow !== "daily";
+
+        let metricsSnapshot: MetricsSnapshot;
+
+        if (needsAllAds && (timeWindow === "1h" || timeWindow === "6h")) {
+          const windowMs = timeWindow === "1h" ? 60 * 60 * 1000 : 6 * 60 * 60 * 1000;
+          const sinceTs = Date.now() - windowMs;
+          const history = await ctx.runQuery(
+            internal.ruleEngine.getRealtimeHistory,
+            { adId: bid, sinceTimestamp: sinceTs }
+          );
+          const delta = computeRealtimeDelta(history);
+          metricsSnapshot = {
+            spent: delta.spent,
+            leads: delta.leads,
+            impressions: delta.impressions,
+            clicks: delta.clicks,
+          };
+        } else if (needsAllAds && (timeWindow === "24h" || timeWindow === "since_launch")) {
+          let sinceDate: string | undefined;
+          if (timeWindow === "24h") {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            sinceDate = yesterday.toISOString().slice(0, 10);
+          }
+          const aggregated = await ctx.runQuery(
+            internal.ruleEngine.getAdAggregatedMetrics,
+            { adId: bid, sinceDate }
+          );
+          metricsSnapshot = {
+            spent: aggregated.spent,
+            leads: aggregated.leads,
+            impressions: aggregated.impressions,
+            clicks: aggregated.clicks,
+          };
+        } else if (dbMetric) {
+          metricsSnapshot = {
+            spent: dbMetric.spent,
+            leads: dbMetric.leads,
+            impressions: dbMetric.impressions,
+            clicks: dbMetric.clicks,
+          };
+        } else {
+          // No DB metrics and not a time-windowed rule — skip (engine skips too)
+          continue;
+        }
+
+        // Build context for fast_spend (same as ruleEngine:1545-1572)
+        let context:
+          | { spendHistory?: { spent: number; timestamp: number }[]; dailyBudget?: number }
+          | undefined;
+
+        if (rule.type === "fast_spend") {
+          const fifteenMinAgo = Date.now() - 15 * 60 * 1000;
+          const history = await ctx.runQuery(
+            internal.ruleEngine.getRealtimeHistory,
+            { adId: bid, sinceTimestamp: fifteenMinAgo }
+          );
+          const dbBudget = await ctx.runQuery(
+            internal.ruleEngine.getCampaignDailyLimit,
+            { adId: bid }
+          );
+          context = {
+            spendHistory: history.map((h: { spent: number; timestamp: number }) => ({
+              spent: h.spent,
+              timestamp: h.timestamp,
+            })),
+            dailyBudget: dbBudget ?? undefined,
+          };
+        }
+
+        // Step 7: evaluate condition
         const trace = evaluateConditionTrace(
           rule.type,
           rule.conditions,
-          metricsSnapshot
+          metricsSnapshot,
+          context
         );
+
+        // Safety check indicator (ruleEngine:1645-1707)
+        let safetyNote = "";
+        if (
+          trace.triggered &&
+          rule.actions?.stopAd &&
+          (rule.type === "clicks_no_leads" || rule.type === "cpl_limit") &&
+          metricsSnapshot.leads === 0
+        ) {
+          safetyNote = " [⚠ safety check: движок перепроверит лиды через VK API перед остановкой]";
+        }
+
         allTracing.push({
           bannerId: bid,
           ruleName: rule.name,
           stoppedAt: trace.stoppedAt,
-          reason: trace.reason,
+          reason: trace.reason + safetyNote,
         });
 
         coveredBy.push(rule.name);
       }
 
-      const cpl = bStats.leads > 0 ? bStats.spent / bStats.leads : null;
+      const cpl = displayStats.leads > 0 ? displayStats.spent / displayStats.leads : null;
       allBanners.push({
         bannerId: bid,
         campaignId,
         campaignName,
-        spent: Math.round(bStats.spent * 100) / 100,
-        clicks: bStats.clicks,
-        leads: bStats.leads,
+        spent: Math.round(displayStats.spent * 100) / 100,
+        clicks: displayStats.clicks,
+        leads: displayStats.leads,
         cpl: cpl !== null ? Math.round(cpl * 100) / 100 : null,
         isCovered: coveredBy.length > 0,
         coveredByRules: coveredBy,
@@ -565,14 +682,14 @@ async function diagnoseUser(
     });
   }
 
-  const permanentDedup = allTracing.filter(
-    (t) => t.stoppedAt === "step5_permanent_dedup"
+  const dedupTraces = allTracing.filter(
+    (t) => t.stoppedAt === "step5_dedup" || t.stoppedAt === "step5_permanent_dedup"
   );
-  if (permanentDedup.length > 0) {
-    const uniqueBanners = new Set(permanentDedup.map((t) => t.bannerId));
+  if (dedupTraces.length > 0) {
+    const uniqueBanners = new Set(dedupTraces.map((t) => t.bannerId));
     problems.push({
       category: "DEDUP",
-      message: `${uniqueBanners.size} баннер(ов) с permanent dedup (остановлены, но продолжают крутиться)`,
+      message: `${uniqueBanners.size} баннер(ов) с дедупликацией (остановлены/повторно сработали)`,
     });
   }
 
