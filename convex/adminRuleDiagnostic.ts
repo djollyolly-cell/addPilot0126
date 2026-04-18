@@ -354,6 +354,20 @@ async function diagnoseUser(
       }
     }
 
+    // Fetch ad_plans (new VK Ads format: campaigns are ad_plans, not campaigns.json)
+    // Rules may target ad_plan IDs which are not returned by campaigns.json
+    try {
+      const adPlans = await ctx.runAction(api.vkApi.getMtAdPlans, {
+        accessToken: account.accessToken,
+      });
+      await sleep(200);
+      for (const plan of adPlans) {
+        liveCampaignIds.add(String(plan.id));
+      }
+    } catch {
+      // Non-fatal: ad_plans may not be available for legacy accounts
+    }
+
     // Fetch banners
     let banners: MtBanner[] = [];
     try {
