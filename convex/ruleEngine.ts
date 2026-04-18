@@ -493,6 +493,50 @@ export const getAccountToken = internalQuery({
   },
 });
 
+// 3 попытки × 5 мин цикл = 15 минут retry window
+const MAX_FAILED_RETRIES = 3;
+
+export interface ActionLogEntry {
+  adId: string;
+  status: "success" | "failed" | "reverted";
+  actionType: string;
+  createdAt: number;
+}
+// Бюджетные типы (budget_increased, budget_reset, zero_spend_alert) логируются
+// через logBudgetAction, которая вызывается только из checkUzBudgetRules.
+// Этот flow не проходит через isAlreadyTriggeredToday — бюджетные логи
+// никогда не попадут в logs этой функции.
+
+/**
+ * Daily dedup + failed retry limit.
+ * Pure function — testable without Convex context.
+ *
+ * Permanent dedup (successful stop any time) lives in the Convex query
+ * (isAlreadyTriggeredToday fast path) — NOT duplicated here.
+ *
+ * Self-contained: defensively filters by adId, createdAt, reverted
+ * even though query already applies these filters.
+ */
+export function shouldSkipDailyDedup(
+  logs: ActionLogEntry[],
+  adId: string,
+  sinceTimestamp: number
+): boolean {
+  const adLogs = logs.filter(
+    (log) =>
+      log.adId === adId &&
+      log.status !== "reverted" &&
+      log.createdAt >= sinceTimestamp
+  );
+
+  // 1. Successful trigger today → skip
+  if (adLogs.some((log) => log.status === "success")) return true;
+
+  // 2. Failed retry limit: max 3 failed per day
+  const failedCount = adLogs.filter((log) => log.status === "failed").length;
+  return failedCount >= MAX_FAILED_RETRIES;
+}
+
 /** Check if rule already triggered for this ad today (dedup) */
 export const isAlreadyTriggeredToday = internalQuery({
   args: {
@@ -501,25 +545,38 @@ export const isAlreadyTriggeredToday = internalQuery({
     sinceTimestamp: v.number(),
   },
   handler: async (ctx, args) => {
-    const logs = await ctx.db
+    // Fast path: permanent dedup — successful stop any time.
+    // Uses by_ruleId_createdAt in desc order: newest logs first,
+    // finds recent successful stops quickly. .first() stops at first match.
+    const activeStop = await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", args.ruleId))
+      .order("desc")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("adId"), args.adId),
+          q.eq(q.field("status"), "success"),
+          q.or(
+            q.eq(q.field("actionType"), "stopped"),
+            q.eq(q.field("actionType"), "stopped_and_notified")
+          )
+        )
+      )
+      .first();
+    if (activeStop) return true;
+
+    // Daily dedup + retry limit: delegate to pure function.
+    // Uses compound index by_ruleId_createdAt with range filter —
+    // Convex only scans logs from sinceTimestamp onward.
+    const todayLogs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_ruleId_createdAt", (q) =>
+        q.eq("ruleId", args.ruleId).gte("createdAt", args.sinceTimestamp)
+      )
+      .filter((q) => q.eq(q.field("adId"), args.adId))
       .collect();
-    const adLogs = logs.filter(
-      (log) => log.adId === args.adId && log.status !== "reverted"
-    );
 
-    // 1. If ad was successfully stopped by this rule and not reverted — always skip
-    //    (prevents daily re-triggering on already-stopped ads)
-    const hasActiveStop = adLogs.some(
-      (log) =>
-        log.status === "success" &&
-        (log.actionType === "stopped" || log.actionType === "stopped_and_notified")
-    );
-    if (hasActiveStop) return true;
-
-    // 2. Standard daily dedup: skip if already triggered today
-    return adLogs.some((log) => log.createdAt >= args.sinceTimestamp);
+    return shouldSkipDailyDedup(todayLogs, args.adId, args.sinceTimestamp);
   },
 });
 
@@ -559,6 +616,25 @@ export const createActionLog = internalMutation({
     return await ctx.db.insert("actionLogs", {
       ...args,
       createdAt: Date.now(),
+    });
+  },
+});
+
+/** Update actionLog status after-the-fact (e.g. when TG notification fails) */
+export const updateActionLogStatus = internalMutation({
+  args: {
+    actionLogId: v.id("actionLogs"),
+    status: v.union(
+      v.literal("success"),
+      v.literal("failed"),
+      v.literal("reverted")
+    ),
+    errorMessage: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.actionLogId, {
+      status: args.status,
+      ...(args.errorMessage !== undefined && { errorMessage: args.errorMessage }),
     });
   },
 });
@@ -1716,11 +1792,7 @@ export const checkRulesForAccount = internalAction({
           }); } catch { /* non-critical */ }
         }
 
-        // Update rule trigger count
-        await ctx.runMutation(
-          internal.ruleEngine.incrementTriggerCount,
-          { ruleId: rule._id }
-        );
+        let notifyFailed = false;
 
         // Send Telegram notification if notify is enabled
         if (rule.actions.notify) {
@@ -1766,10 +1838,35 @@ export const checkRulesForAccount = internalAction({
               message: `TG notification failed for ad ${adId}: ${notifMsg.slice(0, 150)}`,
               details: { ruleId: rule._id, adId },
             }); } catch { /* non-critical */ }
+
+            // Mark notify failure — used by incrementTriggerCount guard below
+            notifyFailed = true;
+
+            // Update actionLog status when notification fails for notify-only rules
+            if (!rule.actions.stopAd && actionLogId) {
+              try {
+                await ctx.runMutation(internal.ruleEngine.updateActionLogStatus, {
+                  actionLogId,
+                  status: "failed",
+                  errorMessage: `Telegram notification failed: ${notifMsg.slice(0, 200)}`,
+                });
+              } catch { /* non-critical */ }
+            }
           }
         } else {
           console.warn(
             `[ruleEngine] Rule ${rule._id} has notify=false, skipping notification for ad ${adId}`
+          );
+        }
+
+        // Update rule trigger count — only on actual success
+        // For stopAd rules: success = stopAd succeeded (TG failure is non-critical)
+        // For notify-only rules: success = TG notification delivered
+        const finalStatus = (!rule.actions.stopAd && notifyFailed) ? "failed" : status;
+        if (finalStatus === "success") {
+          await ctx.runMutation(
+            internal.ruleEngine.incrementTriggerCount,
+            { ruleId: rule._id }
           );
         }
 

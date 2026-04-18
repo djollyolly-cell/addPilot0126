@@ -10,6 +10,8 @@ import {
   calculateSavings,
   minutesUntilEndOfDay,
   matchesCampaignFilter,
+  shouldSkipDailyDedup,
+  ActionLogEntry,
   MetricsSnapshot,
   RuleCondition,
 } from "../../convex/ruleEngine";
@@ -542,5 +544,105 @@ describe("evaluateConditionTrace", () => {
       expect(result.triggered).toBe(false);
       expect(result.stoppedAt).toBe("step6_condition_not_met");
     });
+  });
+});
+
+// ═══════════════════════════════════════════════════════════
+// shouldSkipDailyDedup — daily dedup + failed retry limit
+// ═══════════════════════════════════════════════════════════
+
+describe("shouldSkipDailyDedup", () => {
+  const adId = "12345";
+  const todayStart = new Date("2026-04-18T00:00:00Z").getTime();
+  const now = new Date("2026-04-18T10:00:00Z").getTime();
+
+  // --- Daily dedup (successful triggers today) ---
+
+  it("skips when successfully notified today (daily dedup)", () => {
+    const logs: ActionLogEntry[] = [
+      { adId, status: "success", actionType: "notified", createdAt: now },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(true);
+  });
+
+  // --- Failed retry logic ---
+
+  it("does NOT skip when only failed stop today (should retry)", () => {
+    const logs: ActionLogEntry[] = [
+      { adId, status: "failed", actionType: "stopped_and_notified", createdAt: now },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(false);
+  });
+
+  it("does NOT skip when 2 failed attempts today (under limit)", () => {
+    const logs: ActionLogEntry[] = [
+      { adId, status: "failed", actionType: "stopped", createdAt: now - 600000 },
+      { adId, status: "failed", actionType: "stopped", createdAt: now },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(false);
+  });
+
+  it("skips after 3 failed attempts today (hit retry limit)", () => {
+    const logs: ActionLogEntry[] = [
+      { adId, status: "failed", actionType: "stopped", createdAt: now - 1200000 },
+      { adId, status: "failed", actionType: "stopped", createdAt: now - 600000 },
+      { adId, status: "failed", actionType: "stopped", createdAt: now },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(true);
+  });
+
+  it("allows retry for failed notify-only rule", () => {
+    const logs: ActionLogEntry[] = [
+      { adId, status: "failed", actionType: "notified", createdAt: now },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(false);
+  });
+
+  // --- Mixed scenarios ---
+
+  it("skips after failed then success today (daily dedup)", () => {
+    const logs: ActionLogEntry[] = [
+      { adId, status: "failed", actionType: "stopped", createdAt: now - 600000 },
+      { adId, status: "success", actionType: "stopped", createdAt: now },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(true);
+  });
+
+  it("skips when successful notify exists after failures (daily dedup)", () => {
+    const logs: ActionLogEntry[] = [
+      { adId, status: "failed", actionType: "notified", createdAt: now - 600000 },
+      { adId, status: "failed", actionType: "notified", createdAt: now - 300000 },
+      { adId, status: "success", actionType: "notified", createdAt: now },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(true);
+  });
+
+  // --- Edge cases ---
+
+  it("ignores reverted logs", () => {
+    const logs: ActionLogEntry[] = [
+      { adId, status: "reverted", actionType: "stopped", createdAt: now },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(false);
+  });
+
+  it("ignores logs for other ads", () => {
+    const logs: ActionLogEntry[] = [
+      { adId: "99999", status: "success", actionType: "stopped", createdAt: now },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(false);
+  });
+
+  it("does NOT skip when no logs exist", () => {
+    expect(shouldSkipDailyDedup([], adId, todayStart)).toBe(false);
+  });
+
+  it("does NOT skip when only yesterday's 3 failed logs (new day)", () => {
+    const logs: ActionLogEntry[] = [
+      { adId, status: "failed", actionType: "stopped", createdAt: todayStart - 3000 },
+      { adId, status: "failed", actionType: "stopped", createdAt: todayStart - 2000 },
+      { adId, status: "failed", actionType: "stopped", createdAt: todayStart - 1000 },
+    ];
+    expect(shouldSkipDailyDedup(logs, adId, todayStart)).toBe(false);
   });
 });

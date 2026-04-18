@@ -30,7 +30,7 @@ isAlreadyTriggeredToday(ruleId, adId, sinceTimestamp)
   │
   └─ Daily dedup + retry limit: делегирование чистой функции
        query by_ruleId_createdAt → .gte(sinceTimestamp) → filter(adId) → .collect()
-       → shouldSkipDailyDedup(todayLogs, adId) → boolean
+       → shouldSkipDailyDedup(todayLogs, adId, sinceTimestamp) → boolean
 ```
 
 **Почему так:**
@@ -55,19 +55,28 @@ const MAX_FAILED_RETRIES = 3; // 3 × 5 мин = 15 мин retry window
 export interface ActionLogEntry {
   adId: string;
   status: "success" | "failed" | "reverted";
-  actionType: "stopped" | "notified" | "stopped_and_notified"
-    | "budget_increased" | "budget_reset" | "zero_spend_alert";
+  actionType: "stopped" | "notified" | "stopped_and_notified";
   createdAt: number;
 }
+// Бюджетные типы (budget_increased, budget_reset, zero_spend_alert) логируются
+// через logBudgetAction, которая вызывается только из checkUzBudgetRules.
+// Этот flow не проходит через isAlreadyTriggeredToday — бюджетные логи
+// никогда не попадут в todayLogs этой функции.
 
 export function shouldSkipDailyDedup(
-  todayLogs: ActionLogEntry[],
-  adId: string
+  logs: ActionLogEntry[],
+  adId: string,
+  sinceTimestamp: number
 ): boolean {
-  // Defensive filter: query already filters by adId and today's range,
-  // but function is self-contained for independent testability.
-  const adLogs = todayLogs.filter(
-    (log) => log.adId === adId && log.status !== "reverted"
+  // Defensive filter: query already filters by adId, today's range, and reverted,
+  // but function is fully self-contained — duplicates all filters for:
+  // 1. Independent testability (tests pass raw mixed data)
+  // 2. Defense against query-layer bugs
+  const adLogs = logs.filter(
+    (log) =>
+      log.adId === adId &&
+      log.status !== "reverted" &&
+      log.createdAt >= sinceTimestamp
   );
 
   // 1. Successful trigger today → skip
@@ -111,7 +120,7 @@ handler: async (ctx, args) => {
     .filter((q) => q.eq(q.field("adId"), args.adId))
     .collect();
 
-  return shouldSkipDailyDedup(todayLogs, args.adId);
+  return shouldSkipDailyDedup(todayLogs, args.adId, args.sinceTimestamp);
 }
 ```
 
@@ -187,7 +196,7 @@ if (finalStatus === "success") {
 }
 ```
 
-## Тесты: 11 unit-тестов для `shouldSkipDailyDedup`
+## Тесты: 10 unit-тестов для `shouldSkipDailyDedup`
 
 | # | Тест | Input | Expected |
 |---|---|---|---|
@@ -198,12 +207,10 @@ if (finalStatus === "success") {
 | 5 | Failed notify-only → allow retry | 1 failed notified today | `false` |
 | 6 | Failed then success → skip (daily) | 1 failed + 1 success today | `true` |
 | 7 | Multiple failed then success → skip | 2 failed + 1 success today | `true` |
-| 8 | Any actionType success → daily dedup | 1 success budget_increased today | `true` |
-| 9 | Reverted logs ignored | 1 reverted stopped today | `false` |
-| 10 | Other ads ignored | 1 success stopped for different adId | `false` |
-| 11 | No logs → allow | empty array | `false` |
-
-**Примечание к тесту #8:** `shouldSkipDailyDedup` не различает actionType — любой success блокирует. В реальности `budget_increased` логи принадлежат budget-правилам (uz_budget) и не попадают в запрос для stop-правил (разные ruleId). Тест проверяет, что функция корректно обрабатывает все actionType без ветвления.
+| 8 | Reverted logs ignored | 1 reverted stopped today | `false` |
+| 9 | Other ads ignored | 1 success stopped for different adId | `false` |
+| 10 | No logs → allow | empty array | `false` |
+| 11 | Yesterday's 3 failed → allow (new day) | 3 failed stopped yesterday (before sinceTimestamp) | `false` |
 
 Permanent dedup (successful stops all-time) — тривиален, покрывается integration тестами.
 
