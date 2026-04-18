@@ -559,17 +559,6 @@ async function diagnoseUser(
     });
   }
 
-  const cplUndefined = allTracing.filter(
-    (t) => t.stoppedAt === "step6_cpl_undefined"
-  );
-  if (cplUndefined.length > 0) {
-    const uniqueBanners = new Set(cplUndefined.map((t) => t.bannerId));
-    problems.push({
-      category: "CPL",
-      message: `CPL невычислим для ${uniqueBanners.size} баннер(ов): leads=0`,
-    });
-  }
-
   const permanentDedup = allTracing.filter(
     (t) => t.stoppedAt === "step5_permanent_dedup"
   );

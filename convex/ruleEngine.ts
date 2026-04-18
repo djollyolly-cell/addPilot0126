@@ -1259,8 +1259,11 @@ function buildReason(
 ): string {
   switch (ruleType) {
     case "cpl_limit": {
-      const cpl = metrics.leads > 0 ? metrics.spent / metrics.leads : 0;
-      return `CPL ${cpl.toFixed(0)}\u20BD \u043F\u0440\u0435\u0432\u044B\u0441\u0438\u043B \u043B\u0438\u043C\u0438\u0442 ${condition.value}\u20BD`;
+      if (metrics.leads > 0) {
+        const cpl = metrics.spent / metrics.leads;
+        return `CPL ${cpl.toFixed(0)}₽ превысил лимит ${condition.value}₽`;
+      }
+      return `Расход ${Math.round(metrics.spent)}₽ без лидов превысил лимит CPL ${condition.value}₽`;
     }
     case "min_ctr": {
       const ctr =
@@ -1530,16 +1533,16 @@ export const checkRulesForAccount = internalAction({
           context
         );
 
-        if (rule.type === "clicks_no_leads") {
+        if (rule.type === "clicks_no_leads" || rule.type === "cpl_limit") {
           console.log(
-            `[ruleEngine] clicks_no_leads check for ad ${adId}: clicks=${metricsSnapshot.clicks}, leads=${metricsSnapshot.leads}, threshold=${rule.conditions.value}, triggered=${triggered}`
+            `[ruleEngine] ${rule.type} check for ad ${adId}: spent=${metricsSnapshot.spent}, clicks=${metricsSnapshot.clicks}, leads=${metricsSnapshot.leads}, threshold=${rule.conditions.value}, triggered=${triggered}`
           );
         }
 
         if (!triggered) continue;
 
         // Safety check for clicks_no_leads: re-verify leads via statistics API
-        if (rule.type === "clicks_no_leads" && rule.actions.stopAd && metricsSnapshot.leads === 0) {
+        if ((rule.type === "clicks_no_leads" || rule.type === "cpl_limit") && rule.actions.stopAd && metricsSnapshot.leads === 0) {
           try {
             const accessToken = await ctx.runAction(
               internal.auth.getValidTokenForAccount,
