@@ -1,5 +1,7 @@
 import { v } from "convex/values";
 import { action, internalQuery, query } from "./_generated/server";
+import type { ActionCtx, QueryCtx } from "./_generated/server";
+import type { Doc } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import {
@@ -7,6 +9,7 @@ import {
   matchesCampaignFilter,
   MetricsSnapshot,
 } from "./ruleEngine";
+import type { MtCampaign, MtBanner, MtStatItem } from "./vkApi";
 
 // ═══════════════════════════════════════════════════════════
 // Admin auth
@@ -14,10 +17,10 @@ import {
 
 const ADMIN_EMAILS = ["13632013@vk.com", "786709647@vk.com"];
 
-async function assertAdmin(ctx: any, sessionToken: string) {
+async function assertAdmin(ctx: QueryCtx, sessionToken: string) {
   const session = await ctx.db
     .query("sessions")
-    .withIndex("by_token", (q: any) => q.eq("token", sessionToken))
+    .withIndex("by_token", (q) => q.eq("token", sessionToken))
     .first();
   if (!session || session.expiresAt < Date.now()) {
     throw new Error("Unauthorized: invalid session");
@@ -83,7 +86,7 @@ export interface UserDiagnostic {
 }
 
 function emptyDiagnostic(
-  user: { _id: any; name?: string; email: string; subscriptionTier?: string; telegramChatId?: string },
+  user: { _id: Id<"users"> | string; name?: string; email: string; subscriptionTier?: string; telegramChatId?: string },
   error: string | null,
 ): UserDiagnostic {
   return {
@@ -243,7 +246,7 @@ export const runDiagnosticForUser = action({
     );
     if (!user) {
       return emptyDiagnostic(
-        { _id: args.userId, email: "?" } as any,
+        { _id: args.userId, email: "?" },
         "Пользователь не найден"
       );
     }
@@ -265,8 +268,8 @@ export const runDiagnosticForUser = action({
 // ═══════════════════════════════════════════════════════════
 
 async function diagnoseUser(
-  ctx: any,
-  user: any,
+  ctx: ActionCtx,
+  user: Doc<"users">,
   dateFrom: string,
   dateTo: string,
 ): Promise<UserDiagnostic> {
@@ -285,7 +288,7 @@ async function diagnoseUser(
   if (accounts.length === 0) {
     return {
       ...emptyDiagnostic(user, null),
-      rules: allRules.map((r: any) => ({
+      rules: allRules.map((r: Doc<"rules">) => ({
         name: r.name,
         type: r.type,
         isActive: r.isActive,
@@ -306,7 +309,7 @@ async function diagnoseUser(
     { userId: user._id, dateFromTs, dateToTs }
   );
 
-  const logsByRule = new Map<string, any[]>();
+  const logsByRule = new Map<string, Doc<"actionLogs">[]>();
   for (const log of actionLogs) {
     const key = log.ruleId;
     if (!logsByRule.has(key)) logsByRule.set(key, []);
@@ -328,7 +331,7 @@ async function diagnoseUser(
     }
 
     // Fetch campaigns
-    let campaigns: any[] = [];
+    let campaigns: MtCampaign[] = [];
     try {
       campaigns = await ctx.runAction(api.vkApi.getMtCampaigns, {
         accessToken: account.accessToken,
@@ -348,7 +351,7 @@ async function diagnoseUser(
     }
 
     // Fetch banners
-    let banners: any[] = [];
+    let banners: MtBanner[] = [];
     try {
       banners = await ctx.runAction(api.vkApi.getMtBanners, {
         accessToken: account.accessToken,
@@ -361,7 +364,7 @@ async function diagnoseUser(
 
     // Build adId → campaign mapping
     for (const b of banners) {
-      const campaign = campaigns.find((c: any) => c.id === b.campaign_id);
+      const campaign = campaigns.find((c) => c.id === b.campaign_id);
       adCampaignMap.set(String(b.id), {
         adGroupId: String(b.campaign_id),
         adPlanId: campaign?.package_id ? String(campaign.package_id) : null,
@@ -369,10 +372,10 @@ async function diagnoseUser(
     }
 
     // Fetch statistics
-    let stats: any[] = [];
+    let stats: MtStatItem[] = [];
     if (banners.length > 0) {
       try {
-        const bannerIds = banners.map((b: any) => String(b.id)).join(",");
+        const bannerIds = banners.map((b) => String(b.id)).join(",");
         stats = await ctx.runAction(api.vkApi.getMtStatistics, {
           accessToken: account.accessToken,
           dateFrom,
@@ -394,15 +397,18 @@ async function diagnoseUser(
       }
       const agg = bannerStats.get(bid)!;
       for (const row of item.rows || []) {
-        agg.spent += parseFloat(row.base?.spent || "0");
-        agg.clicks += parseInt(row.base?.clicks || "0", 10);
-        agg.impressions += parseInt(row.base?.impressions || "0", 10);
-        const baseGoals = parseInt(row.base?.goals || "0", 10);
-        const vkResult = parseInt(row.base?.["vk.result"] || "0", 10);
-        const vkGoals = parseInt(row.base?.["vk.goals"] || "0", 10);
+        // VK API stat rows have a looser shape than typed interface at runtime
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const base = row.base as Record<string, any> | undefined;
+        agg.spent += parseFloat(base?.spent || "0");
+        agg.clicks += parseInt(base?.clicks || "0", 10);
+        agg.impressions += parseInt(base?.impressions || "0", 10);
+        const baseGoals = parseInt(base?.goals || "0", 10);
+        const vkResult = parseInt(base?.["vk.result"] || "0", 10);
+        const vkGoals = parseInt(base?.["vk.goals"] || "0", 10);
         const eventsGoals = row.events
-          ? Object.values(row.events as Record<string, string>).reduce(
-              (s: number, val: string) => s + parseInt(val || "0", 10),
+          ? Object.values(row.events as Record<string, unknown>).reduce(
+              (s: number, val) => s + parseInt(String(val || "0"), 10),
               0
             )
           : 0;
@@ -411,17 +417,17 @@ async function diagnoseUser(
     }
 
     // Build coverage and tracing per banner with spend
-    const rulesForAccount = allRules.filter((r: any) =>
-      r.targetAccountIds?.includes(account._id as string)
+    const rulesForAccount = allRules.filter((r: Doc<"rules">) =>
+      r.targetAccountIds?.includes(account._id)
     );
 
     for (const [bid, bStats] of bannerStats) {
       if (bStats.spent <= 0) continue;
 
-      const banner = banners.find((b: any) => String(b.id) === bid);
+      const banner = banners.find((b) => String(b.id) === bid);
       const campaignId = banner ? String(banner.campaign_id) : "";
       const campaignName =
-        campaigns.find((c: any) => String(c.id) === campaignId)?.name || campaignId;
+        campaigns.find((c) => String(c.id) === campaignId)?.name || campaignId;
 
       const coveredBy: string[] = [];
 
@@ -460,7 +466,7 @@ async function diagnoseUser(
         // Step 5: dedup check
         const ruleLogs = logsByRule.get(rule._id as string) || [];
         const hasActiveStop = ruleLogs.some(
-          (l: any) =>
+          (l) =>
             l.adId === bid &&
             l.status === "success" &&
             (l.actionType === "stopped" || l.actionType === "stopped_and_notified")
@@ -516,7 +522,7 @@ async function diagnoseUser(
   }
 
   // 7. Build rules diagnostics
-  const diagRules: DiagRule[] = allRules.map((r: any) => {
+  const diagRules: DiagRule[] = allRules.map((r: Doc<"rules">) => {
     let targetAlive = true;
     if (r.targetCampaignIds && r.targetCampaignIds.length > 0) {
       targetAlive = r.targetCampaignIds.some((cid: string) =>

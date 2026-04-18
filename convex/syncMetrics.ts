@@ -283,7 +283,7 @@ export const syncAll = internalAction({
                 slot.type === "video" ||
                 (slot.variants &&
                   Object.values(slot.variants).some(
-                    (variant: any) => variant.media_type === "video"
+                    (variant) => variant.media_type === "video"
                   ));
               if (isVideo && slot.id) {
                 bannerVideoMap.push({
@@ -394,11 +394,11 @@ export const syncAll = internalAction({
         // Collect video stats for linked creatives
         try {
           const linkedVideos = await ctx.runQuery(internal.videos.listLinkedVideos, {});
-          const accountVideos = linkedVideos.filter((vid: any) => vid.accountId === account._id);
+          const accountVideos = linkedVideos.filter((vid) => vid.accountId === account._id);
 
           if (accountVideos.length > 0) {
             const videoAdIds = accountVideos
-              .map((vid: any) => vid.vkAdId)
+              .map((vid) => vid.vkAdId)
               .filter(Boolean)
               .join(",");
 
@@ -412,7 +412,7 @@ export const syncAll = internalAction({
 
               for (const item of videoStats) {
                 const adId = String(item.id);
-                const linkedVideo = accountVideos.find((vid: any) => vid.vkAdId === adId);
+                const linkedVideo = accountVideos.find((vid) => vid.vkAdId === adId);
 
                 for (const row of item.rows) {
                   const base = row.base;
@@ -710,7 +710,7 @@ export const pollAiBannerModeration = internalAction({
             await ctx.runMutation(internal.syncMetrics.updateAiBannerModeration, {
               bannerId: ourBanner._id,
               moderationStatus: newStatus,
-              moderationReason: newStatus === "banned" ? (mtBanner as any).moderation_reason || "" : undefined,
+              moderationReason: newStatus === "banned" ? (mtBanner as unknown as { moderation_reason?: string }).moderation_reason || "" : undefined,
             });
 
             // Notify on status changes
@@ -719,9 +719,10 @@ export const pollAiBannerModeration = internalAction({
               if (user?.telegramChatId) {
                 const emoji = newStatus === "banned" ? "🚫" : "✅";
                 const statusText = newStatus === "banned" ? "отклонён" : "одобрен";
+                const moderationReason = (mtBanner as unknown as { moderation_reason?: string }).moderation_reason;
                 const message = `${emoji} <b>AI Кабинет</b>\n\nБаннер "${ourBanner.title}" — ${statusText}\nКампания: ${campaign.name}${
-                  newStatus === "banned" && (mtBanner as any).moderation_reason
-                    ? `\nПричина: ${(mtBanner as any).moderation_reason}`
+                  newStatus === "banned" && moderationReason
+                    ? `\nПричина: ${moderationReason}`
                     : ""
                 }`;
                 await ctx.runAction(internal.telegram.sendMessage, {

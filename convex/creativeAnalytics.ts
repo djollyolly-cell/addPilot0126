@@ -1,6 +1,20 @@
 import { v } from "convex/values";
 import { internalMutation, internalQuery, internalAction } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { Doc } from "./_generated/dataModel";
+
+interface VideoStatsTotals {
+  impressions: number;
+  clicks: number;
+  spent: number;
+  videoStarted: number;
+  videoViewed3s: number;
+  videoViewed10s: number;
+  videoViewed25: number;
+  videoViewed50: number;
+  videoViewed75: number;
+  videoViewed100: number;
+}
 
 // Save/update creative stats for a specific ad+date
 export const saveCreativeStats = internalMutation({
@@ -181,7 +195,7 @@ export const analyzeWatchRates = internalAction({
 
     // Aggregate stats across all dates
     const totals = stats.reduce(
-      (acc: any, s: any) => ({
+      (acc: VideoStatsTotals, s: Doc<"creativeStats">) => ({
         impressions: acc.impressions + s.impressions,
         clicks: acc.clicks + s.clicks,
         spent: acc.spent + s.spent,
@@ -320,7 +334,7 @@ ${video.transcription ? `Транскрипция (первые 500 символ
       const analysis = JSON.parse(text);
 
       // Save analysis to the latest creativeStats record
-      const latestStat = stats.sort((a: any, b: any) => b.createdAt - a.createdAt)[0];
+      const latestStat = stats.sort((a: Doc<"creativeStats">, b: Doc<"creativeStats">) => b.createdAt - a.createdAt)[0];
       await ctx.runMutation(internal.creativeAnalytics.saveWatchAnalysis, {
         creativeStatsId: latestStat._id,
         aiWatchScore: analysis.score,
@@ -341,7 +355,7 @@ ${video.transcription ? `Транскрипция (первые 500 символ
             p95: totals.videoViewed100, // schema uses p95, we map p100 here
           },
           totalViews: totals.videoStarted,
-          recommendations: (analysis.recommendations || []).map((r: any) => ({
+          recommendations: (analysis.recommendations || []).map((r: { issue: string; suggestion: string; priority: string }) => ({
             field: r.priority === "high" ? "Критично" : r.priority === "medium" ? "Важно" : "Совет",
             original: r.issue,
             suggested: r.suggestion,
@@ -385,7 +399,7 @@ ${video.transcription ? `Транскрипция (первые 500 символ
             if (!isReanalysis) {
               const recs = (analysis.recommendations || [])
                 .slice(0, 3)
-                .map((r: any) => `• ${r.issue}`)
+                .map((r: { issue: string; suggestion: string; priority: string }) => `• ${r.issue}`)
                 .join("\n");
 
               text = `📊 <b>Анализ видео «${video.filename}»</b>\n\nОценка удержания: <b>${analysis.score}/100 — ${analysis.scoreLabel}</b>\nВоронка: ${funnel}${recs ? `\n\n⚠️ Рекомендации:\n${recs}` : ""}`;
