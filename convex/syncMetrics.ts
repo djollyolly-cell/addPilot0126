@@ -159,15 +159,37 @@ export const syncAll = internalAction({
           });
         }
 
+        // Fetch ad_plan budgets for cascade fallback (group budget → plan budget)
+        const adPlanBudgets = new Map<string, number>();
+        try {
+          const adPlans = await ctx.runAction(api.vkApi.getMtAdPlans, { accessToken });
+          for (const plan of adPlans) {
+            if (plan.budget_limit_day && plan.budget_limit_day > 0) {
+              adPlanBudgets.set(String(plan.id), plan.budget_limit_day);
+            }
+          }
+        } catch (err) {
+          // Non-critical: if ad_plans fetch fails, we still have group-level budgets
+          console.warn(`[syncAll] getMtAdPlans failed for «${account.name}»: ${err}`);
+        }
+
         // Build adCampaignMap: adId → { adGroupId, adPlanId, dailyBudget }
+        // CASCADE: group budget → ad_plan budget (if group budget = 0)
         const adCampaignMap: Array<{ adId: string; adGroupId: string; adPlanId: string | null; dailyBudget: number }> = [];
         for (const [adId, adGroupId] of bannerCampaignMap) {
           const data = groupData.get(adGroupId);
+          let dailyBudget = data?.dailyBudget ?? 0;
+
+          // Cascade: if group has no daily budget, use ad_plan budget
+          if (dailyBudget <= 0 && data?.adPlanId) {
+            dailyBudget = adPlanBudgets.get(data.adPlanId) ?? 0;
+          }
+
           adCampaignMap.push({
             adId,
             adGroupId,
             adPlanId: data?.adPlanId ?? null,
-            dailyBudget: data?.dailyBudget ?? 0,
+            dailyBudget,
           });
         }
 

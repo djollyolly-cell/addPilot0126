@@ -212,7 +212,7 @@ export function evaluateConditionTrace(
 
     case "fast_spend": {
       if (!context?.spendHistory || context.spendHistory.length < 2)
-        return { triggered: false, stoppedAt: "step6_condition_not_met", reason: "Недостаточно snapshot-ов расхода" };
+        return { triggered: false, stoppedAt: "step6_condition_not_met", reason: "Недостаточно snapshot-ов расхода (нужно минимум 2 за 15 мин)" };
       const sorted = [...context.spendHistory].sort(
         (a, b) => a.timestamp - b.timestamp
       );
@@ -221,11 +221,11 @@ export function evaluateConditionTrace(
       const spentDiff = newest.spent - oldest.spent;
       const budget = context.dailyBudget;
       if (!budget || budget <= 0)
-        return { triggered: false, stoppedAt: "step6_condition_not_met", reason: "Дневной бюджет не задан" };
+        return { triggered: false, stoppedAt: "step6_no_budget", reason: "Дневной бюджет не задан ни на группе, ни на кампании" };
       const percentSpent = (spentDiff / budget) * 100;
       if (percentSpent > condition.value)
-        return { triggered: true, stoppedAt: "triggered", reason: `Потрачено ${percentSpent.toFixed(0)}% бюджета > порог ${condition.value}%` };
-      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Потрачено ${percentSpent.toFixed(0)}% бюджета ≤ порог ${condition.value}%` };
+        return { triggered: true, stoppedAt: "triggered", reason: `Потрачено ${Math.round(spentDiff)}₽ за 15 мин = ${percentSpent.toFixed(0)}% бюджета ${budget}₽ > порог ${condition.value}%` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Потрачено ${Math.round(spentDiff)}₽ за 15 мин = ${percentSpent.toFixed(0)}% бюджета ${budget}₽ ≤ порог ${condition.value}%` };
     }
 
     case "spend_no_leads": {
@@ -417,7 +417,7 @@ export const getAccountAllAdIds = internalQuery({
   },
 });
 
-/** Get campaign daily limit for fast_spend calculation */
+/** Get campaign daily limit for fast_spend calculation (cascade: group → ad_plan) */
 export const getCampaignDailyLimit = internalQuery({
   args: { adId: v.string() },
   handler: async (ctx, args) => {
@@ -427,7 +427,25 @@ export const getCampaignDailyLimit = internalQuery({
       .first();
     if (!ad) return null;
     const campaign = await ctx.db.get(ad.campaignId);
-    return campaign?.dailyLimit ?? null;
+    if (!campaign) return null;
+
+    // Cascade: group budget first, then ad_plan budget
+    if (campaign.dailyLimit && campaign.dailyLimit > 0) {
+      return campaign.dailyLimit;
+    }
+
+    // Fallback: look up ad_plan budget via adPlanId
+    if (campaign.adPlanId) {
+      const adPlan = await ctx.db
+        .query("campaigns")
+        .withIndex("by_vkCampaignId", (q) => q.eq("vkCampaignId", campaign.adPlanId!))
+        .first();
+      if (adPlan?.dailyLimit && adPlan.dailyLimit > 0) {
+        return adPlan.dailyLimit;
+      }
+    }
+
+    return null;
   },
 });
 

@@ -39,7 +39,7 @@ const RULE_TYPE_LABELS: Record<RuleType, string> = {
 const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
   cpl_limit: 'Проверяет каждое объявление отдельно. Остановить, если стоимость лида превышает порог',
   min_ctr: 'Проверяет каждое объявление отдельно. Остановить, если CTR ниже порога',
-  fast_spend: 'Проверяет каждое объявление отдельно. Остановить при слишком быстром расходе бюджета',
+  fast_spend: 'Остановить, если за 15 минут потрачено более N% дневного бюджета группы/кампании',
   spend_no_leads: 'Проверяет каждое объявление отдельно. Остановить, если потрачено N без единого лида',
   budget_limit: 'Проверяет каждое объявление отдельно. Остановить, если дневной расход превышает порог',
   low_impressions: 'Проверяет каждое объявление отдельно. Уведомить, если показов меньше порога (не откручивается)',
@@ -51,7 +51,7 @@ const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
 const RULE_TYPE_UNITS: Record<RuleType, string> = {
   cpl_limit: '₽',
   min_ctr: '%',
-  fast_spend: '₽/час',
+  fast_spend: '% бюджета',
   spend_no_leads: '₽',
   budget_limit: '₽',
   low_impressions: 'показов',
