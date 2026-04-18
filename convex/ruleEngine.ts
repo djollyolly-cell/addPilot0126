@@ -186,13 +186,16 @@ export function evaluateConditionTrace(
 ): TraceResult {
   switch (ruleType) {
     case "cpl_limit": {
-      const cpl =
-        metrics.leads > 0 ? metrics.spent / metrics.leads : undefined;
-      if (cpl === undefined)
-        return { triggered: false, stoppedAt: "step6_cpl_undefined", reason: "CPL невычислим: leads=0" };
-      if (cpl > condition.value)
-        return { triggered: true, stoppedAt: "triggered", reason: `CPL ${Math.round(cpl)}₽ > порог ${condition.value}₽` };
-      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `CPL ${Math.round(cpl)}₽ ≤ порог ${condition.value}₽` };
+      if (metrics.leads > 0) {
+        const cpl = metrics.spent / metrics.leads;
+        if (cpl > condition.value)
+          return { triggered: true, stoppedAt: "triggered", reason: `CPL ${Math.round(cpl)}₽ > порог ${condition.value}₽` };
+        return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `CPL ${Math.round(cpl)}₽ ≤ порог ${condition.value}₽` };
+      }
+      // leads=0: расход как нижняя граница CPL
+      if (metrics.spent > condition.value)
+        return { triggered: true, stoppedAt: "triggered", reason: `Расход ${Math.round(metrics.spent)}₽ > порог ${condition.value}₽, лидов: 0 (CPL превышен)` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Расход ${Math.round(metrics.spent)}₽ ≤ порог ${condition.value}₽, лидов: 0 (ожидание)` };
     }
 
     case "min_ctr": {

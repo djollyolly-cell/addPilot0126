@@ -369,11 +369,20 @@ describe("evaluateConditionTrace", () => {
       expect(result.reason).toContain("600");
     });
 
-    it("returns cpl_undefined when leads=0", () => {
-      const metrics: MetricsSnapshot = { spent: 1000, leads: 0, impressions: 500, clicks: 30 };
+    it("returns triggered when leads=0 and spent exceeds limit", () => {
+      const metrics: MetricsSnapshot = { spent: 600, leads: 0, impressions: 500, clicks: 30 };
+      const result = evaluateConditionTrace("cpl_limit", condition, metrics);
+      expect(result.triggered).toBe(true);
+      expect(result.stoppedAt).toBe("triggered");
+      expect(result.reason).toContain("600");
+      expect(result.reason).toContain("лидов: 0");
+    });
+
+    it("returns condition_not_met when leads=0 and spent within limit", () => {
+      const metrics: MetricsSnapshot = { spent: 400, leads: 0, impressions: 500, clicks: 30 };
       const result = evaluateConditionTrace("cpl_limit", condition, metrics);
       expect(result.triggered).toBe(false);
-      expect(result.stoppedAt).toBe("step6_cpl_undefined");
+      expect(result.stoppedAt).toBe("step6_condition_not_met");
     });
 
     it("returns condition_not_met when CPL within limit", () => {
