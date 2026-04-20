@@ -911,7 +911,8 @@ export const serviceDiagnostic = query({
       lastTriggeredAt: r.lastTriggeredAt
         ? new Date(r.lastTriggeredAt).toISOString()
         : null,
-    };});
+    };
+    });
 
     // 9. Budget increase logs (last 100)
     const budgetLogs = logs
@@ -1013,7 +1014,8 @@ export const debugMetrics = query({
       value: cond?.value,
       timeWindow: cond?.timeWindow,
       isActive: r.isActive,
-    };});
+    };
+    });
 
     return { withClicks, actionLogs, usersTg, notifications, rulesInfo };
   },

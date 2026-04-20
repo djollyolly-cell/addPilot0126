@@ -41,19 +41,6 @@ export interface RuleCondition {
   timeWindow?: "daily" | "since_launch" | "24h" | "1h" | "6h";
 }
 
-/**
- * Type guard: extract object conditions from a rule.
- * L1 and L3 rules always have object conditions.
- * L2 (type="custom") rules have array conditions.
- * Returns the object conditions, or null if it's an array.
- */
-export function getObjectConditions(
-  conditions: RuleCondition | RuleCondition[]
-): RuleCondition | null {
-  if (Array.isArray(conditions)) return null;
-  return conditions as RuleCondition;
-}
-
 export interface SpendSnapshot {
   spent: number;
   timestamp: number;
