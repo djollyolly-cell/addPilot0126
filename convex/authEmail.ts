@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, query, internalMutation } from "./_generated/server";
+import { action, query, internalMutation, internalQuery } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
@@ -132,7 +132,7 @@ export const loginWithEmail = action({
     user: v.optional(
       v.object({
         id: v.string(),
-        vkId: v.string(),
+        vkId: v.optional(v.string()),
         name: v.string(),
         avatarUrl: v.optional(v.string()),
         email: v.string(),
@@ -145,7 +145,7 @@ export const loginWithEmail = action({
     sessionToken?: string;
     user?: {
       id: string;
-      vkId: string;
+      vkId?: string;
       name: string;
       avatarUrl?: string;
       email: string;
@@ -177,6 +177,52 @@ export const loginWithEmail = action({
       return {
         success: false,
         error: `Слишком много попыток. Повторите через ${rateLimitRecord.remainingMinutes} мин.`,
+      };
+    }
+
+    // Try local bcrypt first (for org-users with passwordHash)
+    const userByEmail = await ctx.runQuery(internal.authEmail.findUserByEmail, {
+      email: args.email,
+    });
+
+    if (userByEmail?.passwordHash) {
+      const bcrypt = await import("bcryptjs");
+      const valid = await bcrypt.compare(args.password, userByEmail.passwordHash);
+      if (!valid) {
+        await ctx.runMutation(internal.authEmail.recordFailedAttempt, {
+          email: args.email,
+        });
+        return { success: false, error: "Неверный email или пароль" };
+      }
+
+      // Success — create session
+      const sessionToken: string = await ctx.runMutation(
+        internal.authInternal.createSession,
+        { userId: userByEmail._id }
+      );
+
+      await ctx.runMutation(internal.authEmail.resetAttempts, { email: args.email });
+
+      try {
+        await ctx.runMutation(internal.auditLog.log, {
+          userId: userByEmail._id,
+          category: "auth",
+          action: "login",
+          status: "success",
+          details: { method: "bcrypt" },
+        });
+      } catch { /* non-critical */ }
+
+      return {
+        success: true,
+        sessionToken,
+        user: {
+          id: userByEmail._id as string,
+          vkId: userByEmail.vkId,
+          name: userByEmail.name ?? "",
+          avatarUrl: userByEmail.avatarUrl,
+          email: userByEmail.email,
+        },
       };
     }
 
@@ -379,5 +425,16 @@ export const changePassword = action({
     } catch {
       return { success: false, error: "Произошла ошибка. Попробуйте позже." };
     }
+  },
+});
+
+// Find user by email (for bcrypt path)
+export const findUserByEmail = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .first();
   },
 });
