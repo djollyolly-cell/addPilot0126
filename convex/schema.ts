@@ -794,4 +794,50 @@ export default defineSchema({
     .index("by_accountId_capturedAt", ["accountId", "capturedAt"])
     .index("by_endpoint_capturedAt", ["endpoint", "capturedAt"])
     .index("by_capturedAt", ["capturedAt"]),
+  // Agency organization — owns adAccounts/rules/etc, has subscription,
+  // has manager team with granular permissions
+  organizations: defineTable({
+    name: v.string(),                                // "Digital Agency"
+    ownerId: v.id("users"),                          // owner — full access
+    subscriptionTier: v.union(
+      v.literal("agency_s"),
+      v.literal("agency_m"),
+      v.literal("agency_l"),
+      v.literal("agency_xl")
+    ),
+    subscriptionExpiresAt: v.optional(v.number()),
+    // Load units (computed daily)
+    maxLoadUnits: v.number(),                        // package limit
+    currentLoadUnits: v.number(),                    // last computed
+    // Niche distribution at signup (n cabinets per niche)
+    // niche is v.string() — validated at runtime via AVAILABLE_NICHES constant.
+    // This avoids schema redeploy when adding new niches.
+    nichesConfig: v.optional(v.array(v.object({
+      niche: v.string(),
+      cabinetsCount: v.number(),
+    }))),
+    // Overage flags (Решение 4: tier 1 — overage)
+    overageNotifiedAt: v.optional(v.number()),       // first 7+day notification
+    overageGraceStartedAt: v.optional(v.number()),   // 14d grace begin
+    featuresDisabledAt: v.optional(v.number()),      // grace expired → premium off
+    // Expired flags (Решение 4: tier 2 — subscription expired)
+    expiredGracePhase: v.optional(v.union(
+      v.literal("warnings"),                         // day 0-14
+      v.literal("read_only"),                        // day 14-45
+      v.literal("deep_read_only"),                   // day 45-60
+      v.literal("frozen")                            // day 60+
+    )),
+    expiredGraceStartedAt: v.optional(v.number()),
+    // Pending credit from manager subscriptions (3.7 way 2)
+    pendingCredit: v.optional(v.number()),
+    pendingCreditCurrency: v.optional(v.string()),
+    // Timezone for monthly org-report (D2.4)
+    timezone: v.optional(v.string()),                // "Europe/Moscow", default
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_ownerId", ["ownerId"])
+    .index("by_subscriptionTier", ["subscriptionTier"])
+    .index("by_expiredGracePhase", ["expiredGracePhase"]),
+
 }, { schemaValidation: false });
