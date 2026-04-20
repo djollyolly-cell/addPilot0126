@@ -41,6 +41,19 @@ export interface RuleCondition {
   timeWindow?: "daily" | "since_launch" | "24h" | "1h" | "6h";
 }
 
+/**
+ * Type guard: extract object conditions from a rule.
+ * L1 and L3 rules always have object conditions.
+ * L2 (type="custom") rules have array conditions.
+ * Returns the object conditions, or null if it's an array.
+ */
+export function getObjectConditions(
+  conditions: RuleCondition | RuleCondition[]
+): RuleCondition | null {
+  if (Array.isArray(conditions)) return null;
+  return conditions as RuleCondition;
+}
+
 export interface SpendSnapshot {
   spent: number;
   timestamp: number;
@@ -1454,7 +1467,10 @@ export const checkRulesForAccount = internalAction({
 
     // 4. Per-rule, per-ad evaluation
     for (const rule of rules) {
-      const timeWindow = rule.conditions.timeWindow;
+      // L2 array conditions handled in Plan 5 — skip here
+      if (Array.isArray(rule.conditions)) continue;
+      const conditions = rule.conditions;
+      const timeWindow = conditions.timeWindow;
       const needsAllAds =
         (rule.type === "clicks_no_leads" || rule.type === "low_impressions") &&
         timeWindow &&

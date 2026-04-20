@@ -1,3 +1,4 @@
+import { v } from "convex/values";
 import { internalMutation } from "./_generated/server";
 
 /**
@@ -57,5 +58,24 @@ export const resetStuckCleanupHeartbeat = internalMutation({
       error: "Manual reset: stuck >12h, presumed crashed",
     });
     return { reset: true, startedAt: hb.startedAt, ageMs: Date.now() - hb.startedAt };
+  },
+});
+
+/**
+ * One-time audit: count existing rules and verify all conditions are object,
+ * not accidentally array. Run before deploying schema change.
+ */
+export const auditExistingRules = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const rules = await ctx.db.query("rules").collect();
+    const objectCount = rules.filter((r) => !Array.isArray(r.conditions)).length;
+    const arrayCount = rules.filter((r) => Array.isArray(r.conditions)).length;
+    return {
+      total: rules.length,
+      asObject: objectCount,
+      asArray: arrayCount,
+      types: Array.from(new Set(rules.map((r) => r.type))),
+    };
   },
 });

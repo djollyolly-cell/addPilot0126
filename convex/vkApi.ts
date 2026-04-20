@@ -1873,13 +1873,14 @@ export const diagnosUzBudgetRules = action({
     const results: Array<Record<string, unknown>> = [];
 
     for (const rule of rules) {
+      const cond = (Array.isArray(rule.conditions) ? rule.conditions[0] : rule.conditions) as Record<string, unknown> | undefined;
       const ruleResult: Record<string, unknown> = {
         ruleId: rule._id,
         ruleName: rule.name,
         ruleActive: rule.isActive,
-        dailyLimit: rule.conditions?.value,
-        budgetStep: rule.conditions?.budgetStep,
-        maxDailyBudget: rule.conditions?.maxDailyBudget,
+        dailyLimit: cond?.value,
+        budgetStep: cond?.budgetStep,
+        maxDailyBudget: cond?.maxDailyBudget,
         targetCampaignIds: rule.targetCampaignIds,
         accounts: [],
       };

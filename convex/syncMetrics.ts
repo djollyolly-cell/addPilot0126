@@ -895,20 +895,23 @@ export const serviceDiagnostic = query({
 
     // 8. UZ budget rules analysis
     const uzRules = rules.filter((r) => r.type === "uz_budget_manage" && r.isActive);
-    const uzRulesSummary = uzRules.map((r) => ({
+    const uzRulesSummary = uzRules.map((r) => {
+      // uz_budget_manage always has object conditions with budget fields
+      const cond = (Array.isArray(r.conditions) ? r.conditions[0] : r.conditions) as Record<string, unknown>;
+      return {
       id: r._id,
       name: r.name,
       userId: r.userId,
-      initialBudget: r.conditions.initialBudget,
-      budgetStep: r.conditions.budgetStep,
-      maxDailyBudget: r.conditions.maxDailyBudget,
+      initialBudget: cond?.initialBudget as number | undefined,
+      budgetStep: cond?.budgetStep as number | undefined,
+      maxDailyBudget: cond?.maxDailyBudget as number | undefined,
       targetAccounts: r.targetAccountIds.length,
       targetCampaigns: (r.targetCampaignIds ?? []).length,
       triggerCount: r.triggerCount ?? 0,
       lastTriggeredAt: r.lastTriggeredAt
         ? new Date(r.lastTriggeredAt).toISOString()
         : null,
-    }));
+    };});
 
     // 9. Budget increase logs (last 100)
     const budgetLogs = logs
@@ -998,17 +1001,19 @@ export const debugMetrics = query({
 
     // Get rules config
     const rules = await ctx.db.query("rules").collect();
-    const rulesInfo = rules.map((r) => ({
+    const rulesInfo = rules.map((r) => {
+      const cond = Array.isArray(r.conditions) ? r.conditions[0] : r.conditions;
+      return {
       id: r._id,
       name: r.name,
       type: r.type,
       userId: r.userId,
       stopAd: r.actions.stopAd,
       notify: r.actions.notify,
-      value: r.conditions.value,
-      timeWindow: r.conditions.timeWindow,
+      value: cond?.value,
+      timeWindow: cond?.timeWindow,
       isActive: r.isActive,
-    }));
+    };});
 
     return { withClicks, actionLogs, usersTg, notifications, rulesInfo };
   },

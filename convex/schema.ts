@@ -169,28 +169,49 @@ export default defineSchema({
       v.literal("low_impressions"),
       v.literal("clicks_no_leads"),
       v.literal("new_lead"),
-      v.literal("uz_budget_manage")
+      v.literal("uz_budget_manage"),
+      v.literal("custom"),                 // L2 generic constructor (conditions = array)
+      v.literal("custom_l3")              // L3 per-agency handler (dispatch via customRuleTypeCode)
     ),
-    conditions: v.object({
-      metric: v.string(),
-      operator: v.string(),
-      value: v.number(),
-      minSamples: v.optional(v.number()),
-      timeWindow: v.optional(
-        v.union(
-          v.literal("daily"),
-          v.literal("since_launch"),
-          v.literal("24h"),
-          v.literal("1h"),
-          v.literal("6h")
-        )
-      ),
-      // uz_budget_manage fields
-      initialBudget: v.optional(v.number()),
-      budgetStep: v.optional(v.number()),
-      maxDailyBudget: v.optional(v.number()),
-      resetDaily: v.optional(v.boolean()),
-    }),
+    conditions: v.union(
+      // Existing: single condition (L1 standard types + L3 custom_*)
+      v.object({
+        metric: v.string(),
+        operator: v.string(),
+        value: v.number(),
+        minSamples: v.optional(v.number()),
+        timeWindow: v.optional(
+          v.union(
+            v.literal("daily"),
+            v.literal("since_launch"),
+            v.literal("24h"),
+            v.literal("1h"),
+            v.literal("6h")
+          )
+        ),
+        // uz_budget_manage fields
+        initialBudget: v.optional(v.number()),
+        budgetStep: v.optional(v.number()),
+        maxDailyBudget: v.optional(v.number()),
+        resetDaily: v.optional(v.boolean()),
+      }),
+      // New: array of conditions for L2 constructor (AND)
+      v.array(v.object({
+        metric: v.string(),
+        operator: v.string(),
+        value: v.number(),
+        minSamples: v.optional(v.number()),
+        timeWindow: v.optional(
+          v.union(
+            v.literal("daily"),
+            v.literal("since_launch"),
+            v.literal("24h"),
+            v.literal("1h"),
+            v.literal("6h")
+          )
+        ),
+      }))
+    ),
     actions: v.object({
       stopAd: v.boolean(),
       notify: v.boolean(),

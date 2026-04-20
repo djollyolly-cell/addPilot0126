@@ -317,6 +317,10 @@ export const update = mutation({
       if (valueError) {
         throw new Error(valueError);
       }
+      // L2 array conditions are updated via Plan 5 constructor UI — not here
+      if (Array.isArray(rule.conditions)) {
+        throw new Error("Обновление L2 правил через этот метод не поддерживается");
+      }
       patch.conditions = {
         ...rule.conditions,
         value: args.value,

@@ -468,6 +468,8 @@ async function diagnoseUser(
 
       for (const rule of rulesForAccount) {
         if (!rule.isActive) continue;
+        // L2 array conditions not yet supported in diagnostic — skip
+        if (Array.isArray(rule.conditions)) continue;
 
         // Step 2: targetAdIds filter
         if (rule.targetAdIds && rule.targetAdIds.length > 0) {
