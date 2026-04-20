@@ -840,4 +840,34 @@ export default defineSchema({
     .index("by_subscriptionTier", ["subscriptionTier"])
     .index("by_expiredGracePhase", ["expiredGracePhase"]),
 
+  // Members of an organization (owner + managers with permissions)
+  orgMembers: defineTable({
+    orgId: v.id("organizations"),
+    userId: v.id("users"),
+    role: v.union(v.literal("owner"), v.literal("manager")),
+    // Granular permissions (spec 5.3): rules, budgets, ads_control,
+    // reports, logs, telegram, add_accounts, invite_members, ai_cabinet
+    permissions: v.array(v.string()),
+    // Assigned cabinets (spec 5.4)
+    assignedAccountIds: v.array(v.id("adAccounts")),
+    invitedBy: v.optional(v.id("users")),
+    invitedAt: v.optional(v.number()),
+    // Status: invited (email sent) → pending_owner_confirm (manager accepted,
+    //         awaiting owner) → active → disabled (revoked)
+    status: v.union(
+      v.literal("invited"),
+      v.literal("pending_owner_confirm"),
+      v.literal("active"),
+      v.literal("disabled")
+    ),
+    // Contact email (may differ from users.email — see impact 10bis)
+    contactEmail: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.optional(v.number()),
+  })
+    .index("by_orgId", ["orgId"])
+    .index("by_userId", ["userId"])
+    .index("by_orgId_userId", ["orgId", "userId"])
+    .index("by_orgId_status", ["orgId", "status"]),
+
 }, { schemaValidation: false });
