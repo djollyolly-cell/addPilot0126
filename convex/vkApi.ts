@@ -207,10 +207,53 @@ export interface MtBanner {
   updated: string;
 }
 
+/** Return type for rate-limit header extraction. */
+export interface RateLimitHeaders {
+  rpsLimit?: number;
+  rpsRemaining?: number;
+  hourlyLimit?: number;
+  hourlyRemaining?: number;
+  dailyLimit?: number;
+  dailyRemaining?: number;
+}
+
+/**
+ * Extract X-RateLimit-* headers from VK API response.
+ * Returns object with all 6 fields, undefined for missing/invalid values.
+ * Exported for unit testing.
+ */
+export function extractRateLimitHeaders(headers: Headers): RateLimitHeaders {
+  const num = (key: string): number | undefined => {
+    const v = headers.get(key);
+    if (v === null) return undefined;
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : undefined;
+  };
+  return {
+    rpsLimit: num("X-RateLimit-RPS-Limit"),
+    rpsRemaining: num("X-RateLimit-RPS-Remaining"),
+    hourlyLimit: num("X-RateLimit-Hourly-Limit"),
+    hourlyRemaining: num("X-RateLimit-Hourly-Remaining"),
+    dailyLimit: num("X-RateLimit-Daily-Limit"),
+    dailyRemaining: num("X-RateLimit-Daily-Remaining"),
+  };
+}
+
+/** Callback info passed to onResponse */
+export interface CallMtApiResponseInfo {
+  endpoint: string;
+  statusCode: number;
+  rateLimits: RateLimitHeaders;
+}
+
 async function callMtApi<T>(
   endpoint: string,
   accessToken: string,
-  params?: Record<string, string>
+  params?: Record<string, string>,
+  options?: {
+    /** Called after every response (success or error). Fire-and-forget from caller. */
+    onResponse?: (info: CallMtApiResponseInfo) => void;
+  }
 ): Promise<T> {
   let lastError: Error | null = null;
 
@@ -225,6 +268,17 @@ async function callMtApi<T>(
         Authorization: `Bearer ${accessToken}`,
       },
     });
+
+    // Extract and report rate-limit headers (non-blocking)
+    try {
+      options?.onResponse?.({
+        endpoint,
+        statusCode: response.status,
+        rateLimits: extractRateLimitHeaders(response.headers),
+      });
+    } catch {
+      // Non-critical: observability callback must never fail the API call
+    }
 
     if (response.status === 429 && attempt < MT_MAX_RETRIES - 1) {
       await sleep(RETRY_DELAY_MS * (attempt + 1));
@@ -568,13 +622,32 @@ export const getCampaignsSpentTodayBatch = internalAction({
   args: {
     accessToken: v.string(),
     campaignIds: v.array(v.string()),
+    accountId: v.optional(v.id("adAccounts")),
   },
-  handler: async (_, args): Promise<Record<string, number>> => {
+  handler: async (ctx, args): Promise<Record<string, number>> => {
     if (args.campaignIds.length === 0) return {};
 
     const msk = new Date(Date.now() + 3 * 60 * 60 * 1000);
     const today = msk.toISOString().slice(0, 10);
     const result: Record<string, number> = {};
+
+    // Rate-limit logger for this account
+    const rlOptions = {
+      onResponse: (info: CallMtApiResponseInfo) => {
+        const hasData =
+          info.rateLimits.rpsLimit !== undefined ||
+          info.rateLimits.dailyRemaining !== undefined ||
+          info.statusCode === 429;
+        if (hasData) {
+          void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
+            accountId: args.accountId,
+            endpoint: info.endpoint,
+            statusCode: info.statusCode,
+            ...info.rateLimits,
+          });
+        }
+      },
+    };
 
     // Chunk IDs (200 per request to stay within URL limits)
     const CHUNK_SIZE = 200;
@@ -591,7 +664,8 @@ export const getCampaignsSpentTodayBatch = internalAction({
             date_from: today,
             date_to: today,
             metrics: "base",
-          }
+          },
+          rlOptions
         );
 
         for (const item of data.items || []) {

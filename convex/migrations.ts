@@ -26,3 +26,36 @@ export const setProAccountLimitForExistingUsers = internalMutation({
     return { updated, message: `Set proAccountLimit=27 for ${updated} existing Pro users` };
   },
 });
+
+/**
+ * One-time fix: reset stuck "cleanup-realtime-metrics" heartbeat.
+ * Run via Convex dashboard if heartbeat is stuck >12h with status="running".
+ * Safe: only resets if currently running and started >12h ago.
+ */
+export const resetStuckCleanupHeartbeat = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
+    const hb = await ctx.db
+      .query("cronHeartbeats")
+      .withIndex("by_name", (q) => q.eq("name", "cleanup-realtime-metrics"))
+      .first();
+
+    if (!hb) {
+      return { reset: false, reason: "no heartbeat found" };
+    }
+    if (hb.status !== "running") {
+      return { reset: false, reason: `status is ${hb.status}, not running` };
+    }
+    if (Date.now() - hb.startedAt < TWELVE_HOURS_MS) {
+      return { reset: false, reason: "heartbeat is recent (<12h)" };
+    }
+
+    await ctx.db.patch(hb._id, {
+      status: "failed",
+      finishedAt: Date.now(),
+      error: "Manual reset: stuck >12h, presumed crashed",
+    });
+    return { reset: true, startedAt: hb.startedAt, ageMs: Date.now() - hb.startedAt };
+  },
+});

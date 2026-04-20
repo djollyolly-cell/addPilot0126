@@ -163,9 +163,9 @@ describe("users", () => {
         accessToken: "token_dg",
       });
 
-      // Create 4 active rules (start limit = 10, freemium limit = 2)
+      // Create 5 active rules (start limit = 10, freemium limit = 3)
       const ruleIds = [];
-      for (let i = 1; i <= 4; i++) {
+      for (let i = 1; i <= 5; i++) {
         const ruleId = await t.run(async (ctx) => {
           return await ctx.db.insert("rules", {
             userId,
@@ -183,10 +183,10 @@ describe("users", () => {
         ruleIds.push(ruleId);
       }
 
-      // Downgrade to freemium (limit = 2 rules)
+      // Downgrade to freemium (limit = 3 rules)
       await t.mutation(api.users.updateTier, { userId, tier: "freemium" });
 
-      // Check: first 2 rules should remain active, last 2 should be deactivated
+      // Check: first 3 rules should remain active, last 2 should be deactivated
       const rules = await t.run(async (ctx) => {
         return await ctx.db
           .query("rules")
@@ -197,7 +197,7 @@ describe("users", () => {
       const activeRules = rules.filter((r) => r.isActive);
       const inactiveRules = rules.filter((r) => !r.isActive);
 
-      expect(activeRules).toHaveLength(2);
+      expect(activeRules).toHaveLength(3);
       expect(inactiveRules).toHaveLength(2);
     });
 
@@ -250,7 +250,7 @@ describe("users", () => {
       }
     });
 
-    test("S6-DoD#11: downgrade pro→freemium with 5 rules deactivates rules 3-5", async () => {
+    test("S6-DoD#11: downgrade pro→freemium with 5 rules deactivates rules 4-5", async () => {
       const t = convexTest(schema);
 
       const userId = await t.mutation(api.users.create, {
@@ -289,7 +289,7 @@ describe("users", () => {
         ruleIds.push(ruleId);
       }
 
-      // Downgrade to freemium (limit = 2 active rules, no autoStop)
+      // Downgrade to freemium (limit = 3 active rules, no autoStop)
       await t.mutation(api.users.updateTier, { userId, tier: "freemium" });
 
       // Check results
@@ -303,9 +303,9 @@ describe("users", () => {
       const activeRules = rules.filter((r: any) => r.isActive);
       const inactiveRules = rules.filter((r: any) => !r.isActive);
 
-      // First 2 should be active, last 3 inactive
-      expect(activeRules).toHaveLength(2);
-      expect(inactiveRules).toHaveLength(3);
+      // First 3 should be active, last 2 inactive
+      expect(activeRules).toHaveLength(3);
+      expect(inactiveRules).toHaveLength(2);
 
       // All rules should have stopAd disabled (freemium)
       for (const rule of rules) {
@@ -346,7 +346,7 @@ describe("users", () => {
 
       expect(limits.tier).toBe("freemium");
       expect(limits.limits.accounts).toBe(1);
-      expect(limits.limits.rules).toBe(2);
+      expect(limits.limits.rules).toBe(3);
       expect(limits.limits.autoStop).toBe(false);
       expect(limits.usage.accounts).toBe(0);
       expect(limits.usage.rules).toBe(0);

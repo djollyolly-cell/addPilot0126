@@ -56,7 +56,9 @@ export default defineSchema({
   })
     .index("by_vkId", ["vkId"])
     .index("by_email", ["email"])
-    .index("by_referralCode", ["referralCode"]),
+    .index("by_referralCode", ["referralCode"])
+    .index("by_telegramUserId", ["telegramUserId"])
+    .index("by_telegramChatId", ["telegramChatId"]),
 
   sessions: defineTable({
     userId: v.id("users"),
@@ -768,4 +770,21 @@ export default defineSchema({
     lastSentAt: v.number(),
   })
     .index("by_key", ["key"]),
+
+  // VK API rate-limit headers from response (X-RateLimit-RPS-Limit, etc.)
+  vkApiLimits: defineTable({
+    accountId: v.optional(v.id("adAccounts")),
+    endpoint: v.string(),
+    rpsLimit: v.optional(v.number()),
+    rpsRemaining: v.optional(v.number()),
+    hourlyLimit: v.optional(v.number()),
+    hourlyRemaining: v.optional(v.number()),
+    dailyLimit: v.optional(v.number()),
+    dailyRemaining: v.optional(v.number()),
+    statusCode: v.number(),
+    capturedAt: v.number(),
+  })
+    .index("by_accountId_capturedAt", ["accountId", "capturedAt"])
+    .index("by_endpoint_capturedAt", ["endpoint", "capturedAt"])
+    .index("by_capturedAt", ["capturedAt"]),
 }, { schemaValidation: false });

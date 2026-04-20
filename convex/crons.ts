@@ -145,12 +145,19 @@ crons.cron(
   internal.logCleanup.runDaily
 );
 
-// Clean up old metricsRealtime records (older than 4 days) — daily at 05:00 UTC
+// Clean up old metricsRealtime records (older than 4 days) — every 6 hours
 crons.cron(
   "cleanup-old-realtime-metrics",
-  "0 5 * * *",
+  "0 */6 * * *",
   internal.metrics.cleanupOldRealtimeMetrics,
   {}
+);
+
+// VK API throttling probe — every 15 min, batches 30 accounts/run
+crons.interval(
+  "vk-throttling-probe",
+  { minutes: 15 },
+  internal.vkApiLimits.probeThrottling
 );
 
 export default crons;

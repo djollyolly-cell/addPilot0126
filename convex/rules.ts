@@ -2,6 +2,20 @@ import { v } from "convex/values";
 import { mutation, query, action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 
+/**
+ * Single source of truth for tier-based rule limits.
+ * Must match billing.ts TIERS[tier].rulesLimit.
+ * Exported for testing. Used in create + toggleActive.
+ *
+ * Cross-plan note: Plan 3 (Billing Agency) will extend with
+ * agency_s/m/l/xl: Infinity when agency tiers are added.
+ */
+export const TIER_RULE_LIMITS: Record<string, number> = {
+  freemium: 3,
+  start: 10,
+  pro: Infinity,
+};
+
 // Default metric/operator per rule type
 const RULE_TYPE_DEFAULTS: Record<
   string,
@@ -138,19 +152,13 @@ export const create = mutation({
       throw new Error("Пользователь не найден");
     }
 
-    const tierRuleLimits: Record<string, number> = {
-      freemium: 2,
-      start: 10,
-      pro: Infinity,
-    };
-
     const existingRules = await ctx.db
       .query("rules")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .collect();
 
     const activeRules = existingRules.filter((r) => r.isActive);
-    const ruleLimit = tierRuleLimits[user.subscriptionTier ?? "freemium"] ?? 2;
+    const ruleLimit = TIER_RULE_LIMITS[user.subscriptionTier ?? "freemium"] ?? 3;
 
     if (activeRules.length >= ruleLimit) {
       throw new Error(
@@ -401,12 +409,6 @@ export const toggleActive = mutation({
       const user = await ctx.db.get(args.userId);
       if (!user) throw new Error("Пользователь не найден");
 
-      const tierRuleLimits: Record<string, number> = {
-        freemium: 2,
-        start: 10,
-        pro: Infinity,
-      };
-
       const activeRules = await ctx.db
         .query("rules")
         .withIndex("by_userId_active", (q) =>
@@ -414,7 +416,7 @@ export const toggleActive = mutation({
         )
         .collect();
 
-      const ruleLimit = tierRuleLimits[user.subscriptionTier ?? "freemium"] ?? 2;
+      const ruleLimit = TIER_RULE_LIMITS[user.subscriptionTier ?? "freemium"] ?? 3;
       if (activeRules.length >= ruleLimit) {
         throw new Error(
           `Лимит активных правил для тарифа "${user.subscriptionTier ?? "freemium"}" исчерпан`

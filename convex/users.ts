@@ -12,7 +12,7 @@ export const PRO_ACCOUNTS_GRANDFATHERED = 27;
 export const TIER_LIMITS = {
   freemium: {
     accounts: 1,
-    rules: 2,
+    rules: 3,
     autoStop: false,
   },
   start: {

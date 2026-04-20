@@ -761,13 +761,23 @@ describe("rules", () => {
       targetAccountIds: [accountId],
     });
 
-    // 3rd rule should be rejected
+    // 3rd rule should succeed (freemium limit is 3)
+    await t.mutation(api.rules.create, {
+      userId,
+      name: "Free Rule C",
+      type: "fast_spend",
+      value: 10,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // 4th rule should be rejected
     await expect(
       t.mutation(api.rules.create, {
         userId,
-        name: "Free Rule C",
-        type: "fast_spend",
-        value: 10,
+        name: "Free Rule D",
+        type: "budget_limit",
+        value: 500,
         actions: { stopAd: false, notify: true },
         targetAccountIds: [accountId],
       })
@@ -963,8 +973,8 @@ describe("rules", () => {
     expect(rules).toHaveLength(0);
   });
 
-  // S16-DoD#9: freemium user — limit is 2, third rule rejected
-  test("S16-DoD#9: freemium limit — 3rd rule rejected", async () => {
+  // S16-DoD#9: freemium user — limit is 3, fourth rule rejected
+  test("S16-DoD#9: freemium limit — 4th rule rejected", async () => {
     const t = convexTest(schema);
     const userId = await t.mutation(api.users.create, {
       email: "freelimit@test.com",
@@ -980,7 +990,7 @@ describe("rules", () => {
       accessToken: "token_free",
     });
 
-    // Create 2 rules (freemium limit)
+    // Create 3 rules (freemium limit)
     await t.mutation(api.rules.create, {
       userId,
       name: "Free Rule 1",
@@ -997,23 +1007,31 @@ describe("rules", () => {
       actions: { stopAd: false, notify: true },
       targetAccountIds: [accountId],
     });
+    await t.mutation(api.rules.create, {
+      userId,
+      name: "Free Rule 3",
+      type: "budget_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
 
-    // 3rd rule should be rejected
+    // 4th rule should be rejected
     await expect(
       t.mutation(api.rules.create, {
         userId,
-        name: "Free Rule 3",
-        type: "budget_limit",
-        value: 500,
+        name: "Free Rule 4",
+        type: "fast_spend",
+        value: 10,
         actions: { stopAd: false, notify: true },
         targetAccountIds: [accountId],
       })
     ).rejects.toThrow("Лимит правил");
 
-    // getLimits confirms usage = 2
+    // getLimits confirms usage = 3
     const limits = await t.query(api.users.getLimits, { userId });
-    expect(limits.usage.rules).toBe(2);
-    expect(limits.limits.rules).toBe(2);
+    expect(limits.usage.rules).toBe(3);
+    expect(limits.limits.rules).toBe(3);
   });
 
   // S16-DoD#10: rules.update updates target accounts

@@ -14,6 +14,7 @@ import type * as adminAlerts from "../adminAlerts.js";
 import type * as adminHealth from "../adminHealth.js";
 import type * as adminLogs from "../adminLogs.js";
 import type * as adminMetrics from "../adminMetrics.js";
+import type * as adminRuleDiagnostic from "../adminRuleDiagnostic.js";
 import type * as agencyProviders from "../agencyProviders.js";
 import type * as aiCabinet from "../aiCabinet.js";
 import type * as aiGenerate from "../aiGenerate.js";
@@ -55,6 +56,7 @@ import type * as uzBudgetCron from "../uzBudgetCron.js";
 import type * as uzBudgetHelpers from "../uzBudgetHelpers.js";
 import type * as videos from "../videos.js";
 import type * as vkApi from "../vkApi.js";
+import type * as vkApiLimits from "../vkApiLimits.js";
 
 import type {
   ApiFromModules,
@@ -69,6 +71,7 @@ declare const fullApi: ApiFromModules<{
   adminHealth: typeof adminHealth;
   adminLogs: typeof adminLogs;
   adminMetrics: typeof adminMetrics;
+  adminRuleDiagnostic: typeof adminRuleDiagnostic;
   agencyProviders: typeof agencyProviders;
   aiCabinet: typeof aiCabinet;
   aiGenerate: typeof aiGenerate;
@@ -110,6 +113,7 @@ declare const fullApi: ApiFromModules<{
   uzBudgetHelpers: typeof uzBudgetHelpers;
   videos: typeof videos;
   vkApi: typeof vkApi;
+  vkApiLimits: typeof vkApiLimits;
 }>;
 
 /**

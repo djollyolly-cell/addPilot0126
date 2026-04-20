@@ -431,10 +431,11 @@ export const processStartCommand = mutation({
     if (!link) return { linked: false, reason: "invalid_token" };
 
     // Check if chatId is already used by another user
-    const allUsers = await ctx.db.query("users").collect();
-    const existingOwner = allUsers.find(
-      (u) => u.telegramChatId === args.chatId && u._id !== link.userId
-    );
+    const existingOwner = await ctx.db
+      .query("users")
+      .withIndex("by_telegramChatId", (q) => q.eq("telegramChatId", args.chatId))
+      .filter((q) => q.neq(q.field("_id"), link.userId))
+      .first();
     if (existingOwner) {
       return { linked: false, reason: "chatid_taken" };
     }
@@ -949,10 +950,11 @@ export const saveChatId = internalMutation({
   },
   handler: async (ctx, args) => {
     // Check if this chatId is already used by ANOTHER user
-    const allUsers = await ctx.db.query("users").collect();
-    const existingOwner = allUsers.find(
-      (u) => u.telegramChatId === args.chatId && u._id !== args.userId
-    );
+    const existingOwner = await ctx.db
+      .query("users")
+      .withIndex("by_telegramChatId", (q) => q.eq("telegramChatId", args.chatId))
+      .filter((q) => q.neq(q.field("_id"), args.userId))
+      .first();
     if (existingOwner) {
       // chatId already belongs to another user — reject
       return {
@@ -1678,7 +1680,9 @@ export const getActionLogsByAccount = internalQuery({
 export const getDigestRecipients = internalQuery({
   args: {},
   handler: async (ctx) => {
-    // Get all users with telegramChatId
+    // Full-scan intentional: Convex indexes don't support "all non-null" queries.
+    // With agency model this may need restructuring (e.g., separate telegramConnections table).
+    // Current 88 users is acceptable; revisit if >500 users.
     const users = await ctx.db.query("users").collect();
     const connectedUsers = users.filter((u) => !!u.telegramChatId);
 
