@@ -899,4 +899,18 @@ export default defineSchema({
     .index("by_orgId", ["orgId"])
     .index("by_status", ["status"]),
 
+  // L3 rule types (per-agency custom handlers, registered in code)
+  customRuleTypes: defineTable({
+    code: v.string(),                            // "custom_roi", "custom_frequency"
+    name: v.string(),
+    description: v.string(),
+    orgId: v.optional(v.id("organizations")),    // null = available to all agency tiers
+    availableTiers: v.array(v.string()),         // ["agency_m", "agency_l", "agency_xl"]
+    requiredMetrics: v.array(v.string()),
+    configSchema: v.any(),                       // JSON Schema for UI form
+    createdAt: v.number(),
+  })
+    .index("by_code", ["code"])
+    .index("by_orgId", ["orgId"]),
+
 }, { schemaValidation: false });
