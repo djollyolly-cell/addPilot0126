@@ -359,7 +359,14 @@ export default defineSchema({
   // Payments table for bePaid integration
   payments: defineTable({
     userId: v.id("users"),
-    tier: v.union(v.literal("start"), v.literal("pro")),
+    tier: v.union(
+      v.literal("start"),
+      v.literal("pro"),
+      v.literal("agency_s"),
+      v.literal("agency_m"),
+      v.literal("agency_l"),
+      v.literal("agency_xl")
+    ),
     orderId: v.string(),
     token: v.string(),
     amount: v.number(),

@@ -421,13 +421,23 @@ export const handleBepaidWebhook = internalMutation({
         proLimitPatch.proAccountLimit = 20;
       }
 
-      await ctx.db.patch(payment.userId, {
-        subscriptionTier: payment.tier,
-        subscriptionExpiresAt: expiresAt,
-        updatedAt: Date.now(),
-        ...lockedUpdate,
-        ...proLimitPatch,
-      });
+      // Agency tiers (agency_s/m/l/xl) are stored on organizations, not users.
+      // Plan 3 will handle org subscription activation via separate webhook path.
+      if (payment.tier === "start" || payment.tier === "pro") {
+        await ctx.db.patch(payment.userId, {
+          subscriptionTier: payment.tier,
+          subscriptionExpiresAt: expiresAt,
+          updatedAt: Date.now(),
+          ...lockedUpdate,
+          ...proLimitPatch,
+        });
+      } else {
+        // Agency tier — only update timestamp on user (org handles tier).
+        // Full org activation is implemented in Plan 3.
+        await ctx.db.patch(payment.userId, {
+          updatedAt: Date.now(),
+        });
+      }
 
       console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId} (${totalDays} days, promo: ${payment.promoCode || "none"})`);
 
