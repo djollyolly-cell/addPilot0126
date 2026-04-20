@@ -249,12 +249,86 @@ export const deleteRealtimeBatch = internalMutation({
   },
 });
 
+// ── Mass cleanup: self-scheduling action for large backlogs ──
+// Aggressive mode: 3000 records/batch, 500ms between batches, 25s work, 30s rest
+// Server has 99% CPU free and 82% RAM free — safe to be aggressive
+const MASS_BATCH_SIZE = 3000;
+const MASS_TIME_BUDGET_MS = 25 * 1000; // 25s work per run
+const MASS_BATCH_DELAY_MS = 500; // 500ms pause between batches
+const MASS_REST_BETWEEN_RUNS_MS = 30 * 1000; // 30s rest between runs
+const MASS_OCC_RETRY_DELAY_MS = 3000;
+
+// Trigger: schedule mass cleanup and return immediately (won't timeout CLI)
+export const triggerMassCleanup = mutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.scheduler.runAfter(0, internal.metrics.manualMassCleanup, { runNumber: 1 });
+    return "Mass cleanup scheduled (gentle mode). Check logs for progress.";
+  },
+});
+
+export const manualMassCleanup = internalAction({
+  args: { runNumber: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const run = args.runNumber ?? 1;
+    const startedAt = Date.now();
+    let totalDeleted = 0;
+    let batchCount = 0;
+    let occErrors = 0;
+
+    // Reset heartbeat on first run
+    if (run === 1) {
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "cleanup-realtime-metrics",
+        status: "running",
+      });
+    }
+
+    while (Date.now() - startedAt < MASS_TIME_BUDGET_MS) {
+      try {
+        const batch = await ctx.runMutation(internal.metrics.deleteRealtimeBatch, {
+          batchSize: MASS_BATCH_SIZE,
+        });
+        totalDeleted += batch.deleted;
+        batchCount++;
+
+        if (!batch.hasMore) {
+          console.log(`[mass-cleanup] DONE! Run #${run}: deleted ${totalDeleted} total. Table is clean.`);
+          await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+            name: "cleanup-realtime-metrics",
+            status: "completed",
+          });
+          return;
+        }
+        // 2s pause between batches — gentle on server
+        await sleep(MASS_BATCH_DELAY_MS);
+      } catch (e) {
+        occErrors++;
+        if (occErrors > 5) {
+          console.warn(`[mass-cleanup] Run #${run}: too many OCC errors (${occErrors}), pausing. Deleted ${totalDeleted}.`);
+          break;
+        }
+        await sleep(MASS_OCC_RETRY_DELAY_MS);
+      }
+    }
+
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    console.log(`[mass-cleanup] Run #${run}: deleted ${totalDeleted} in ${elapsed}s. Next run in 60s...`);
+
+    // 60s rest before next run
+    await ctx.scheduler.runAfter(MASS_REST_BETWEEN_RUNS_MS, internal.metrics.manualMassCleanup, {
+      runNumber: run + 1,
+    });
+  },
+});
+
+// Cron cleanup: uses self-scheduling via manualMassCleanup to avoid timeout issues.
+// Previous approach (infinite while loop) would exceed Convex action timeout on large backlogs,
+// leaving heartbeat stuck in "running" state and blocking subsequent cron runs.
 export const cleanupOldRealtimeMetrics = internalAction({
   args: { batchSize: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const batchSize = args.batchSize ?? DEFAULT_BATCH_SIZE;
-
-    // Guard: skip if already running, override if zombie (>12h)
+  handler: async (ctx) => {
+    // Guard: skip if mass cleanup is already running
     const hb = await ctx.runQuery(internal.syncMetrics.getCronHeartbeat, {
       name: "cleanup-realtime-metrics",
     });
@@ -263,64 +337,26 @@ export const cleanupOldRealtimeMetrics = internalAction({
       const minutesAgo = Math.round(elapsed / 60_000);
       if (elapsed < CLEANUP_MAX_RUNNING_MS) {
         console.log(
-          `[cleanup-realtime] Already running (started ${minutesAgo}min ago), skipping`
+          `[cleanup-realtime] Mass cleanup already running (started ${minutesAgo}min ago), skipping`
         );
         return;
       }
       console.warn(
-        `[cleanup-realtime] Previous run STUCK (${minutesAgo}min ago, >720min). Overriding.`
+        `[cleanup-realtime] Previous run STUCK (${minutesAgo}min ago, >720min). Restarting.`
       );
     }
 
-    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
-      name: "cleanup-realtime-metrics",
-      status: "running",
-    });
+    // Delegate to self-scheduling mass cleanup — won't timeout
+    await ctx.runMutation(internal.metrics.scheduleMassCleanup, {});
+    console.log("[cleanup-realtime] Delegated to mass cleanup (self-scheduling mode).");
+  },
+});
 
-    let runningTotal = 0;
-    let batchCount = 0;
-    const startedAt = Date.now();
-
-    try {
-      while (true) {
-        const batch = await ctx.runMutation(internal.metrics.deleteRealtimeBatch, {
-          batchSize,
-        });
-        runningTotal += batch.deleted;
-        batchCount++;
-
-        if (batchCount % LOG_EVERY_N_BATCHES === 0) {
-          const elapsed = (Date.now() - startedAt) / 1000;
-          const rate = Math.round(runningTotal / (elapsed / 60));
-          console.log(
-            `[cleanup-realtime] Progress: deleted ${runningTotal}, rate ~${rate}/min, elapsed ${Math.round(elapsed)}s`
-          );
-        }
-
-        if (!batch.hasMore) break;
-        await sleep(BATCH_DELAY_MS);
-      }
-
-      const elapsed = (Date.now() - startedAt) / 1000;
-      console.log(
-        `[cleanup-realtime] Complete. Deleted ${runningTotal} records in ${Math.round(elapsed)}s (~${Math.round(elapsed / 60)} min)`
-      );
-
-      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
-        name: "cleanup-realtime-metrics",
-        status: "completed",
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown error";
-      console.error(
-        `[cleanup-realtime] ERROR: ${message}. Stopped at ${runningTotal} deleted. Will retry next cron cycle.`
-      );
-      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
-        name: "cleanup-realtime-metrics",
-        status: "failed",
-        error: message,
-      });
-    }
+// Helper mutation to schedule mass cleanup (callable from actions)
+export const scheduleMassCleanup = internalMutation({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.scheduler.runAfter(0, internal.metrics.manualMassCleanup, { runNumber: 1 });
   },
 });
 
