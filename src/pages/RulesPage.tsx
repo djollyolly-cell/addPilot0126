@@ -280,11 +280,12 @@ export function RulesPage() {
                           <p className="font-medium text-sm truncate">{rule.name}</p>
                           <p className="text-xs text-muted-foreground">
                             {RULE_TYPE_LABELS[rule.type as RuleType]}
-                            {rule.type === 'uz_budget_manage'
-                              ? ` · ${rule.conditions.initialBudget ?? 0}₽ +${rule.conditions.budgetStep ?? 0}₽`
-                              : ` · ${rule.conditions.operator} ${rule.conditions.value}${RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}`
-                            }
-                            {(rule.type === 'clicks_no_leads' || rule.type === 'low_impressions') && (
+                            {!Array.isArray(rule.conditions) && (
+                              rule.type === 'uz_budget_manage'
+                                ? ` · ${rule.conditions.initialBudget ?? 0}₽ +${rule.conditions.budgetStep ?? 0}₽`
+                                : ` · ${rule.conditions.operator} ${rule.conditions.value}${RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}`
+                            )}
+                            {!Array.isArray(rule.conditions) && (rule.type === 'clicks_no_leads' || rule.type === 'low_impressions') && (
                               <> · {rule.conditions.timeWindow === '1h' ? 'за 1ч' : rule.conditions.timeWindow === '6h' ? 'за 6ч' : rule.conditions.timeWindow === 'since_launch' ? 'с запуска' : rule.conditions.timeWindow === '24h' ? 'за 24ч' : 'за сегодня'}</>
                             )}
                           </p>
@@ -335,7 +336,7 @@ export function RulesPage() {
               key={editingRuleId ?? 'new'}
               userId={user.userId}
               subscriptionTier={user.subscriptionTier}
-              existingRule={editingRule ? {
+              existingRule={editingRule && !Array.isArray(editingRule.conditions) ? {
                 _id: editingRule._id,
                 name: editingRule.name,
                 type: editingRule.type as RuleType,
