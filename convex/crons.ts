@@ -160,4 +160,11 @@ crons.interval(
   internal.vkApiLimits.probeThrottling
 );
 
+// Cleanup expired org invites — daily at 05:30 UTC
+crons.cron(
+  "cleanup-expired-invites",
+  "30 5 * * *",
+  internal.orgAuth.cleanupExpiredInvites
+);
+
 export default crons;
