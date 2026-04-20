@@ -53,12 +53,16 @@ export default defineSchema({
     referredBy: v.optional(v.id("users")),
     referralMilestone3Claimed: v.optional(v.boolean()),
     referralMilestone10Reached: v.optional(v.boolean()),
+    // Agency org membership
+    organizationId: v.optional(v.id("organizations")),
+    passwordHash: v.optional(v.string()),  // bcrypt for org-users (Plan 2)
   })
     .index("by_vkId", ["vkId"])
     .index("by_email", ["email"])
     .index("by_referralCode", ["referralCode"])
     .index("by_telegramUserId", ["telegramUserId"])
-    .index("by_telegramChatId", ["telegramChatId"]),
+    .index("by_telegramChatId", ["telegramChatId"])
+    .index("by_organizationId", ["organizationId"]),
 
   sessions: defineTable({
     userId: v.id("users"),
@@ -94,7 +98,8 @@ export default defineSchema({
     status: v.union(
       v.literal("active"),
       v.literal("paused"),
-      v.literal("error")
+      v.literal("error"),
+      v.literal("archived")
     ),
     lastSyncAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
@@ -104,10 +109,14 @@ export default defineSchema({
     // Transient sync error tracking (non-TOKEN_EXPIRED)
     consecutiveSyncErrors: v.optional(v.number()),
     lastSyncError: v.optional(v.string()),
+    // Agency org membership
+    orgId: v.optional(v.id("organizations")),
+    excludeFromOrgTransfer: v.optional(v.boolean()),  // Решение 3: prevents auto-transfer to org
     createdAt: v.number(),
   })
     .index("by_userId", ["userId"])
-    .index("by_vkAccountId", ["vkAccountId"]),
+    .index("by_vkAccountId", ["vkAccountId"])
+    .index("by_orgId", ["orgId"]),
 
   businessDirections: defineTable({
     accountId: v.id("adAccounts"),
@@ -196,13 +205,18 @@ export default defineSchema({
     targetAdPlanIds: v.optional(v.array(v.string())),
     targetAdIds: v.optional(v.array(v.string())),
     isActive: v.boolean(),
+    // Agency org membership
+    orgId: v.optional(v.id("organizations")),
+    customRuleTypeCode: v.optional(v.string()),  // L3: "custom_roi", "custom_frequency" — only when type === "custom_l3"
     triggerCount: v.number(),
     lastTriggeredAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_userId", ["userId"])
-    .index("by_userId_active", ["userId", "isActive"]),
+    .index("by_userId_active", ["userId", "isActive"])
+    .index("by_orgId", ["orgId"])
+    .index("by_orgId_active", ["orgId", "isActive"]),
 
   actionLogs: defineTable({
     userId: v.id("users"),
@@ -238,13 +252,15 @@ export default defineSchema({
     errorMessage: v.optional(v.string()),
     revertedAt: v.optional(v.number()),
     revertedBy: v.optional(v.string()),
+    orgId: v.optional(v.id("organizations")),
     createdAt: v.number(),
   })
     .index("by_userId", ["userId"])
     .index("by_userId_date", ["userId", "createdAt"])
     .index("by_ruleId", ["ruleId"])
     .index("by_ruleId_createdAt", ["ruleId", "createdAt"])
-    .index("by_accountId", ["accountId"]),
+    .index("by_accountId", ["accountId"])
+    .index("by_orgId_date", ["orgId", "createdAt"]),
 
   systemLogs: defineTable({
     userId: v.optional(v.id("users")),
@@ -387,10 +403,12 @@ export default defineSchema({
     completedAt: v.optional(v.number()),
     isUpgrade: v.optional(v.boolean()),
     creditAmount: v.optional(v.number()),
+    orgId: v.optional(v.id("organizations")),
   })
     .index("by_userId", ["userId"])
     .index("by_orderId", ["orderId"])
-    .index("by_token", ["token"]),
+    .index("by_token", ["token"])
+    .index("by_orgId", ["orgId"]),
   // Promo codes
   promoCodes: defineTable({
     code: v.string(),             // Unique code (uppercase)
@@ -438,12 +456,14 @@ export default defineSchema({
       v.literal("failed")
     ),
     errorMessage: v.optional(v.string()),
+    orgId: v.optional(v.id("organizations")),
     createdAt: v.number(),
     expiresAt: v.number(),       // createdAt + 2 days, for cron cleanup
   })
     .index("by_userId", ["userId"])
     .index("by_accountId", ["accountId"])
-    .index("by_expiresAt", ["expiresAt"]),
+    .index("by_expiresAt", ["expiresAt"])
+    .index("by_orgId", ["orgId"]),
 
   // Video creatives uploaded to VK
   videos: defineTable({
@@ -489,12 +509,14 @@ export default defineSchema({
       transcriptMatch: v.optional(v.string()),
     })),
     errorMessage: v.optional(v.string()),
+    orgId: v.optional(v.id("organizations")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_userId", ["userId"])
     .index("by_accountId", ["accountId"])
-    .index("by_uploadStatus", ["uploadStatus"]),
+    .index("by_uploadStatus", ["uploadStatus"])
+    .index("by_orgId", ["orgId"]),
 
   // AI generation usage tracking for rate limiting
   aiGenerations: defineTable({
@@ -504,10 +526,12 @@ export default defineSchema({
       v.literal("image"),
       v.literal("analysis")
     ),
+    orgId: v.optional(v.id("organizations")),
     createdAt: v.number(),
   })
     .index("by_userId_type", ["userId", "type"])
-    .index("by_createdAt", ["createdAt"]),
+    .index("by_createdAt", ["createdAt"])
+    .index("by_orgId", ["orgId"]),
 
   // Creative performance statistics (accumulated from VK API)
   creativeStats: defineTable({
@@ -572,12 +596,14 @@ export default defineSchema({
     vkCampaignId: v.optional(v.string()),
     lastSyncAt: v.optional(v.number()),
     errorMessage: v.optional(v.string()),
+    orgId: v.optional(v.id("organizations")),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
     .index("by_userId", ["userId"])
     .index("by_accountId", ["accountId"])
-    .index("by_status", ["status"]),
+    .index("by_status", ["status"])
+    .index("by_orgId", ["orgId"]),
 
   // AI Cabinet: banners (ads) within AI campaigns
   aiBanners: defineTable({
@@ -753,11 +779,13 @@ export default defineSchema({
     action: v.string(),
     status: v.union(v.literal("success"), v.literal("failed")),
     details: v.optional(v.any()),
+    orgId: v.optional(v.id("organizations")),
     createdAt: v.number(),
   })
     .index("by_userId_createdAt", ["userId", "createdAt"])
     .index("by_category_createdAt", ["category", "createdAt"])
-    .index("by_createdAt", ["createdAt"]),
+    .index("by_createdAt", ["createdAt"])
+    .index("by_orgId_createdAt", ["orgId", "createdAt"]),
 
   // Настройки Telegram-уведомлений для админов
   adminAlertSettings: defineTable({

@@ -1129,7 +1129,7 @@ export const clearSyncErrors = internalMutation({
 export const updateStatus = mutation({
   args: {
     accountId: v.id("adAccounts"),
-    status: v.union(v.literal("active"), v.literal("paused"), v.literal("error")),
+    status: v.union(v.literal("active"), v.literal("paused"), v.literal("error"), v.literal("archived")),
     lastError: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
