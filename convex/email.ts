@@ -338,6 +338,20 @@ export const sendExpiryNotificationEmail = internalAction({
   },
 });
 
+/** Stub: sends invite email to new manager. Full implementation in Plan 6. */
+export const sendInviteEmail = internalAction({
+  args: {
+    to: v.string(),
+    orgName: v.string(),
+    inviterName: v.string(),
+    inviteToken: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    // Plan 6: real SMTP email with invite link
+    console.log(`[email] TODO: send invite to ${args.to} for org "${args.orgName}" by ${args.inviterName}`);
+  },
+});
+
 // Test email sending (for debugging)
 export const sendTestEmail = action({
   args: {

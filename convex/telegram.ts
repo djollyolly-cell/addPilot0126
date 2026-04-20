@@ -2550,3 +2550,16 @@ export const getSupportMapping = internalQuery({
       .first();
   },
 });
+
+/** Stub: notify owner that a manager accepted their invite. Plan 6 impl. */
+export const sendOwnerInviteAcceptedNotification = internalAction({
+  args: {
+    ownerId: v.id("users"),
+    managerEmail: v.string(),
+    transferredCount: v.number(),
+    inviteId: v.id("orgInvites"),
+  },
+  handler: async (_ctx, args) => {
+    console.log(`[telegram] TODO: notify owner ${args.ownerId} — ${args.managerEmail} accepted invite, ${args.transferredCount} cabinets offered`);
+  },
+});
