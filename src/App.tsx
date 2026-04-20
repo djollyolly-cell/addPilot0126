@@ -27,6 +27,7 @@ const VideosPage = lazy(() => import('./pages/VideosPage').then(m => ({ default:
 const AICabinetPage = lazy(() => import('./pages/AICabinetPage'));
 const AICabinetNewPage = lazy(() => import('./pages/AICabinetNewPage'));
 const AICabinetDetailPage = lazy(() => import('./pages/AICabinetDetailPage'));
+const InviteAcceptPage = lazy(() => import('./pages/InviteAcceptPage'));
 
 // Loading spinner component
 function PageLoader() {
@@ -117,6 +118,7 @@ function App() {
       <Route path="/auth/callback" element={<AuthCallback />} />
       <Route path="/auth/ads-callback" element={<AdsCallback />} />
       <Route path="/auth/getuniq-callback" element={<GetUniqCallback />} />
+      <Route path="/invite/:token" element={<InviteAcceptPage />} />
       <Route path="/privacy" element={<PrivacyPage />} />
       <Route path="/terms" element={<TermsPage />} />
 
