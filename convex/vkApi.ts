@@ -246,7 +246,7 @@ export interface CallMtApiResponseInfo {
   rateLimits: RateLimitHeaders;
 }
 
-async function callMtApi<T>(
+export async function callMtApi<T>(
   endpoint: string,
   accessToken: string,
   params?: Record<string, string>,
@@ -533,8 +533,27 @@ export const getMtStatistics = action({
     dateFrom: v.string(), // "YYYY-MM-DD"
     dateTo: v.string(),   // "YYYY-MM-DD"
     bannerIds: v.optional(v.string()), // comma-separated banner IDs
+    accountId: v.optional(v.id("adAccounts")),
   },
-  handler: async (_, args): Promise<MtStatItem[]> => {
+  handler: async (ctx, args): Promise<MtStatItem[]> => {
+    // Rate-limit logger for this account
+    const rlOptions = {
+      onResponse: (info: CallMtApiResponseInfo) => {
+        const hasData =
+          info.rateLimits.rpsLimit !== undefined ||
+          info.rateLimits.dailyRemaining !== undefined ||
+          info.statusCode === 429;
+        if (hasData) {
+          void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
+            accountId: args.accountId,
+            endpoint: info.endpoint,
+            statusCode: info.statusCode,
+            ...info.rateLimits,
+          });
+        }
+      },
+    };
+
     // If no banner IDs provided, first fetch all banners to get their IDs
     let ids = args.bannerIds;
     if (!ids) {
@@ -544,7 +563,8 @@ export const getMtStatistics = action({
         const bannersData = await callMtApi<{ items: MtBanner[]; count: number }>(
           "banners.json",
           args.accessToken,
-          { fields: "id", limit: "250", offset: String(offset) }
+          { fields: "id", limit: "250", offset: String(offset) },
+          rlOptions
         );
         const items = bannersData.items || [];
         allBanners = allBanners.concat(items);
@@ -557,17 +577,30 @@ export const getMtStatistics = action({
       ids = allBanners.map((b: MtBanner) => String(b.id)).join(",");
     }
 
-    const data = await callMtApi<{ items: MtStatItem[]; total: MtStatRow | null }>(
-      "statistics/banners/day.json",
-      args.accessToken,
-      {
-        id: ids,
-        date_from: args.dateFrom,
-        date_to: args.dateTo,
-        metrics: "base,events",
+    // Batch IDs into chunks of 200 to avoid 414 URI Too Long
+    const CHUNK_SIZE = 200;
+    const idArray = ids.split(",");
+    const allItems: MtStatItem[] = [];
+
+    for (let i = 0; i < idArray.length; i += CHUNK_SIZE) {
+      const chunk = idArray.slice(i, i + CHUNK_SIZE).join(",");
+      const data = await callMtApi<{ items: MtStatItem[]; total: MtStatRow | null }>(
+        "statistics/banners/day.json",
+        args.accessToken,
+        {
+          id: chunk,
+          date_from: args.dateFrom,
+          date_to: args.dateTo,
+          metrics: "base,events",
+        },
+        rlOptions
+      );
+      if (data.items) {
+        allItems.push(...data.items);
       }
-    );
-    return data.items || [];
+    }
+
+    return allItems;
   },
 });
 
@@ -819,16 +852,36 @@ export const getMtLeadCounts = action({
     accessToken: v.string(),
     dateFrom: v.string(), // "YYYY-MM-DD"
     dateTo: v.string(),
+    accountId: v.optional(v.id("adAccounts")),
   },
-  handler: async (_, args): Promise<Record<string, number>> => {
+  handler: async (ctx, args): Promise<Record<string, number>> => {
     const result: Record<string, number> = {};
+
+    // Rate-limit logger for this account
+    const rlOptions = {
+      onResponse: (info: CallMtApiResponseInfo) => {
+        const hasData =
+          info.rateLimits.rpsLimit !== undefined ||
+          info.rateLimits.dailyRemaining !== undefined ||
+          info.statusCode === 429;
+        if (hasData) {
+          void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
+            accountId: args.accountId,
+            endpoint: info.endpoint,
+            statusCode: info.statusCode,
+            ...info.rateLimits,
+          });
+        }
+      },
+    };
 
     try {
       // Fetch all lead form subscriptions to get form IDs
       const subs = await callMtApi<{ items: Array<{ id: number; banner_id: number }> }>(
         "lead_ads/vkontakte/subscriptions.json",
         args.accessToken,
-        {}
+        {},
+        rlOptions
       );
 
       if (!subs.items || subs.items.length === 0) {
@@ -851,7 +904,8 @@ export const getMtLeadCounts = action({
           form_id: formIds,
           date_from: args.dateFrom,
           date_to: args.dateTo,
-        }
+        },
+        rlOptions
       );
 
       if (leads.items) {
@@ -929,8 +983,27 @@ export const getMtBanners = action({
   args: {
     accessToken: v.string(),
     campaignId: v.optional(v.string()),
+    accountId: v.optional(v.id("adAccounts")),
   },
-  handler: async (_, args): Promise<MtBanner[]> => {
+  handler: async (ctx, args): Promise<MtBanner[]> => {
+    // Rate-limit logger for this account
+    const rlOptions = {
+      onResponse: (info: CallMtApiResponseInfo) => {
+        const hasData =
+          info.rateLimits.rpsLimit !== undefined ||
+          info.rateLimits.dailyRemaining !== undefined ||
+          info.statusCode === 429;
+        if (hasData) {
+          void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
+            accountId: args.accountId,
+            endpoint: info.endpoint,
+            statusCode: info.statusCode,
+            ...info.rateLimits,
+          });
+        }
+      },
+    };
+
     const params: Record<string, string> = {
       fields: "id,campaign_id,textblocks,status,moderation_status,created,updated,content",
       limit: "250",
@@ -946,7 +1019,8 @@ export const getMtBanners = action({
       const data = await callMtApi<{ items: MtBanner[]; count: number }>(
         "banners.json",
         args.accessToken,
-        params
+        params,
+        rlOptions
       );
       const items = data.items || [];
       allBanners = allBanners.concat(items);

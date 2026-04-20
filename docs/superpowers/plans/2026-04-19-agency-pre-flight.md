@@ -30,7 +30,8 @@
 | `convex/schema.ts` | Modify | Добавить индексы `users.by_telegramUserId`, `users.by_telegramChatId` + новая таблица `vkApiLimits` |
 | `convex/rules.ts` | Modify | Экспортировать `TIER_RULE_LIMITS`, исправить `freemium: 2` → `freemium: 3` (2 мутации: `create` и `toggleActive`) |
 | `convex/vkApi.ts` | Modify | `extractRateLimitHeaders` pure helper + callback `onResponse` в `callMtApi` |
-| `convex/syncMetrics.ts` | Modify | Подключить `onResponse` callback в `syncAll` (1 call site — горячий путь) |
+| `convex/syncMetrics.ts` | Modify | Подключить `onResponse` callback в `syncAll` — передать accountId в getMtStatistics/getMtLeadCounts/getMtBanners |
+| `convex/reports.ts` | Modify | Удалить локальную копию callMtApi, импортировать из vkApi.ts + добавить batching statistics |
 | `convex/vkApiLimits.ts` | Create | Internal mutation `recordRateLimit` + internal action `probeThrottling` |
 | `convex/crons.ts` | Modify | Добавить cron `vk-throttling-probe` (каждые 15 мин) |
 | `convex/migrations.ts` | Modify | Добавить `resetStuckCleanupHeartbeat` — одноразовая мутация |
@@ -1068,7 +1069,7 @@ gh pr create --title "Pre-flight for agency model" --body "..."
 - `TIER_RULE_LIMITS` — единый экспорт из rules.ts, тестируется через import.
 
 **Known issues (не в scope pre-flight, задокументированы):**
-- ⚠ `reports.ts:15` содержит **локальную копию** `callMtApi` (11 call sites). Не экспортируется из vkApi.ts, не получит callback-логирование. Менее критично — reports.ts вызывается on-demand, не в sync-loop. Рефакторинг (экспорт из vkApi.ts + import в reports.ts) можно сделать отдельным PR.
+- ✅ ~~`reports.ts:15` содержит **локальную копию** `callMtApi`~~ — **ИСПРАВЛЕНО** (2026-04-20): локальная копия удалена, reports.ts теперь импортирует `callMtApi` из vkApi.ts. Добавлен batching (CHUNK_SIZE=200) для statistics-вызовов.
 - ⚠ `schemaValidation: false` в schema.ts — runtime-валидация Convex отключена. Новая таблица `vkApiLimits` принимает любые данные runtime, валидация только через mutation args. Не блокер — стандартная практика в проекте, но стоит учитывать при agency-масштабировании.
 - ⚠ `getDigestRecipients` (telegram.ts:1682) остаётся full-scan. Convex не поддерживает query "все записи с non-null полем". При >500 users рассмотреть отдельную таблицу `telegramConnections`.
 
@@ -1107,6 +1108,18 @@ gh pr create --title "Pre-flight for agency model" --body "..."
 | 13 | Task 3 заголовок: "fix 3 full-scans" | "fix 2 full-scans" | По факту 2 fix (L434, L952) + 1 comment (L1682). Commit message был точнее |
 | 9 | Self-review: нет cross-plan deps | +Plan 3 TIER_RULE_LIMITS, +Plan 5 import, +Plan 6 vkApiLimits | Cross-plan трассировка |
 | 10 | Task 6: inline parseInt парсинг | Использует extractRateLimitHeaders | Переиспользование, не дубликат |
+
+## Changelog (implementation fixes — 2026-04-20)
+
+Реализованные исправления, выявленные при ревью:
+
+| # | Проблема | Исправление | Файлы |
+|---|----------|-------------|-------|
+| 14 | Task 5 не подключён: `getMtStatistics`, `getMtLeadCounts`, `getMtBanners` не логируют rate-limits | Добавлен `accountId` arg + `(ctx, args)` + rlOptions callback во все 3 action-а, syncMetrics.ts передаёт `account._id` | `convex/vkApi.ts`, `convex/syncMetrics.ts` |
+| 15 | `getMtStatistics` вызывает 414 URI Too Long (1000+ banner IDs в одном URL) | Добавлен batching CHUNK_SIZE=200 для statistics API call | `convex/vkApi.ts` |
+| 16 | `reports.ts` — локальная копия callMtApi (без callback, retry, timeout) | Удалена копия, добавлен `import { callMtApi } from "./vkApi"` | `convex/reports.ts` |
+| 17 | `reports.ts` — statistics вызовы без batching (те же 414 ошибки) | Добавлен `fetchStatsBatched` helper с CHUNK_SIZE=200 | `convex/reports.ts` |
+| 18 | `callMtApi` не экспортировался | Добавлен `export` на функцию | `convex/vkApi.ts` |
 
 ---
 

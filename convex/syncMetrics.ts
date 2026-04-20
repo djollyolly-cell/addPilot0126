@@ -104,13 +104,15 @@ export const syncAll = internalAction({
             accessToken,
             dateFrom: date,
             dateTo: date,
+            accountId: account._id,
           }),
           ctx.runAction(api.vkApi.getMtLeadCounts, {
             accessToken,
             dateFrom: date,
             dateTo: date,
+            accountId: account._id,
           }),
-          ctx.runAction(api.vkApi.getMtBanners, { accessToken }),
+          ctx.runAction(api.vkApi.getMtBanners, { accessToken, accountId: account._id }),
         ]);
 
         // Build bannerId → campaignId map

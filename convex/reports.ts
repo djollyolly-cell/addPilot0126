@@ -1,55 +1,29 @@
 import { v } from "convex/values";
 import { action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { callMtApi } from "./vkApi";
 
-// ─── myTarget API helper (local copy — callMtApi is not exported from vkApi.ts) ───
+// Batch IDs into chunks of 200 to avoid 414 URI Too Long
+const CHUNK_SIZE = 200;
 
-const MT_API_BASE = "https://target.my.com";
-const MT_MAX_RETRIES = 3;
-const RETRY_DELAY_MS = 1000;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function callMtApi<T>(
+async function fetchStatsBatched(
   endpoint: string,
   accessToken: string,
-  params?: Record<string, string>
-): Promise<T> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt < MT_MAX_RETRIES; attempt++) {
-    const url = new URL(`${MT_API_BASE}/api/v2/${endpoint}`);
-    if (params) {
-      Object.entries(params).forEach(([k, val]) => url.searchParams.set(k, val));
-    }
-
-    const response = await fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    if (response.status === 429 && attempt < MT_MAX_RETRIES - 1) {
-      await sleep(RETRY_DELAY_MS * (attempt + 1));
-      continue;
-    }
-
-    if (response.status === 401) {
-      throw new Error("TOKEN_EXPIRED");
-    }
-
-    if (!response.ok) {
-      const text = await response.text();
-      lastError = new Error(`VK Ads API Error ${response.status}: ${text}`);
-      throw lastError;
-    }
-
-    return response.json();
+  ids: string[],
+  dateFrom: string,
+  dateTo: string
+): Promise<{ items: MtStatItem[] }> {
+  if (ids.length === 0) return { items: [] };
+  const allItems: MtStatItem[] = [];
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE).join(",");
+    const data = await callMtApi<{ items: MtStatItem[] }>(
+      endpoint, accessToken,
+      { id: chunk, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
+    );
+    if (data.items) allItems.push(...data.items);
   }
-
-  throw lastError || new Error("VK Ads API request failed after retries");
+  return { items: allItems };
 }
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -297,30 +271,15 @@ async function fetchAllData(
     offset += items.length;
   }
 
-  // Fetch statistics for all levels + lead counts in parallel
-  const adPlanIds = adPlans.map((p) => String(p.id)).join(",");
-  const adGroupIds = adGroups.map((g) => String(g.id)).join(",");
-  const bannerIds = banners.map((b) => String(b.id)).join(",");
+  // Fetch statistics for all levels + lead counts in parallel (batched to avoid 414)
+  const adPlanIdArr = adPlans.map((p) => String(p.id));
+  const adGroupIdArr = adGroups.map((g) => String(g.id));
+  const bannerIdArr = banners.map((b) => String(b.id));
 
   const [adPlanStats, adGroupStats, bannerStats, leadCounts] = await Promise.all([
-    adPlanIds
-      ? callMtApi<{ items: MtStatItem[] }>(
-          "statistics/ad_plans/day.json", accessToken,
-          { id: adPlanIds, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
-        )
-      : Promise.resolve({ items: [] as MtStatItem[] }),
-    adGroupIds
-      ? callMtApi<{ items: MtStatItem[] }>(
-          "statistics/ad_groups/day.json", accessToken,
-          { id: adGroupIds, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
-        )
-      : Promise.resolve({ items: [] as MtStatItem[] }),
-    bannerIds
-      ? callMtApi<{ items: MtStatItem[] }>(
-          "statistics/banners/day.json", accessToken,
-          { id: bannerIds, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
-        )
-      : Promise.resolve({ items: [] as MtStatItem[] }),
+    fetchStatsBatched("statistics/ad_plans/day.json", accessToken, adPlanIdArr, dateFrom, dateTo),
+    fetchStatsBatched("statistics/ad_groups/day.json", accessToken, adGroupIdArr, dateFrom, dateTo),
+    fetchStatsBatched("statistics/banners/day.json", accessToken, bannerIdArr, dateFrom, dateTo),
     fetchLeadCounts(accessToken, dateFrom, dateTo),
   ]);
 
