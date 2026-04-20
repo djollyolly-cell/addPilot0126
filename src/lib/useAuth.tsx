@@ -13,6 +13,10 @@ interface User {
   subscriptionExpiresAt?: number;
   onboardingCompleted: boolean;
   isAdmin?: boolean;
+  organizationId?: string;
+  organizationRole?: 'owner' | 'manager';
+  permissions?: string[];
+  assignedAccountIds?: string[];
 }
 
 interface EmailLoginResult {

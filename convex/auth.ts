@@ -394,6 +394,27 @@ export const validateSession = query({
       return null;
     }
 
+    // Fetch org membership if user is in an organization
+    let organizationId: string | undefined;
+    let organizationRole: "owner" | "manager" | undefined;
+    let permissions: string[] | undefined;
+    let assignedAccountIds: string[] | undefined;
+
+    if (user.organizationId) {
+      const membership = await ctx.db
+        .query("orgMembers")
+        .withIndex("by_orgId_userId", (q) =>
+          q.eq("orgId", user.organizationId!).eq("userId", user._id)
+        )
+        .first();
+      if (membership && membership.status === "active") {
+        organizationId = user.organizationId;
+        organizationRole = membership.role as "owner" | "manager";
+        permissions = membership.permissions;
+        assignedAccountIds = membership.assignedAccountIds;
+      }
+    }
+
     return {
       userId: user._id,
       vkId: user.vkId,
@@ -404,6 +425,10 @@ export const validateSession = query({
       subscriptionExpiresAt: user.subscriptionExpiresAt,
       onboardingCompleted: user.onboardingCompleted,
       isAdmin: user.isAdmin === true,
+      organizationId,
+      organizationRole,
+      permissions,
+      assignedAccountIds,
     };
   },
 });
