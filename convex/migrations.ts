@@ -62,6 +62,44 @@ export const resetStuckCleanupHeartbeat = internalMutation({
 });
 
 /**
+ * DEV ONLY: create a test organization to verify schema is working.
+ * Do NOT run on production.
+ */
+export const createTestOrganization = internalMutation({
+  args: { ownerEmail: v.string() },
+  handler: async (ctx, args) => {
+    const owner = await ctx.db
+      .query("users")
+      .withIndex("by_email", (q) => q.eq("email", args.ownerEmail))
+      .first();
+    if (!owner) throw new Error(`User not found: ${args.ownerEmail}`);
+
+    const orgId = await ctx.db.insert("organizations", {
+      name: "Test Agency (DEV)",
+      ownerId: owner._id,
+      subscriptionTier: "agency_m",
+      subscriptionExpiresAt: Date.now() + 30 * 24 * 60 * 60 * 1000,
+      maxLoadUnits: 60,
+      currentLoadUnits: 0,
+      timezone: "Europe/Moscow",
+      createdAt: Date.now(),
+    });
+
+    await ctx.db.insert("orgMembers", {
+      orgId,
+      userId: owner._id,
+      role: "owner",
+      permissions: [],
+      assignedAccountIds: [],
+      status: "active",
+      createdAt: Date.now(),
+    });
+
+    return { orgId, ownerId: owner._id };
+  },
+});
+
+/**
  * One-time audit: count existing rules and verify all conditions are object,
  * not accidentally array. Run before deploying schema change.
  */
