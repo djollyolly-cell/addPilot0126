@@ -870,4 +870,33 @@ export default defineSchema({
     .index("by_orgId_userId", ["orgId", "userId"])
     .index("by_orgId_status", ["orgId", "status"]),
 
+  // Invitations — manager joins org via email link with token
+  orgInvites: defineTable({
+    orgId: v.id("organizations"),
+    email: v.string(),                           // contact email (≠ users.email)
+    permissions: v.array(v.string()),            // pre-set by inviter
+    assignedAccountIds: v.array(v.id("adAccounts")),
+    invitedBy: v.id("users"),
+    token: v.string(),                           // unique invite token
+    status: v.union(
+      v.literal("pending"),                      // email sent, awaiting click
+      v.literal("accepted"),                     // manager accepted, awaiting owner-confirm
+      v.literal("confirmed"),                    // owner approved
+      v.literal("rejected"),                     // owner rejected
+      v.literal("expired")                       // 7-day TTL passed
+    ),
+    // Two-phase confirm (Решение 3)
+    acceptedAt: v.optional(v.number()),
+    acceptedByUserId: v.optional(v.id("users")), // existing user OR newly created
+    confirmedByOwnerAt: v.optional(v.number()),
+    rejectedByOwnerAt: v.optional(v.number()),
+    transferredAccountIds: v.optional(v.array(v.id("adAccounts"))),
+    createdAt: v.number(),
+    expiresAt: v.number(),                       // createdAt + 7 days
+  })
+    .index("by_token", ["token"])
+    .index("by_email", ["email"])
+    .index("by_orgId", ["orgId"])
+    .index("by_status", ["status"]),
+
 }, { schemaValidation: false });
