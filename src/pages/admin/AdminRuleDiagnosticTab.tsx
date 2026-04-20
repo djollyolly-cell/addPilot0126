@@ -14,10 +14,12 @@ import {
   ChevronDown,
   ChevronRight,
   Users,
-  ListChecks,
   AlertTriangle,
-  ShieldCheck,
   Send,
+  CheckCircle,
+  XCircle,
+  CircleDot,
+  Eye,
 } from "lucide-react";
 
 interface DiagRule {
@@ -82,6 +84,380 @@ function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+type RuleVerdict = "ok" | "warning" | "error";
+
+interface RuleDigest {
+  rule: DiagRule;
+  verdict: RuleVerdict;
+  verdictText: string;
+  bannersTotal: number;
+  bannersTriggered: number;
+  bannersSkipped: number;
+  traces: DiagTrace[];
+  banners: DiagBanner[];
+}
+
+function buildRuleDigests(user: UserDiagnostic): RuleDigest[] {
+  return user.rules.map((rule) => {
+    const traces = user.tracing.filter((t) => t.ruleName === rule.name);
+    const triggered = traces.filter((t) => t.stoppedAt === "triggered").length;
+    const skipped = traces.filter((t) => t.stoppedAt !== "triggered").length;
+    const coveredBanners = user.banners.filter((b) =>
+      b.coveredByRules.includes(rule.name)
+    );
+
+    let verdict: RuleVerdict = "ok";
+    let verdictText = "";
+
+    if (!rule.isActive) {
+      verdict = "warning";
+      verdictText = "Правило выключено";
+    } else if (rule.problem) {
+      verdict = "error";
+      verdictText = rule.problem;
+    } else if (!rule.targetAlive) {
+      verdict = "error";
+      verdictText = "Целевые кампании не найдены в VK";
+    } else if (!rule.stopAd) {
+      verdict = "warning";
+      verdictText = "Только уведомление, без остановки";
+    } else if (triggered > 0) {
+      verdict = "ok";
+      verdictText = `Сработало ${triggered} раз`;
+    } else if (coveredBanners.length === 0) {
+      verdict = "warning";
+      verdictText = "Нет баннеров с расходом под это правило";
+    } else {
+      verdict = "ok";
+      verdictText = "Условия не достигнуты (это нормально)";
+    }
+
+    return {
+      rule,
+      verdict,
+      verdictText,
+      bannersTotal: coveredBanners.length,
+      bannersTriggered: triggered,
+      bannersSkipped: skipped,
+      traces,
+      banners: coveredBanners,
+    };
+  });
+}
+
+const VERDICT_CONFIG: Record<
+  RuleVerdict,
+  { icon: typeof CheckCircle; color: string; bg: string }
+> = {
+  ok: { icon: CheckCircle, color: "text-success", bg: "bg-success/10" },
+  warning: { icon: AlertTriangle, color: "text-warning", bg: "bg-warning/10" },
+  error: { icon: XCircle, color: "text-destructive", bg: "bg-destructive/10" },
+};
+
+const RULE_TYPE_LABELS: Record<string, string> = {
+  cpl_limit: "CPL лимит",
+  min_ctr: "Мин. CTR",
+  fast_spend: "Быстрый расход",
+  spend_no_leads: "Расход без лидов",
+  budget_limit: "Лимит бюджета",
+  low_impressions: "Мало показов",
+  clicks_no_leads: "Клики без лидов",
+  new_lead: "Новый лид",
+  uz_budget_manage: "Управление бюджетом",
+};
+
+function RuleCard({ digest }: { digest: RuleDigest }) {
+  const [expanded, setExpanded] = useState(false);
+  const cfg = VERDICT_CONFIG[digest.verdict];
+  const Icon = cfg.icon;
+
+  return (
+    <div className={`rounded-lg border ${digest.verdict === "error" ? "border-destructive/30" : "border-border"}`}>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-muted/30 transition-colors rounded-lg"
+      >
+        <Icon className={`h-5 w-5 shrink-0 ${cfg.color}`} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-medium text-sm truncate">{digest.rule.name}</span>
+            <Badge variant="secondary" className="text-xs">
+              {RULE_TYPE_LABELS[digest.rule.type] || digest.rule.type}
+            </Badge>
+            {digest.rule.stopAd ? (
+              <Badge variant="outline" className="text-xs">Стоп</Badge>
+            ) : (
+              <Badge variant="outline" className="text-xs opacity-60">Уведом.</Badge>
+            )}
+          </div>
+          <p className={`text-xs mt-0.5 ${cfg.color}`}>{digest.verdictText}</p>
+        </div>
+        <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+          {digest.rule.triggerCount > 0 && (
+            <span title="Всего срабатываний">
+              <CircleDot className="inline h-3 w-3 mr-0.5" />
+              {digest.rule.triggerCount}
+            </span>
+          )}
+          {digest.bannersTotal > 0 && (
+            <span title="Баннеров под правилом">
+              <Eye className="inline h-3 w-3 mr-0.5" />
+              {digest.bannersTotal}
+            </span>
+          )}
+          {expanded ? (
+            <ChevronDown className="h-4 w-4" />
+          ) : (
+            <ChevronRight className="h-4 w-4" />
+          )}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-3 space-y-3">
+          {/* Traces for this rule */}
+          {digest.traces.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b text-muted-foreground text-left">
+                    <th className="pb-1.5 pr-3">Баннер</th>
+                    <th className="pb-1.5 pr-3">Кампания</th>
+                    <th className="pb-1.5 pr-3">Расход</th>
+                    <th className="pb-1.5 pr-3">Лиды</th>
+                    <th className="pb-1.5 pr-3">CPL</th>
+                    <th className="pb-1.5 pr-3">Результат</th>
+                    <th className="pb-1.5">Детали</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {digest.traces.map((t, i) => {
+                    const banner = digest.banners.find(
+                      (b) => b.bannerId === t.bannerId
+                    );
+                    const isTriggered = t.stoppedAt === "triggered";
+                    return (
+                      <tr key={i} className="border-b border-border/30">
+                        <td className="py-1.5 pr-3 font-mono">{t.bannerId}</td>
+                        <td className="py-1.5 pr-3">
+                          {banner?.campaignName || banner?.campaignId || "—"}
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          {banner ? `${Math.round(banner.spent)}₽` : "—"}
+                        </td>
+                        <td className="py-1.5 pr-3">{banner?.leads ?? "—"}</td>
+                        <td className="py-1.5 pr-3">
+                          {banner?.cpl !== null && banner?.cpl !== undefined
+                            ? `${Math.round(banner.cpl)}₽`
+                            : "—"}
+                        </td>
+                        <td className="py-1.5 pr-3">
+                          <Badge
+                            variant={isTriggered ? "success" : "secondary"}
+                            className="text-xs"
+                          >
+                            {isTriggered ? "Сработало" : t.stoppedAt}
+                          </Badge>
+                        </td>
+                        <td className="py-1.5 text-muted-foreground">
+                          {t.reason}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Covered banners without traces */}
+          {digest.traces.length === 0 && digest.banners.length > 0 && (
+            <div className="text-xs text-muted-foreground">
+              Покрывает {digest.banners.length} баннер(ов), но условия не достигнуты ни для одного
+            </div>
+          )}
+
+          {digest.traces.length === 0 && digest.banners.length === 0 && (
+            <div className="text-xs text-muted-foreground">
+              Нет активных баннеров с расходом, подходящих под фильтры правила
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UncoveredBannersSection({ banners }: { banners: DiagBanner[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const uncovered = banners.filter((b) => !b.isCovered && b.spent > 0);
+  if (uncovered.length === 0) return null;
+
+  return (
+    <div className="rounded-lg border border-warning/30">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-3 flex items-center gap-3 text-left hover:bg-muted/30 transition-colors rounded-lg"
+      >
+        <AlertTriangle className="h-5 w-5 text-warning shrink-0" />
+        <div className="flex-1">
+          <span className="font-medium text-sm">
+            Баннеры без покрытия правилами
+          </span>
+          <p className="text-xs text-warning mt-0.5">
+            {uncovered.length} баннер(ов) с расходом не покрыты ни одним правилом
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>{Math.round(uncovered.reduce((s, b) => s + b.spent, 0))}₽ расход</span>
+          {expanded ? (
+            <ChevronDown className="h-4 w-4" />
+          ) : (
+            <ChevronRight className="h-4 w-4" />
+          )}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="px-4 pb-3 overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b text-muted-foreground text-left">
+                <th className="pb-1.5 pr-3">Баннер</th>
+                <th className="pb-1.5 pr-3">Кампания</th>
+                <th className="pb-1.5 pr-3">Расход</th>
+                <th className="pb-1.5 pr-3">Клики</th>
+                <th className="pb-1.5 pr-3">Лиды</th>
+                <th className="pb-1.5">CPL</th>
+              </tr>
+            </thead>
+            <tbody>
+              {uncovered.map((b, i) => (
+                <tr key={i} className="border-b border-border/30">
+                  <td className="py-1.5 pr-3 font-mono">{b.bannerId}</td>
+                  <td className="py-1.5 pr-3">{b.campaignName || b.campaignId}</td>
+                  <td className="py-1.5 pr-3">{Math.round(b.spent)}₽</td>
+                  <td className="py-1.5 pr-3">{b.clicks}</td>
+                  <td className="py-1.5 pr-3">{b.leads}</td>
+                  <td className="py-1.5">
+                    {b.cpl !== null ? `${Math.round(b.cpl)}₽` : "—"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function UserResultCard({
+  user,
+  isOpen,
+  onToggle,
+}: {
+  user: UserDiagnostic;
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
+  const digests = useMemo(() => buildRuleDigests(user), [user]);
+  const errorCount = digests.filter((d) => d.verdict === "error").length;
+  const warningCount = digests.filter((d) => d.verdict === "warning").length;
+  const okCount = digests.filter((d) => d.verdict === "ok").length;
+  const uncoveredCount = user.banners.filter(
+    (b) => !b.isCovered && b.spent > 0
+  ).length;
+
+  // Sort: errors first, then warnings, then ok
+  const sortedDigests = useMemo(
+    () =>
+      [...digests].sort((a, b) => {
+        const order: Record<RuleVerdict, number> = { error: 0, warning: 1, ok: 2 };
+        return order[a.verdict] - order[b.verdict];
+      }),
+    [digests]
+  );
+
+  return (
+    <Card>
+      <button
+        onClick={onToggle}
+        className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-muted/50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          {isOpen ? (
+            <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-muted-foreground" />
+          )}
+          <span className="font-medium">{user.name}</span>
+          {user.error ? (
+            <Badge variant="destructive">ошибка</Badge>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              {errorCount > 0 && (
+                <Badge variant="destructive" className="text-xs">
+                  {errorCount} ошибок
+                </Badge>
+              )}
+              {warningCount > 0 && (
+                <Badge variant="warning" className="text-xs">
+                  {warningCount} внимание
+                </Badge>
+              )}
+              {okCount > 0 && (
+                <Badge variant="success" className="text-xs">
+                  {okCount} ок
+                </Badge>
+              )}
+              {uncoveredCount > 0 && (
+                <Badge variant="outline" className="text-xs text-warning">
+                  {uncoveredCount} без покрытия
+                </Badge>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span>{user.tier}</span>
+          {user.telegramConnected ? (
+            <Send className="h-3 w-3 text-primary" />
+          ) : (
+            <Send className="h-3 w-3 text-muted-foreground/30" />
+          )}
+        </div>
+      </button>
+
+      {isOpen && (
+        <CardContent className="pt-0 space-y-2">
+          {user.error ? (
+            <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
+              {user.error}
+            </div>
+          ) : (
+            <>
+              {/* Rule cards */}
+              {sortedDigests.map((digest, i) => (
+                <RuleCard key={i} digest={digest} />
+              ))}
+
+              {/* Uncovered banners */}
+              <UncoveredBannersSection banners={user.banners} />
+
+              {user.rules.length === 0 && user.banners.length === 0 && (
+                <p className="text-sm text-muted-foreground py-2">
+                  Нет правил и активных баннеров
+                </p>
+              )}
+            </>
+          )}
+        </CardContent>
+      )}
+    </Card>
+  );
+}
+
 export function AdminRuleDiagnosticTab({ sessionToken }: Props) {
   const [dateFrom, setDateFrom] = useState(daysAgo(7));
   const [dateTo, setDateTo] = useState(today());
@@ -113,12 +489,23 @@ export function AdminRuleDiagnosticTab({ sessionToken }: Props) {
 
   const summary = useMemo(() => {
     const totalRules = results.reduce((s, r) => s + r.rules.length, 0);
+    const rulesOk = results.reduce(
+      (s, r) =>
+        s +
+        buildRuleDigests(r).filter((d) => d.verdict === "ok").length,
+      0
+    );
+    const rulesWithProblems = results.reduce(
+      (s, r) =>
+        s +
+        buildRuleDigests(r).filter((d) => d.verdict === "error").length,
+      0
+    );
     const uncoveredBanners = results.reduce(
       (s, r) => s + r.banners.filter((b) => !b.isCovered && b.spent > 0).length,
       0
     );
-    const totalProblems = results.reduce((s, r) => s + r.problems.length, 0);
-    return { users: results.length, totalRules, uncoveredBanners, totalProblems };
+    return { users: results.length, totalRules, rulesOk, rulesWithProblems, uncoveredBanners };
   }, [results]);
 
   const sortedResults = useMemo(() => {
@@ -416,10 +803,26 @@ export function AdminRuleDiagnosticTab({ sessionToken }: Props) {
           <Card>
             <CardContent className="pt-4 pb-4">
               <div className="flex items-center gap-3">
-                <ListChecks className="h-5 w-5 text-primary" />
+                <CheckCircle className="h-5 w-5 text-success" />
                 <div>
-                  <p className="text-xs text-muted-foreground">Правил</p>
-                  <p className="text-xl font-bold">{summary.totalRules}</p>
+                  <p className="text-xs text-muted-foreground">Правила ОК</p>
+                  <p className="text-xl font-bold">
+                    {summary.rulesOk}
+                    <span className="text-sm font-normal text-muted-foreground">
+                      {" "}/ {summary.totalRules}
+                    </span>
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardContent className="pt-4 pb-4">
+              <div className="flex items-center gap-3">
+                <XCircle className="h-5 w-5 text-destructive" />
+                <div>
+                  <p className="text-xs text-muted-foreground">С ошибками</p>
+                  <p className="text-xl font-bold">{summary.rulesWithProblems}</p>
                 </div>
               </div>
             </CardContent>
@@ -435,238 +838,17 @@ export function AdminRuleDiagnosticTab({ sessionToken }: Props) {
               </div>
             </CardContent>
           </Card>
-          <Card>
-            <CardContent className="pt-4 pb-4">
-              <div className="flex items-center gap-3">
-                <AlertTriangle className="h-5 w-5 text-destructive" />
-                <div>
-                  <p className="text-xs text-muted-foreground">Проблем</p>
-                  <p className="text-xl font-bold">{summary.totalProblems}</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
         </div>
       )}
 
       {/* Results per user */}
       {sortedResults.map((user) => (
-        <Card key={user.userId}>
-          <button
-            onClick={() => toggleUser(user.userId)}
-            className="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-muted/50 transition-colors"
-          >
-            <div className="flex items-center gap-3">
-              {openUsers.has(user.userId) ? (
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              )}
-              <span className="font-medium">{user.name}</span>
-              {user.error ? (
-                <Badge variant="destructive">ошибка</Badge>
-              ) : user.problems.length > 0 ? (
-                <Badge variant="destructive">{user.problems.length} проблем</Badge>
-              ) : (
-                <Badge variant="success">ок</Badge>
-              )}
-            </div>
-            <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span>{user.tier}</span>
-              {user.telegramConnected ? (
-                <Send className="h-3 w-3 text-primary" />
-              ) : (
-                <Send className="h-3 w-3 text-muted-foreground/30" />
-              )}
-            </div>
-          </button>
-
-          {openUsers.has(user.userId) && (
-            <CardContent className="pt-0 space-y-4">
-              {user.error ? (
-                <div className="p-3 rounded-lg bg-destructive/10 text-destructive text-sm">
-                  {user.error}
-                </div>
-              ) : (
-                <>
-                  {/* Rules table */}
-                  {user.rules.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-medium mb-2">
-                        Правила ({user.rules.length})
-                      </h4>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b text-muted-foreground text-left">
-                              <th className="pb-2 pr-3">Правило</th>
-                              <th className="pb-2 pr-3">Тип</th>
-                              <th className="pb-2 pr-3">Акт.</th>
-                              <th className="pb-2 pr-3">stopAd</th>
-                              <th className="pb-2 pr-3">Сработ.</th>
-                              <th className="pb-2 pr-3">Таргет</th>
-                              <th className="pb-2">Проблема</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {user.rules.map((r, i) => (
-                              <tr key={i} className="border-b border-border/50">
-                                <td className="py-1.5 pr-3">{r.name}</td>
-                                <td className="py-1.5 pr-3">
-                                  <Badge variant="secondary">{r.type}</Badge>
-                                </td>
-                                <td className="py-1.5 pr-3">
-                                  {r.isActive ? "✓" : "✗"}
-                                </td>
-                                <td className="py-1.5 pr-3">
-                                  {r.stopAd ? "Стоп" : "Уведом."}
-                                </td>
-                                <td className="py-1.5 pr-3">{r.triggerCount}</td>
-                                <td className="py-1.5 pr-3">
-                                  {r.targetAlive ? "✓" : "✗"}
-                                </td>
-                                <td className="py-1.5 text-destructive text-xs">
-                                  {r.problem}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Banners table */}
-                  {user.banners.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-medium mb-2">
-                        Баннеры с расходом ({user.banners.length})
-                      </h4>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b text-muted-foreground text-left">
-                              <th className="pb-2 pr-3">Баннер</th>
-                              <th className="pb-2 pr-3">Кампания</th>
-                              <th className="pb-2 pr-3">Расход</th>
-                              <th className="pb-2 pr-3">Клики</th>
-                              <th className="pb-2 pr-3">Лиды</th>
-                              <th className="pb-2 pr-3">CPL</th>
-                              <th className="pb-2 pr-3">Покрыт</th>
-                              <th className="pb-2">Правила</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {user.banners.map((b, i) => (
-                              <tr
-                                key={i}
-                                className={`border-b border-border/50 ${!b.isCovered ? "bg-destructive/5" : ""}`}
-                              >
-                                <td className="py-1.5 pr-3 font-mono text-xs">
-                                  {b.bannerId}
-                                </td>
-                                <td className="py-1.5 pr-3 text-xs">
-                                  {b.campaignName || b.campaignId}
-                                </td>
-                                <td className="py-1.5 pr-3">
-                                  {Math.round(b.spent)}₽
-                                </td>
-                                <td className="py-1.5 pr-3">{b.clicks}</td>
-                                <td className="py-1.5 pr-3">{b.leads}</td>
-                                <td className="py-1.5 pr-3">
-                                  {b.cpl !== null ? `${Math.round(b.cpl)}₽` : "—"}
-                                </td>
-                                <td className="py-1.5 pr-3">
-                                  {b.isCovered ? (
-                                    <ShieldCheck className="h-4 w-4 text-success" />
-                                  ) : (
-                                    <AlertTriangle className="h-4 w-4 text-destructive" />
-                                  )}
-                                </td>
-                                <td className="py-1.5 text-xs text-muted-foreground">
-                                  {b.coveredByRules.join(", ") || "—"}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Tracing table */}
-                  {user.tracing.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-medium mb-2">
-                        Трассировка ({user.tracing.length})
-                      </h4>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b text-muted-foreground text-left">
-                              <th className="pb-2 pr-3">Баннер</th>
-                              <th className="pb-2 pr-3">Правило</th>
-                              <th className="pb-2 pr-3">Шаг</th>
-                              <th className="pb-2">Причина</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {user.tracing.map((t, i) => (
-                              <tr key={i} className="border-b border-border/50">
-                                <td className="py-1.5 pr-3 font-mono text-xs">
-                                  {t.bannerId}
-                                </td>
-                                <td className="py-1.5 pr-3">{t.ruleName}</td>
-                                <td className="py-1.5 pr-3">
-                                  <Badge
-                                    variant={
-                                      t.stoppedAt === "triggered"
-                                        ? "success"
-                                        : "secondary"
-                                    }
-                                  >
-                                    {t.stoppedAt}
-                                  </Badge>
-                                </td>
-                                <td className="py-1.5 text-xs">{t.reason}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Problems */}
-                  {user.problems.length > 0 && (
-                    <div>
-                      <h4 className="text-sm font-medium mb-2">Проблемы</h4>
-                      <div className="space-y-1">
-                        {user.problems.map((p, i) => (
-                          <div key={i} className="flex items-start gap-2 text-sm">
-                            <Badge
-                              variant="destructive"
-                              className="shrink-0 text-xs"
-                            >
-                              {p.category}
-                            </Badge>
-                            <span>{p.message}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {user.rules.length === 0 && user.banners.length === 0 && (
-                    <p className="text-sm text-muted-foreground py-2">
-                      Нет правил и активных баннеров
-                    </p>
-                  )}
-                </>
-              )}
-            </CardContent>
-          )}
-        </Card>
+        <UserResultCard
+          key={user.userId}
+          user={user}
+          isOpen={openUsers.has(user.userId)}
+          onToggle={() => toggleUser(user.userId)}
+        />
       ))}
     </div>
   );

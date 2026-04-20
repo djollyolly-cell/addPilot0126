@@ -55,7 +55,7 @@ export function SettingsPage() {
   const { user } = useAuth();
   const location = useLocation();
   const initialTab = (location.state as { tab?: string })?.tab || 'profile';
-  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral'>(initialTab);
+  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral'>(initialTab as 'profile' | 'telegram' | 'api' | 'business' | 'referral');
 
   if (!user) {
     return (

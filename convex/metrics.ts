@@ -4,9 +4,6 @@ import { internal } from "./_generated/api";
 
 // ── Cleanup constants ──
 const RETENTION_DAYS = 4;
-const DEFAULT_BATCH_SIZE = 500;
-const BATCH_DELAY_MS = 100;
-const LOG_EVERY_N_BATCHES = 100;
 const CLEANUP_MAX_RUNNING_MS = 12 * 60 * 60 * 1000; // 12h zombie threshold
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -273,7 +270,6 @@ export const manualMassCleanup = internalAction({
     const run = args.runNumber ?? 1;
     const startedAt = Date.now();
     let totalDeleted = 0;
-    let batchCount = 0;
     let occErrors = 0;
 
     // Reset heartbeat on first run
@@ -290,7 +286,6 @@ export const manualMassCleanup = internalAction({
           batchSize: MASS_BATCH_SIZE,
         });
         totalDeleted += batch.deleted;
-        batchCount++;
 
         if (!batch.hasMore) {
           console.log(`[mass-cleanup] DONE! Run #${run}: deleted ${totalDeleted} total. Table is clean.`);
@@ -302,7 +297,7 @@ export const manualMassCleanup = internalAction({
         }
         // 2s pause between batches — gentle on server
         await sleep(MASS_BATCH_DELAY_MS);
-      } catch (e) {
+      } catch {
         occErrors++;
         if (occErrors > 5) {
           console.warn(`[mass-cleanup] Run #${run}: too many OCC errors (${occErrors}), pausing. Deleted ${totalDeleted}.`);

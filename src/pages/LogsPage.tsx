@@ -18,10 +18,11 @@ import {
   ChevronRight,
   X,
   Inbox,
+  AlertCircle,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-type ActionType = 'stopped' | 'notified' | 'stopped_and_notified' | 'budget_increased' | 'budget_reset';
+type ActionType = 'stopped' | 'notified' | 'stopped_and_notified' | 'budget_increased' | 'budget_reset' | 'zero_spend_alert';
 type StatusType = 'success' | 'failed' | 'reverted';
 
 const ACTION_LABELS: Record<ActionType, string> = {
@@ -30,6 +31,7 @@ const ACTION_LABELS: Record<ActionType, string> = {
   stopped_and_notified: 'Остановлено + уведомление',
   budget_increased: 'Бюджет увеличен',
   budget_reset: 'Бюджет сброшен',
+  zero_spend_alert: 'Нулевой расход',
 };
 
 const STATUS_LABELS: Record<StatusType, string> = {
@@ -50,6 +52,8 @@ function ActionIcon({ type }: { type: ActionType }) {
       return <Zap className="w-4 h-4 text-green-500" />;
     case 'budget_reset':
       return <Bell className="w-4 h-4 text-muted-foreground" />;
+    case 'zero_spend_alert':
+      return <AlertCircle className="w-4 h-4 text-amber-500" />;
   }
 }
 

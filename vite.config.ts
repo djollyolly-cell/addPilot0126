@@ -16,7 +16,7 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    sourcemap: true,
+    sourcemap: false,
     target: 'es2020',
     minify: 'esbuild',
     cssMinify: true,
