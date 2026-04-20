@@ -913,4 +913,18 @@ export default defineSchema({
     .index("by_code", ["code"])
     .index("by_orgId", ["orgId"]),
 
+  // Daily snapshot of org's actual load units (computed by cron)
+  loadUnitsHistory: defineTable({
+    orgId: v.id("organizations"),
+    date: v.string(),                            // "YYYY-MM-DD" UTC
+    loadUnits: v.number(),                       // Σ ceil(activeGroups / 100)
+    activeGroupsByAccount: v.array(v.object({    // detail for debugging
+      accountId: v.id("adAccounts"),
+      activeGroups: v.number(),
+    })),
+    capturedAt: v.number(),
+  })
+    .index("by_orgId_date", ["orgId", "date"])
+    .index("by_orgId_capturedAt", ["orgId", "capturedAt"]),
+
 }, { schemaValidation: false });
