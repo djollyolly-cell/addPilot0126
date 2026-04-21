@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import { checkOrgWritable, checkFeaturesDisabled } from "./loadUnits";
 
 const VK_ADS_API_BASE = "https://target.my.com";
 
@@ -165,6 +166,18 @@ export const connect = mutation({
     clientSecret: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Org grace check: read_only/frozen blocks add_accounts
+    const writable = await checkOrgWritable(ctx, args.userId);
+    if (!writable.writable) {
+      throw new Error(writable.reason ?? "Доступ запрещён");
+    }
+
+    // Overage: add_accounts is a premium feature, blocked when featuresDisabled
+    const featuresOff = await checkFeaturesDisabled(ctx, args.userId);
+    if (featuresOff) {
+      throw new Error("Превышен лимит пакета. Добавление кабинетов недоступно.");
+    }
+
     // Check if account already connected
     const existing = await ctx.db
       .query("adAccounts")

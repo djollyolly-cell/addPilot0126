@@ -167,4 +167,33 @@ crons.cron(
   internal.orgAuth.cleanupExpiredInvites
 );
 
+// Daily load units recalc — 01:00 UTC (04:00 MSK)
+crons.cron(
+  "load-units-daily",
+  "0 1 * * *",
+  internal.loadUnits.recalculateAll
+);
+
+// Overage detection — 02:00 UTC (after recalculateAll at 01:00)
+crons.cron(
+  "check-load-overage",
+  "0 2 * * *",
+  internal.loadUnits.checkOverage
+);
+
+// Expired grace progression — daily 03:00 UTC (after overage at 02:00)
+// Daily is sufficient: phases are 14/31/15 days. Hourly would waste resources.
+crons.cron(
+  "progress-expired-grace",
+  "0 3 * * *",
+  internal.loadUnits.progressExpiredGrace
+);
+
+// Cold delete archived org data after 150 days total — daily 04:30 UTC
+crons.cron(
+  "cold-delete-archived-orgs",
+  "30 4 * * *",
+  internal.loadUnits.coldDeleteArchived
+);
+
 export default crons;

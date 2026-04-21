@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { checkOrgWritable, checkFeaturesDisabled } from "./loadUnits";
 
 
 const PERMISSIONS = ["rules", "budgets", "ads_control", "reports", "logs", "telegram", "add_accounts", "invite_members", "ai_cabinet"];
@@ -155,6 +156,17 @@ export const inviteManager = mutation({
     const canInvite = membership.role === "owner" ||
                       membership.permissions.includes("invite_members");
     if (!canInvite) throw new Error("Нет права invite_members");
+
+    // Org grace check
+    const orgWritable = await checkOrgWritable(ctx, args.invitedBy);
+    if (!orgWritable.writable) {
+      throw new Error(orgWritable.reason ?? "Доступ запрещён");
+    }
+
+    const featuresOff = await checkFeaturesDisabled(ctx, args.invitedBy);
+    if (featuresOff) {
+      throw new Error("Превышен лимит пакета. Приглашение менеджеров недоступно.");
+    }
 
     // Validate permissions list
     for (const p of args.permissions) {

@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { checkOrgWritable } from "./loadUnits";
 
 /**
  * Single source of truth for tier-based rule limits.
@@ -116,6 +117,12 @@ export const create = mutation({
     resetDaily: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
+    // Check write access (org in read_only/frozen blocks all writes)
+    const writable = await checkOrgWritable(ctx, args.userId);
+    if (!writable.writable) {
+      throw new Error(writable.reason ?? "Кабинет недоступен для изменений");
+    }
+
     // Validate name
     if (!args.name.trim()) {
       throw new Error("Название правила не может быть пустым");

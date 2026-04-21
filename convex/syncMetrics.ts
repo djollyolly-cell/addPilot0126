@@ -610,6 +610,8 @@ export const listActiveAccounts = internalQuery({
   args: {},
   handler: async (ctx) => {
     const accounts = await ctx.db.query("adAccounts").collect();
+    // NOTE: accounts with status "archived" (frozen orgs, Plan 4) are
+    // naturally excluded by this active/error-only filter. No additional check needed.
     const active = accounts.filter((a) => a.status === "active" || a.status === "error");
     const now = Date.now();
 

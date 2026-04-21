@@ -2552,6 +2552,46 @@ export const getSupportMapping = internalQuery({
 });
 
 /** Stub: notify owner that a manager accepted their invite. Plan 6 impl. */
+// ═══════════════════════════════════════════════════════════
+// Load monitoring & grace notifications (Plan 4 stubs — Plan 6 impl)
+// ═══════════════════════════════════════════════════════════
+
+export const sendOverageStartNotification = internalAction({
+  args: { orgId: v.id("organizations") },
+  handler: async (_ctx, args) => {
+    console.log(`[telegram] TODO: send overage start notification for ${args.orgId}`);
+  },
+});
+
+export const sendOverageRecoveryNotification = internalAction({
+  args: { orgId: v.id("organizations") },
+  handler: async (_ctx, args) => {
+    console.log(`[telegram] TODO: send overage recovery for ${args.orgId}`);
+  },
+});
+
+export const sendFeaturesDisabledNotification = internalAction({
+  args: { orgId: v.id("organizations") },
+  handler: async (_ctx, args) => {
+    console.log(`[telegram] TODO: features-disabled notification for ${args.orgId}`);
+  },
+});
+
+export const sendExpiredWarningNotification = internalAction({
+  args: {
+    orgId: v.id("organizations"),
+    phase: v.union(
+      v.literal("warnings"),
+      v.literal("read_only"),
+      v.literal("deep_read_only"),
+      v.literal("frozen")
+    ),
+  },
+  handler: async (_ctx, args) => {
+    console.log(`[telegram] TODO: expired ${args.phase} notification for ${args.orgId}`);
+  },
+});
+
 export const sendOwnerInviteAcceptedNotification = internalAction({
   args: {
     ownerId: v.id("users"),

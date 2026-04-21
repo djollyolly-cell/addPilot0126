@@ -112,6 +112,12 @@ export default defineSchema({
     // Agency org membership
     orgId: v.optional(v.id("organizations")),
     excludeFromOrgTransfer: v.optional(v.boolean()),  // Решение 3: prevents auto-transfer to org
+    // Saved status before archive (Plan 4: frozen orgs) for restore
+    statusBeforeArchive: v.optional(v.union(
+      v.literal("active"),
+      v.literal("paused"),
+      v.literal("error")
+    )),
     createdAt: v.number(),
   })
     .index("by_userId", ["userId"])
