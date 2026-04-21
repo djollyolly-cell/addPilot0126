@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+
 
 const PERMISSIONS = ["rules", "budgets", "ads_control", "reports", "logs", "telegram", "add_accounts", "invite_members", "ai_cabinet"];
 
@@ -448,16 +448,18 @@ export const clearGraceFlags = internalMutation({
     const org = await ctx.db.get(args.orgId);
     if (!org) return;
 
-    // Build clean doc without grace fields using destructuring
-    const {
-      _id, _creationTime,
-      overageNotifiedAt: _a,
-      overageGraceStartedAt: _c, featuresDisabledAt: _d,
-      expiredGracePhase: _e, expiredGraceStartedAt: _f,
-      pendingCredit: _g, pendingCreditCurrency: _h,
-      ...clean
-    } = org;
+    // Strip system + grace fields before replace().
+    // Convex patch({field: undefined}) SKIPS the field, so replace() is needed.
+    const STRIP_FIELDS = new Set([
+      "_id", "_creationTime",
+      "overageNotifiedAt", "overageGraceStartedAt", "featuresDisabledAt",
+      "expiredGracePhase", "expiredGraceStartedAt",
+      "pendingCredit", "pendingCreditCurrency",
+    ]);
+    const clean = Object.fromEntries(
+      Object.entries(org).filter(([k]) => !STRIP_FIELDS.has(k))
+    );
 
-    await ctx.db.replace(args.orgId, { ...clean, updatedAt: Date.now() });
+    await ctx.db.replace(args.orgId, { ...clean, updatedAt: Date.now() } as never);
   },
 });
