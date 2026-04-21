@@ -9,6 +9,7 @@ import {
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { withTimeout } from "./vkApi";
+import { CUSTOM_RULE_HANDLERS } from "./customRules";
 import {
   groupRulesByAccount,
   filterCampaignsForRule,
@@ -230,6 +231,16 @@ export function evaluateCondition(
     case "uz_budget_manage":
       return false;
 
+    case "custom_l3": {
+      // L3: dispatch to CUSTOM_RULE_HANDLERS via customRuleTypeCode
+      if (Array.isArray(condition)) return false;
+      const handlerCode = context?.customRuleTypeCode;
+      if (!handlerCode) return false;
+      const handler = CUSTOM_RULE_HANDLERS[handlerCode];
+      if (!handler) return false;
+      return handler.eval(condition, metrics, context);
+    }
+
     default:
       return false;
   }
@@ -364,8 +375,40 @@ export function evaluateConditionTrace(
     case "uz_budget_manage":
       return { triggered: false, stoppedAt: "step6_condition_not_met", reason: "uz_budget_manage не участвует в стандартной оценке" };
 
+    case "custom_l3": {
+      if (Array.isArray(condition)) {
+        return {
+          triggered: false,
+          stoppedAt: "step6_array_for_non_custom",
+          reason: `Массив условий поддерживается только для type=custom`,
+        };
+      }
+      const handlerCode = context?.customRuleTypeCode;
+      if (!handlerCode) {
+        return {
+          triggered: false,
+          stoppedAt: "step6_no_handler_code",
+          reason: `customRuleTypeCode не задан для правила type=custom_l3`,
+        };
+      }
+      const handler = CUSTOM_RULE_HANDLERS[handlerCode];
+      if (!handler) {
+        return {
+          triggered: false,
+          stoppedAt: "step6_unknown_rule_type",
+          reason: `Неизвестный handler: ${handlerCode}`,
+        };
+      }
+      const result = handler.trace(condition, metrics, context);
+      return {
+        triggered: result.triggered,
+        stoppedAt: result.triggered ? "triggered" : "step6_l3_condition_not_met",
+        reason: result.reason,
+      };
+    }
+
     default:
-      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Неизвестный тип правила: ${ruleType}` };
+      return { triggered: false, stoppedAt: "step6_unknown_type", reason: `Неизвестный type: ${ruleType}` };
   }
 }
 

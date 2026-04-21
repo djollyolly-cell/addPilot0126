@@ -172,3 +172,56 @@ describe("existing L1 rules still work after L2 changes", () => {
     expect(evaluateCondition("spend_no_leads", { metric: "spent", operator: ">", value: 200 }, m)).toBe(true);
   });
 });
+
+describe("evaluateCondition L3 dispatch (via custom_l3 + customRuleTypeCode)", () => {
+  it("triggers custom_roi handler when ROI below target", () => {
+    const m: MetricsSnapshot = {
+      spent: 1000, leads: 0, clicks: 0, impressions: 0,
+    };
+    const result = evaluateCondition(
+      "custom_l3",
+      { metric: "roi", operator: "<", value: 1.5 },
+      m,
+      { customRuleTypeCode: "custom_roi", meta: { revenue: 1000 } } // ROI = 1.0 < 1.5 → trigger
+    );
+    expect(result).toBe(true);
+  });
+
+  it("does not trigger custom_roi when ROI above target", () => {
+    const m: MetricsSnapshot = {
+      spent: 1000, leads: 0, clicks: 0, impressions: 0,
+    };
+    const result = evaluateCondition(
+      "custom_l3",
+      { metric: "roi", operator: "<", value: 1.5 },
+      m,
+      { customRuleTypeCode: "custom_roi", meta: { revenue: 2000 } } // ROI = 2.0 > 1.5 → no trigger
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false for unknown customRuleTypeCode", () => {
+    const m: MetricsSnapshot = {
+      spent: 100, leads: 0, clicks: 0, impressions: 0,
+    };
+    const result = evaluateCondition(
+      "custom_l3",
+      { metric: "x", operator: ">", value: 0 },
+      m,
+      { customRuleTypeCode: "custom_unknown_xyz" }
+    );
+    expect(result).toBe(false);
+  });
+
+  it("returns false when customRuleTypeCode is missing", () => {
+    const m: MetricsSnapshot = {
+      spent: 100, leads: 0, clicks: 0, impressions: 0,
+    };
+    const result = evaluateCondition(
+      "custom_l3",
+      { metric: "x", operator: ">", value: 0 },
+      m
+    );
+    expect(result).toBe(false);
+  });
+});
