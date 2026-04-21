@@ -81,23 +81,25 @@ export const create = mutation({
   args: {
     userId: v.id("users"),
     name: v.string(),
-    type: v.union(
-      v.literal("cpl_limit"),
-      v.literal("min_ctr"),
-      v.literal("fast_spend"),
-      v.literal("spend_no_leads"),
-      v.literal("budget_limit"),
-      v.literal("low_impressions"),
-      v.literal("clicks_no_leads"),
-      v.literal("new_lead"),
-      v.literal("uz_budget_manage")
-    ),
-    value: v.number(),
+    type: v.string(), // validated at runtime: L1 types + "custom" + "custom_l3"
+    // L1: flat fields
+    value: v.optional(v.number()),
     operator: v.optional(v.string()),
     minSamples: v.optional(v.number()),
     timeWindow: v.optional(
       v.union(v.literal("daily"), v.literal("since_launch"), v.literal("24h"), v.literal("1h"), v.literal("6h"))
     ),
+    // L2: array of conditions (type="custom" only)
+    conditionsArray: v.optional(v.array(v.object({
+      metric: v.string(),
+      operator: v.string(),
+      value: v.number(),
+      minSamples: v.optional(v.number()),
+      timeWindow: v.optional(v.union(
+        v.literal("daily"), v.literal("since_launch"),
+        v.literal("24h"), v.literal("1h"), v.literal("6h")
+      )),
+    }))),
     actions: v.object({
       stopAd: v.boolean(),
       notify: v.boolean(),
@@ -110,6 +112,8 @@ export const create = mutation({
     targetCampaignIds: v.optional(v.array(v.string())),
     targetAdPlanIds: v.optional(v.array(v.string())),
     targetAdIds: v.optional(v.array(v.string())),
+    // L3: handler code (required when type="custom_l3")
+    customRuleTypeCode: v.optional(v.string()),
     // uz_budget_manage specific fields
     initialBudget: v.optional(v.number()),
     budgetStep: v.optional(v.number()),
@@ -133,10 +137,54 @@ export const create = mutation({
       throw new Error("Выберите хотя бы один кабинет (EMPTY_TARGETS)");
     }
 
-    // Validate value
-    const valueError = validateRuleValue(args.type, args.value);
-    if (valueError) {
-      throw new Error(valueError);
+    // Validate type
+    const L1_TYPES = ["cpl_limit", "min_ctr", "fast_spend", "spend_no_leads",
+                       "budget_limit", "low_impressions", "clicks_no_leads",
+                       "new_lead", "uz_budget_manage"];
+    const isL1 = L1_TYPES.includes(args.type);
+    const isL2 = args.type === "custom";
+    const isL3 = args.type === "custom_l3";
+
+    if (!isL1 && !isL2 && !isL3) {
+      throw new Error(`Неизвестный тип правила: ${args.type}`);
+    }
+
+    // L2 requires conditionsArray
+    if (isL2) {
+      if (!args.conditionsArray || args.conditionsArray.length === 0) {
+        throw new Error("Конструктор требует минимум одно условие");
+      }
+      const KNOWN_METRICS = ["spent", "leads", "clicks", "impressions", "cpl", "ctr", "cpc", "reach"];
+      for (const c of args.conditionsArray) {
+        if (!KNOWN_METRICS.includes(c.metric)) {
+          throw new Error(`Неизвестная метрика: ${c.metric}`);
+        }
+        if (![">", "<", ">=", "<=", "=="].includes(c.operator)) {
+          throw new Error(`Неизвестный оператор: ${c.operator}`);
+        }
+      }
+    }
+
+    // L3 requires customRuleTypeCode + validate handler exists
+    if (isL3) {
+      if (!args.customRuleTypeCode) {
+        throw new Error("L3 правило требует customRuleTypeCode");
+      }
+      const { CUSTOM_RULE_HANDLERS } = await import("./customRules");
+      if (!CUSTOM_RULE_HANDLERS[args.customRuleTypeCode]) {
+        throw new Error(`Неизвестный handler: ${args.customRuleTypeCode}`);
+      }
+    }
+
+    // L1 requires value (except new_lead and uz_budget_manage)
+    if (isL1 && args.type !== "new_lead" && args.type !== "uz_budget_manage") {
+      const valueError = validateRuleValue(args.type, args.value ?? 0);
+      if (valueError) {
+        throw new Error(valueError);
+      }
+      if (args.value === undefined || args.value <= 0) {
+        throw new Error("Значение должно быть больше 0");
+      }
     }
 
     // Validate uz_budget_manage specific fields
@@ -196,33 +244,40 @@ export const create = mutation({
     }
     const stopAd = args.actions.stopAd;
 
-    const defaults = RULE_TYPE_DEFAULTS[args.type] || {
-      metric: args.type,
-      operator: ">",
-    };
-
     const now = Date.now();
 
-    // Build conditions based on rule type
-    const conditions = {
-      metric: defaults.metric,
-      operator: args.operator || defaults.operator,
-      value: args.value,
-      minSamples: args.minSamples,
-      timeWindow: args.timeWindow,
-      // uz_budget_manage specific
-      ...(args.type === "uz_budget_manage" ? {
-        initialBudget: args.initialBudget,
-        budgetStep: args.budgetStep,
-        maxDailyBudget: args.maxDailyBudget,
-        resetDaily: args.resetDaily ?? true,
-      } : {}),
-    };
+    // Build conditions based on level
+    let conditions: any;
+    if (isL2) {
+      conditions = args.conditionsArray; // array
+    } else {
+      // L1 / L3: single object
+      const defaults = RULE_TYPE_DEFAULTS[args.type] || {
+        metric: args.type,
+        operator: ">",
+      };
+      conditions = {
+        metric: defaults.metric,
+        operator: args.operator || defaults.operator,
+        value: args.value ?? 0,
+        minSamples: args.minSamples,
+        timeWindow: args.timeWindow,
+        // uz_budget_manage specific
+        ...(args.type === "uz_budget_manage" ? {
+          initialBudget: args.initialBudget,
+          budgetStep: args.budgetStep,
+          maxDailyBudget: args.maxDailyBudget,
+          resetDaily: args.resetDaily ?? true,
+        } : {}),
+      };
+    }
 
     const ruleId = await ctx.db.insert("rules", {
       userId: args.userId,
+      orgId: user?.organizationId,
       name: args.name.trim(),
-      type: args.type,
+      type: args.type as any, // schema union validates at DB level
+      customRuleTypeCode: isL3 ? args.customRuleTypeCode : undefined,
       conditions,
       actions: {
         ...args.actions,
@@ -279,6 +334,17 @@ export const update = mutation({
     targetCampaignIds: v.optional(v.array(v.string())),
     targetAdPlanIds: v.optional(v.array(v.string())),
     targetAdIds: v.optional(v.array(v.string())),
+    // L2: array of conditions (type="custom" only)
+    conditionsArray: v.optional(v.array(v.object({
+      metric: v.string(),
+      operator: v.string(),
+      value: v.number(),
+      minSamples: v.optional(v.number()),
+      timeWindow: v.optional(v.union(
+        v.literal("daily"), v.literal("since_launch"),
+        v.literal("24h"), v.literal("1h"), v.literal("6h")
+      )),
+    }))),
     // uz_budget_manage specific fields
     initialBudget: v.optional(v.number()),
     budgetStep: v.optional(v.number()),
@@ -323,14 +389,25 @@ export const update = mutation({
       patch.name = args.name.trim();
     }
 
-    if (args.value !== undefined) {
+    // L2: update conditions via conditionsArray
+    if (rule.type === "custom" && args.conditionsArray && args.conditionsArray.length > 0) {
+      const KNOWN_METRICS = ["spent", "leads", "clicks", "impressions", "cpl", "ctr", "cpc", "reach"];
+      for (const c of args.conditionsArray) {
+        if (!KNOWN_METRICS.includes(c.metric)) {
+          throw new Error(`Неизвестная метрика: ${c.metric}`);
+        }
+        if (![">", "<", ">=", "<=", "=="].includes(c.operator)) {
+          throw new Error(`Неизвестный оператор: ${c.operator}`);
+        }
+      }
+      patch.conditions = args.conditionsArray;
+    }
+
+    // L1: update conditions via value/operator/etc
+    if (args.value !== undefined && !Array.isArray(rule.conditions)) {
       const valueError = validateRuleValue(rule.type, args.value);
       if (valueError) {
         throw new Error(valueError);
-      }
-      // L2 array conditions are updated via Plan 5 constructor UI — not here
-      if (Array.isArray(rule.conditions)) {
-        throw new Error("Обновление L2 правил через этот метод не поддерживается");
       }
       patch.conditions = {
         ...rule.conditions,
