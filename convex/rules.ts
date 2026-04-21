@@ -260,9 +260,10 @@ export const create = mutation({
     const now = Date.now();
 
     // Build conditions based on level
-    let conditions: Record<string, unknown> | { metric: string; operator: string; value: number }[];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let conditions: any;
     if (isL2) {
-      conditions = args.conditionsArray; // array
+      conditions = args.conditionsArray; // array — validated non-empty above
     } else {
       // L1 / L3: single object
       const defaults = RULE_TYPE_DEFAULTS[args.type] || {
