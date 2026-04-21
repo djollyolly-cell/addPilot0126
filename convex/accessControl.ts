@@ -87,6 +87,66 @@ export const getOrgByUserId = internalQuery({
 /**
  * Check if user is owner of any organization.
  */
+/**
+ * Verify all targetAdPlanIds belong to accounts user can access.
+ * B5: prevents manager from targeting ad plans in accounts they don't have access to.
+ */
+export const validateAdPlanIds = internalQuery({
+  args: { userId: v.id("users"), adPlanIds: v.array(v.string()) },
+  handler: async (ctx, args) => {
+    if (args.adPlanIds.length === 0) return { ok: true as const, invalidIds: [] as string[] };
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) return { ok: false as const, invalidIds: args.adPlanIds };
+
+    let accessibleAccountIds: Id<"adAccounts">[] = [];
+    if (!user.organizationId) {
+      const own = await ctx.db
+        .query("adAccounts")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .collect();
+      accessibleAccountIds = own.map((a) => a._id);
+    } else {
+      const membership = await ctx.db
+        .query("orgMembers")
+        .withIndex("by_orgId_userId", (q) =>
+          q.eq("orgId", user.organizationId!).eq("userId", args.userId)
+        )
+        .first();
+      if (!membership || membership.status !== "active") {
+        return { ok: false as const, invalidIds: args.adPlanIds };
+      }
+      if (membership.role === "owner") {
+        const all = await ctx.db
+          .query("adAccounts")
+          .withIndex("by_orgId", (q) => q.eq("orgId", user.organizationId!))
+          .collect();
+        accessibleAccountIds = all.map((a) => a._id);
+      } else {
+        accessibleAccountIds = membership.assignedAccountIds;
+      }
+    }
+
+    // For each ad_plan_id, find campaigns and check accountId is accessible
+    const accessibleSet = new Set(accessibleAccountIds.map(String));
+    const invalid: string[] = [];
+    for (const planId of args.adPlanIds) {
+      const camps = await ctx.db
+        .query("campaigns")
+        .filter((q) => q.eq(q.field("adPlanId"), planId))
+        .collect();
+      if (camps.length === 0) {
+        // Plan ID not found — could be new, allow it
+        continue;
+      }
+      const accessible = camps.some((c) => accessibleSet.has(String(c.accountId)));
+      if (!accessible) invalid.push(planId);
+    }
+
+    return { ok: invalid.length === 0, invalidIds: invalid };
+  },
+});
+
 export const isOwner = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args): Promise<boolean> => {

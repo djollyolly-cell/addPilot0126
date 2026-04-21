@@ -244,6 +244,19 @@ export const create = mutation({
     }
     const stopAd = args.actions.stopAd;
 
+    // B5: Validate targetAdPlanIds belong to accessible accounts
+    if (args.targetAdPlanIds && args.targetAdPlanIds.length > 0) {
+      const validation = await ctx.runQuery(internal.accessControl.validateAdPlanIds, {
+        userId: args.userId,
+        adPlanIds: args.targetAdPlanIds,
+      });
+      if (!validation.ok) {
+        throw new Error(
+          `Нет доступа к рекламным планам: ${validation.invalidIds.join(", ")}`
+        );
+      }
+    }
+
     const now = Date.now();
 
     // Build conditions based on level
@@ -458,6 +471,18 @@ export const update = mutation({
       patch.targetCampaignIds = args.targetCampaignIds;
     }
     if (args.targetAdPlanIds !== undefined) {
+      // B5: Validate targetAdPlanIds belong to accessible accounts
+      if (args.targetAdPlanIds.length > 0) {
+        const validation = await ctx.runQuery(internal.accessControl.validateAdPlanIds, {
+          userId: args.userId,
+          adPlanIds: args.targetAdPlanIds,
+        });
+        if (!validation.ok) {
+          throw new Error(
+            `Нет доступа к рекламным планам: ${validation.invalidIds.join(", ")}`
+          );
+        }
+      }
       patch.targetAdPlanIds = args.targetAdPlanIds;
     }
     if (args.targetAdIds !== undefined) {
