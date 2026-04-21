@@ -248,13 +248,43 @@ export interface TraceResult {
  */
 export function evaluateConditionTrace(
   ruleType: string,
-  condition: RuleCondition,
+  condition: RuleCondition | RuleCondition[],
   metrics: MetricsSnapshot,
-  context?: {
-    spendHistory?: SpendSnapshot[];
-    dailyBudget?: number;
-  }
+  context: EvalContext = {}
 ): TraceResult {
+  // L2: type='custom' — array of conditions, AND with detailed trace
+  if (ruleType === "custom") {
+    if (!Array.isArray(condition)) {
+      return { triggered: false, stoppedAt: "step6_custom_not_array", reason: "type=custom требует массив условий" };
+    }
+    if (condition.length === 0) {
+      return { triggered: false, stoppedAt: "step6_no_conditions", reason: "Список условий пустой" };
+    }
+    const failedConditions: string[] = [];
+    for (const c of condition) {
+      const value = getMetricValue(c.metric, metrics);
+      if (value === undefined) {
+        return { triggered: false, stoppedAt: "step6_metric_undefined", reason: `Метрика "${c.metric}" недоступна` };
+      }
+      const op = CONDITION_OPERATORS[c.operator];
+      if (!op) {
+        return { triggered: false, stoppedAt: "step6_unknown_operator", reason: `Неизвестный оператор: ${c.operator}` };
+      }
+      if (!op(value, c.value)) {
+        failedConditions.push(`${c.metric}=${value} ${c.operator} ${c.value} → false`);
+      }
+    }
+    if (failedConditions.length > 0) {
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Не выполнено: ${failedConditions.join("; ")}` };
+    }
+    return { triggered: true, stoppedAt: "triggered", reason: `Все ${condition.length} условий выполнены` };
+  }
+
+  // L1: single object expected
+  if (Array.isArray(condition)) {
+    return { triggered: false, stoppedAt: "step6_array_for_non_custom", reason: `Массив условий поддерживается только для type=custom (получен type=${ruleType})` };
+  }
+
   switch (ruleType) {
     case "cpl_limit": {
       if (metrics.leads > 0) {
