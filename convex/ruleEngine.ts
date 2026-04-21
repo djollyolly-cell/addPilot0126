@@ -1456,10 +1456,23 @@ function todayStr(): string {
 
 function buildReason(
   ruleType: string,
-  condition: RuleCondition,
+  condition: RuleCondition | RuleCondition[],
   metrics: MetricsSnapshot,
   timeWindow?: string
 ): string {
+  // L2: build reason from array of conditions
+  if (ruleType === "custom" && Array.isArray(condition)) {
+    const parts = condition.map((c) => {
+      const val = getMetricValue(c.metric, metrics);
+      return `${c.metric}=${val !== undefined ? (typeof val === "number" && val % 1 !== 0 ? val.toFixed(2) : val) : "?"} ${c.operator} ${c.value}`;
+    });
+    return `Конструктор: ${parts.join(", ")}`;
+  }
+
+  if (Array.isArray(condition)) {
+    return `Правило ${ruleType} сработало`;
+  }
+
   switch (ruleType) {
     case "cpl_limit": {
       if (metrics.leads > 0) {
@@ -1556,11 +1569,17 @@ export const checkRulesForAccount = internalAction({
 
     // 4. Per-rule, per-ad evaluation
     for (const rule of rules) {
-      // L2 array conditions handled in Plan 5 — skip here
-      if (Array.isArray(rule.conditions)) continue;
-      const conditions = rule.conditions;
-      const timeWindow = conditions.timeWindow;
+      // L2 (custom) and L3 (custom_l3) use array conditions — no timeWindow/needsAllAds
+      const isL2 = rule.type === "custom" && Array.isArray(rule.conditions);
+      const isL3 = rule.type === "custom_l3";
+      const isCustom = isL2 || isL3;
+
+      // For L1: single-object conditions with timeWindow/minSamples
+      // For L2/L3: no timeWindow, no minSamples — use today's metrics
+      const conditions = isCustom ? null : (rule.conditions as RuleCondition);
+      const timeWindow = conditions?.timeWindow;
       const needsAllAds =
+        !isCustom &&
         (rule.type === "clicks_no_leads" || rule.type === "low_impressions") &&
         timeWindow &&
         timeWindow !== "daily";
@@ -1633,13 +1652,13 @@ export const checkRulesForAccount = internalAction({
 
         const todayMetric = todayMetricsByAd.get(adId);
 
-        // Check minSamples requirement
-        if (rule.conditions.minSamples) {
+        // Check minSamples requirement (L1 only — L2/L3 don't have minSamples)
+        if (conditions?.minSamples) {
           const history = await ctx.runQuery(
             internal.ruleEngine.getRealtimeHistory,
             { adId, sinceTimestamp: Date.now() - 24 * 60 * 60 * 1000 }
           );
-          if (history.length < rule.conditions.minSamples) continue;
+          if (history.length < conditions.minSamples) continue;
         }
 
         // Build context for fast_spend — DUAL PATH (map vs DB fallback)
@@ -1747,7 +1766,7 @@ export const checkRulesForAccount = internalAction({
 
         if (rule.type === "clicks_no_leads" || rule.type === "cpl_limit") {
           console.log(
-            `[ruleEngine] ${rule.type} check for ad ${adId}: spent=${metricsSnapshot.spent}, clicks=${metricsSnapshot.clicks}, leads=${metricsSnapshot.leads}, threshold=${rule.conditions.value}, triggered=${triggered}`
+            `[ruleEngine] ${rule.type} check for ad ${adId}: spent=${metricsSnapshot.spent}, clicks=${metricsSnapshot.clicks}, leads=${metricsSnapshot.leads}, threshold=${conditions?.value}, triggered=${triggered}`
           );
         }
 
