@@ -481,26 +481,6 @@ export const restoreOrgAccounts = internalMutation({
 });
 
 /**
- * Clear expired grace flags.
- * Same replace() safety model as clearOverageFlags — see comment there.
- */
-export const clearExpiredFlags = internalMutation({
-  args: { orgId: v.id("organizations") },
-  handler: async (ctx, args) => {
-    const org = await ctx.db.get(args.orgId);
-    if (!org) return;
-    if (!org.expiredGracePhase && !org.expiredGraceStartedAt) return;
-    const {
-      expiredGracePhase: _a,
-      expiredGraceStartedAt: _b,
-      ...rest
-    } = org;
-    void _a; void _b;
-    await ctx.db.replace(args.orgId, { ...rest, updatedAt: Date.now() });
-  },
-});
-
-/**
  * Daily cron: progress expired grace phases.
  * Runs on FILTERED set of orgs (only those with expired sub or active grace).
  */
@@ -522,13 +502,15 @@ export const progressExpiredGrace = internalAction({
             try {
               await ctx.runMutation(internal.loadUnits.restoreOrgAccounts, { orgId: org._id });
             } catch (e) {
-              // Log but don't block clearExpiredFlags — subscription is paid,
+              // Log but don't block clearGraceFlags — subscription is paid,
               // org must be unfrozen even if some accounts fail to unarchive.
               // Failed accounts will be retried on next cron cycle.
               console.error(`restoreOrgAccounts failed for ${org._id}:`, e);
             }
           }
-          await ctx.runMutation(internal.loadUnits.clearExpiredFlags, { orgId: org._id });
+          // Full grace reset (reuses Plan 3 clearGraceFlags from organizations.ts).
+          // Also clears overage flags — checkOverage cron will re-set if still over.
+          await ctx.runMutation(internal.organizations.clearGraceFlags, { orgId: org._id });
         }
         continue;
       }
