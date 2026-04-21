@@ -87,18 +87,84 @@ export function computeRealtimeDelta(
 }
 
 /**
+ * Context for evaluateCondition — optional, backward-compatible.
+ * All existing L1 call sites continue to work without it.
+ */
+export interface EvalContext {
+  spendHistory?: SpendSnapshot[];
+  dailyBudget?: number;
+  customRuleTypeCode?: string;  // L3: dispatch key to CUSTOM_RULE_HANDLERS
+  meta?: Record<string, unknown>;  // L3: per-handler additional data
+}
+
+/**
+ * Get metric value by string key.
+ * Used by L2 constructor evaluator. Returns undefined for unknown keys
+ * or when computation requires data that's missing.
+ */
+export function getMetricValue(metric: string, m: MetricsSnapshot): number | undefined {
+  switch (metric) {
+    case "spent": return m.spent;
+    case "leads": return m.leads;
+    case "clicks": return m.clicks;
+    case "impressions": return m.impressions;
+    case "cpl": return m.cpl !== undefined ? m.cpl : (m.leads > 0 ? m.spent / m.leads : undefined);
+    case "ctr": return m.ctr !== undefined ? m.ctr : (m.impressions > 0 ? (m.clicks / m.impressions) * 100 : undefined);
+    case "cpc": return m.cpc !== undefined ? m.cpc : (m.clicks > 0 ? m.spent / m.clicks : undefined);
+    case "reach": return m.reach;
+    default: return undefined;
+  }
+}
+
+const CONDITION_OPERATORS: Record<string, (a: number, b: number) => boolean> = {
+  ">": (a, b) => a > b,
+  "<": (a, b) => a < b,
+  ">=": (a, b) => a >= b,
+  "<=": (a, b) => a <= b,
+  "==": (a, b) => a === b,
+};
+
+/**
+ * Evaluate L2 array of conditions with AND logic.
+ * Returns false if any metric is undefined or any condition fails.
+ */
+export function evaluateCustomConditions(
+  conditions: RuleCondition[],
+  metrics: MetricsSnapshot
+): boolean {
+  if (conditions.length === 0) return false;
+  for (const cond of conditions) {
+    const value = getMetricValue(cond.metric, metrics);
+    if (value === undefined) return false;
+    const op = CONDITION_OPERATORS[cond.operator];
+    if (!op) return false;
+    if (!op(value, cond.value)) return false;
+  }
+  return true;
+}
+
+/**
  * Evaluate whether a rule condition is met.
  * Returns true if the rule should trigger (ad should be stopped/notified).
  */
 export function evaluateCondition(
   ruleType: string,
-  condition: RuleCondition,
+  condition: RuleCondition | RuleCondition[],
   metrics: MetricsSnapshot,
-  context?: {
-    spendHistory?: SpendSnapshot[];
-    dailyBudget?: number;
-  }
+  context: EvalContext = {}
 ): boolean {
+  // L2: type='custom' — array of conditions, AND
+  if (ruleType === "custom") {
+    if (!Array.isArray(condition)) return false;
+    return evaluateCustomConditions(condition, metrics);
+  }
+
+  // L1: existing 9 types — expects single object
+  if (Array.isArray(condition)) {
+    // Should not happen for L1, but defensive
+    return false;
+  }
+
   switch (ruleType) {
     case "cpl_limit": {
       if (metrics.leads > 0) {
