@@ -449,7 +449,6 @@ export const clearGraceFlags = internalMutation({
     if (!org) return;
 
     // Build clean doc without grace fields using destructuring
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const {
       _id, _creationTime,
       overageNotifiedAt: _a,
