@@ -31,6 +31,8 @@ export interface MetricsSnapshot {
   clicks: number;
   cpl?: number;
   ctr?: number;
+  cpc?: number;        // computed: spent/clicks (L2 constructor metric)
+  reach?: number;      // raw from metricsDaily (L2 constructor metric)
 }
 
 export interface RuleCondition {
@@ -379,14 +381,16 @@ export const getAdAggregatedMetrics = internalQuery({
     let leads = 0;
     let spent = 0;
     let impressions = 0;
+    let reach = 0;
     for (const r of filtered) {
       clicks += r.clicks;
       leads += r.leads;
       spent += r.spent;
       impressions += r.impressions;
+      reach += r.reach ?? 0;
     }
 
-    return { clicks, leads, spent, impressions, daysCount: filtered.length };
+    return { clicks, leads, spent, impressions, reach: reach > 0 ? reach : undefined, daysCount: filtered.length };
   },
 });
 
@@ -1468,7 +1472,7 @@ export const checkRulesForAccount = internalAction({
       let adIdsToCheck: string[];
       const todayMetricsByAd = new Map<
         string,
-        { spent: number; leads: number; impressions: number; clicks: number; cpl?: number; ctr?: number }
+        { spent: number; leads: number; impressions: number; clicks: number; cpl?: number; ctr?: number; cpc?: number; reach?: number }
       >();
 
       const dailyMetrics = await ctx.runQuery(
@@ -1592,6 +1596,8 @@ export const checkRulesForAccount = internalAction({
             leads: delta.leads,
             impressions: delta.impressions,
             clicks: delta.clicks,
+            cpc: delta.clicks > 0 ? delta.spent / delta.clicks : undefined,
+            // reach not available in realtime snapshots
           };
         } else if (needsAllAds) {
           let sinceDate: string | undefined;
@@ -1609,6 +1615,8 @@ export const checkRulesForAccount = internalAction({
             leads: aggregated.leads,
             impressions: aggregated.impressions,
             clicks: aggregated.clicks,
+            cpc: aggregated.clicks > 0 ? aggregated.spent / aggregated.clicks : undefined,
+            reach: aggregated.reach,
           };
         } else if (todayMetric) {
           metricsSnapshot = {
@@ -1618,6 +1626,8 @@ export const checkRulesForAccount = internalAction({
             clicks: todayMetric.clicks,
             cpl: todayMetric.cpl ?? undefined,
             ctr: todayMetric.ctr ?? undefined,
+            cpc: todayMetric.clicks > 0 ? todayMetric.spent / todayMetric.clicks : undefined,
+            reach: todayMetric.reach ?? undefined,
           };
         } else {
           continue;
