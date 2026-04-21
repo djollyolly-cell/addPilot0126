@@ -42,6 +42,7 @@ export interface RuleCondition {
   value: number;
   minSamples?: number;
   timeWindow?: "daily" | "since_launch" | "24h" | "1h" | "6h";
+  minSpent?: number;  // cpc_limit: minimum spent before evaluating CPC
 }
 
 export interface SpendSnapshot {
@@ -220,6 +221,14 @@ export function evaluateCondition(
       return metrics.clicks >= condition.value && metrics.leads === 0;
     }
 
+    case "cpc_limit": {
+      const minSpent = condition.minSpent ?? 0;
+      if (metrics.spent < minSpent) return false;
+      if (metrics.clicks === 0) return true;
+      const cpc = metrics.spent / metrics.clicks;
+      return cpc > condition.value;
+    }
+
     case "new_lead": {
       // Triggers when leads > 0 (new lead detected).
       // The condition.value is ignored — any lead count > 0 triggers.
@@ -364,6 +373,18 @@ export function evaluateConditionTrace(
       if (metrics.clicks >= condition.value && metrics.leads === 0)
         return { triggered: true, stoppedAt: "triggered", reason: `Кликов ${metrics.clicks} ≥ ${condition.value}, лидов: 0` };
       return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Кликов ${metrics.clicks}, лидов: ${metrics.leads}` };
+    }
+
+    case "cpc_limit": {
+      const minSpent = condition.minSpent ?? 0;
+      if (metrics.spent < minSpent)
+        return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `Расход ${Math.round(metrics.spent)}₽ < минимум ${minSpent}₽ (ожидание)` };
+      if (metrics.clicks === 0)
+        return { triggered: true, stoppedAt: "triggered", reason: `Расход ${Math.round(metrics.spent)}₽ ≥ ${minSpent}₽, кликов: 0 (CPC не определён → превышение)` };
+      const cpc = metrics.spent / metrics.clicks;
+      if (cpc > condition.value)
+        return { triggered: true, stoppedAt: "triggered", reason: `CPC ${cpc.toFixed(2)}₽ > лимит ${condition.value}₽ (расход ${Math.round(metrics.spent)}₽, кликов ${metrics.clicks})` };
+      return { triggered: false, stoppedAt: "step6_condition_not_met", reason: `CPC ${cpc.toFixed(2)}₽ ≤ лимит ${condition.value}₽` };
     }
 
     case "new_lead": {

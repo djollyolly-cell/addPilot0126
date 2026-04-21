@@ -33,6 +33,7 @@ const RULE_TYPE_DEFAULTS: Record<
   budget_limit: { metric: "spent", operator: ">" },
   low_impressions: { metric: "impressions", operator: "<" },
   clicks_no_leads: { metric: "clicks_no_leads", operator: ">=" },
+  cpc_limit: { metric: "cpc", operator: ">" },
   new_lead: { metric: "leads", operator: ">" },
   uz_budget_manage: { metric: "budget_manage", operator: ">" },
 };
@@ -119,6 +120,8 @@ export const create = mutation({
     budgetStep: v.optional(v.number()),
     maxDailyBudget: v.optional(v.number()),
     resetDaily: v.optional(v.boolean()),
+    // cpc_limit specific: minimum spent before CPC check kicks in
+    minSpent: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     // Check write access (org in read_only/frozen blocks all writes)
@@ -140,7 +143,7 @@ export const create = mutation({
     // Validate type
     const L1_TYPES = ["cpl_limit", "min_ctr", "fast_spend", "spend_no_leads",
                        "budget_limit", "low_impressions", "clicks_no_leads",
-                       "new_lead", "uz_budget_manage"];
+                       "cpc_limit", "new_lead", "uz_budget_manage"];
     const isL1 = L1_TYPES.includes(args.type);
     const isL2 = args.type === "custom";
     const isL3 = args.type === "custom_l3";
@@ -184,6 +187,13 @@ export const create = mutation({
       }
       if (args.value === undefined || args.value <= 0) {
         throw new Error("Значение должно быть больше 0");
+      }
+    }
+
+    // Validate cpc_limit specific fields
+    if (args.type === "cpc_limit") {
+      if (args.minSpent === undefined || args.minSpent <= 0) {
+        throw new Error("Минимальный расход должен быть больше 0");
       }
     }
 
@@ -283,6 +293,10 @@ export const create = mutation({
           maxDailyBudget: args.maxDailyBudget,
           resetDaily: args.resetDaily ?? true,
         } : {}),
+        // cpc_limit specific
+        ...(args.type === "cpc_limit" ? {
+          minSpent: args.minSpent,
+        } : {}),
       };
     }
 
@@ -364,6 +378,8 @@ export const update = mutation({
     budgetStep: v.optional(v.number()),
     maxDailyBudget: v.optional(v.number()),
     resetDaily: v.optional(v.boolean()),
+    // cpc_limit specific
+    minSpent: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const rule = await ctx.db.get(args.ruleId);
@@ -436,6 +452,16 @@ export const update = mutation({
             ? args.timeWindow
             : rule.conditions.timeWindow,
       };
+    }
+
+    // Update minSpent for cpc_limit
+    if (rule.type === "cpc_limit" && args.minSpent !== undefined) {
+      if (args.minSpent <= 0) {
+        throw new Error("Минимальный расход должен быть больше 0");
+      }
+      const currentConditions = (patch.conditions as Record<string, unknown>) || { ...rule.conditions };
+      currentConditions.minSpent = args.minSpent;
+      patch.conditions = currentConditions;
     }
 
     // Update budget fields for uz_budget_manage

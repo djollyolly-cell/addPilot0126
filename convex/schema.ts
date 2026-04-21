@@ -174,6 +174,7 @@ export default defineSchema({
       v.literal("budget_limit"),
       v.literal("low_impressions"),
       v.literal("clicks_no_leads"),
+      v.literal("cpc_limit"),
       v.literal("new_lead"),
       v.literal("uz_budget_manage"),
       v.literal("custom"),                 // L2 generic constructor (conditions = array)
@@ -200,6 +201,8 @@ export default defineSchema({
         budgetStep: v.optional(v.number()),
         maxDailyBudget: v.optional(v.number()),
         resetDaily: v.optional(v.boolean()),
+        // cpc_limit fields
+        minSpent: v.optional(v.number()),
       }),
       // New: array of conditions for L2 constructor (AND)
       v.array(v.object({

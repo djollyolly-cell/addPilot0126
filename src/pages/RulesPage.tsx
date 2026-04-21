@@ -15,7 +15,7 @@ import { UpgradeModal } from '../components/UpgradeModal';
 import { RuleConstructorForm, type ConditionRow } from '../components/RuleConstructorForm';
 import { usePermissions } from '../lib/usePermissions';
 
-type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'new_lead' | 'uz_budget_manage' | 'custom' | 'custom_l3';
+type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'cpc_limit' | 'new_lead' | 'uz_budget_manage' | 'custom' | 'custom_l3';
 type TimeWindow = 'daily' | 'since_launch' | '24h' | '1h' | '6h';
 
 const TIME_WINDOW_OPTIONS: { value: TimeWindow; label: string; description: string }[] = [
@@ -34,6 +34,7 @@ const RULE_TYPE_LABELS: Record<RuleType, string> = {
   budget_limit: 'Лимит расхода',
   low_impressions: 'Мало показов',
   clicks_no_leads: 'Клики без результата',
+  cpc_limit: 'CPC лимит',
   new_lead: 'Новый лид',
   uz_budget_manage: 'Работа с УЗ',
   custom: 'Конструктор (AND)',
@@ -48,6 +49,7 @@ const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
   budget_limit: 'Проверяет каждое объявление отдельно. Остановить, если дневной расход превышает порог',
   low_impressions: 'Проверяет каждое объявление отдельно. Уведомить, если показов меньше порога (не откручивается)',
   clicks_no_leads: 'Проверяет каждое объявление отдельно. Остановить, если N+ кликов без единого лида',
+  cpc_limit: 'Проверяет каждое объявление отдельно. После минимального расхода — остановить, если цена клика выше лимита или кликов нет совсем',
   new_lead: 'Проверяет каждое объявление отдельно. Уведомить в Telegram при получении нового лида',
   uz_budget_manage: 'Работает на уровне группы. Управление дневным бюджетом: автоматическое увеличение при приостановке и сброс в начале суток',
   custom: 'Несколько условий, все должны выполниться одновременно',
@@ -62,6 +64,7 @@ const RULE_TYPE_UNITS: Record<RuleType, string> = {
   budget_limit: '₽',
   low_impressions: 'показов',
   clicks_no_leads: 'кликов',
+  cpc_limit: '₽',
   new_lead: '',
   uz_budget_manage: '',
   custom: '',
@@ -291,6 +294,8 @@ export function RulesPage() {
                             {!Array.isArray(rule.conditions) && (
                               rule.type === 'uz_budget_manage'
                                 ? ` · ${rule.conditions.initialBudget ?? 0}₽ +${rule.conditions.budgetStep ?? 0}₽`
+                                : rule.type === 'cpc_limit'
+                                ? ` · от ${rule.conditions.minSpent ?? 0}₽ · CPC > ${rule.conditions.value}₽`
                                 : ` · ${rule.conditions.operator} ${rule.conditions.value}${RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}`
                             )}
                             {!Array.isArray(rule.conditions) && (rule.type === 'clicks_no_leads' || rule.type === 'low_impressions') && (
@@ -368,6 +373,7 @@ export function RulesPage() {
                 budgetStep: editingRule.conditions.budgetStep,
                 maxDailyBudget: editingRule.conditions.maxDailyBudget,
                 resetDaily: editingRule.conditions.resetDaily,
+                minSpent: editingRule.conditions.minSpent,
               }) : undefined}
               onSubmit={async (data) => {
                 setError(null);
@@ -389,6 +395,7 @@ export function RulesPage() {
                       ...(data.budgetStep !== undefined ? { budgetStep: data.budgetStep } : {}),
                       ...(data.maxDailyBudget !== undefined ? { maxDailyBudget: data.maxDailyBudget } : {}),
                       ...(data.resetDaily !== undefined ? { resetDaily: data.resetDaily } : {}),
+                      ...(data.minSpent !== undefined ? { minSpent: data.minSpent } : {}),
                     });
                     // For UZ rules: re-initialize budgets if initialBudget changed
                     if (data.type === 'uz_budget_manage' && data.initialBudget !== undefined) {
@@ -415,6 +422,7 @@ export function RulesPage() {
                       ...(data.budgetStep !== undefined ? { budgetStep: data.budgetStep } : {}),
                       ...(data.maxDailyBudget !== undefined ? { maxDailyBudget: data.maxDailyBudget } : {}),
                       ...(data.resetDaily !== undefined ? { resetDaily: data.resetDaily } : {}),
+                      ...(data.minSpent !== undefined ? { minSpent: data.minSpent } : {}),
                     });
                     // For UZ rules: immediately set budgets to initialBudget
                     if (data.type === 'uz_budget_manage' && newRuleId) {
@@ -487,6 +495,8 @@ interface ExistingRuleData {
   budgetStep?: number;
   maxDailyBudget?: number;
   resetDaily?: boolean;
+  // cpc_limit
+  minSpent?: number;
 }
 
 interface RuleFormSubmitData {
@@ -503,6 +513,8 @@ interface RuleFormSubmitData {
   budgetStep?: number;
   maxDailyBudget?: number;
   resetDaily?: boolean;
+  // cpc_limit
+  minSpent?: number;
   // L2 constructor
   conditionsArray?: { metric: string; operator: string; value: number }[];
 }
@@ -549,6 +561,8 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
   const [resetDaily, setResetDaily] = useState(existingRule?.resetDaily ?? true);
   const [notifyOnEveryIncrease, setNotifyOnEveryIncrease] = useState(existingRule?.actions.notifyOnEveryIncrease ?? false);
   const [notifyOnKeyEvents, setNotifyOnKeyEvents] = useState(existingRule?.actions.notifyOnKeyEvents ?? true);
+  // cpc_limit state
+  const [minSpent, setMinSpent] = useState(existingRule?.minSpent ? String(existingRule.minSpent) : '100');
 
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -589,6 +603,10 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
       if (!bs || bs <= 0) { setFormError('Шаг увеличения должен быть больше 0'); return; }
       if (mdb !== undefined && mdb > 0 && mdb <= ib) { setFormError('Максимальный бюджет должен быть больше начального'); return; }
       if (targets.campaignIds.length === 0) { setFormError('Выберите хотя бы одну группу'); return; }
+    } else if (type === 'cpc_limit') {
+      const ms = Number(minSpent);
+      if (!ms || ms <= 0) { setFormError('Минимальный расход должен быть больше 0'); return; }
+      if (!value || numericValue <= 0) { setFormError('Лимит CPC должен быть больше 0'); return; }
     } else if (type !== 'new_lead' && (!value || numericValue <= 0)) {
       setFormError('Значение должно быть больше 0');
       return;
@@ -640,6 +658,9 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
             budgetStep: Number(budgetStep),
             maxDailyBudget: maxDailyBudget ? Number(maxDailyBudget) : undefined,
             resetDaily,
+          } : {}),
+          ...(type === 'cpc_limit' ? {
+            minSpent: Number(minSpent),
           } : {}),
         });
       }
@@ -842,6 +863,25 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
                   Только ключевые события
                 </label>
               </div>
+            </div>
+          )}
+
+          {/* Extra field for cpc_limit: minimum spent before evaluating CPC */}
+          {type === 'cpc_limit' && (
+            <div>
+              <label className="block text-sm font-medium mb-1">Минимальный расход (₽)</label>
+              <input
+                type="number"
+                value={minSpent}
+                onChange={(e) => setMinSpent(e.target.value)}
+                placeholder="100"
+                min="1"
+                className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                data-testid="cpc-min-spent-input"
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Правило срабатывает только после того, как потрачено столько. Если потрачено больше, а кликов 0 — сработает сразу.
+              </p>
             </div>
           )}
 

@@ -196,6 +196,73 @@ describe("ruleEngine", () => {
   });
 
   // ═══════════════════════════════════════════════════════════
+  // cpc_limit — cost per click > threshold + minimum spent
+  // ═══════════════════════════════════════════════════════════
+
+  test("cpc_limit: cpc > maxCpc triggers (spent=250, clicks=5, cpc=50, maxCpc=25, minSpent=200)", () => {
+    const result = evaluateCondition(
+      "cpc_limit",
+      { metric: "cpc", operator: ">", value: 25, minSpent: 200 },
+      { spent: 250, leads: 0, impressions: 1000, clicks: 5 }
+    );
+    expect(result).toBe(true);
+  });
+
+  test("cpc_limit: cpc below maxCpc does NOT trigger", () => {
+    const result = evaluateCondition(
+      "cpc_limit",
+      { metric: "cpc", operator: ">", value: 25, minSpent: 200 },
+      { spent: 250, leads: 0, impressions: 5000, clicks: 50 } // cpc=5
+    );
+    expect(result).toBe(false);
+  });
+
+  test("cpc_limit: spent < minSpent does NOT trigger even if cpc would exceed", () => {
+    const result = evaluateCondition(
+      "cpc_limit",
+      { metric: "cpc", operator: ">", value: 25, minSpent: 200 },
+      { spent: 100, leads: 0, impressions: 500, clicks: 1 } // cpc=100, but spent<minSpent
+    );
+    expect(result).toBe(false);
+  });
+
+  test("cpc_limit: clicks=0 AND spent >= minSpent triggers (1000₽ без кликов)", () => {
+    const result = evaluateCondition(
+      "cpc_limit",
+      { metric: "cpc", operator: ">", value: 25, minSpent: 200 },
+      { spent: 1000, leads: 0, impressions: 50000, clicks: 0 }
+    );
+    expect(result).toBe(true);
+  });
+
+  test("cpc_limit: clicks=0 AND spent < minSpent does NOT trigger", () => {
+    const result = evaluateCondition(
+      "cpc_limit",
+      { metric: "cpc", operator: ">", value: 25, minSpent: 200 },
+      { spent: 50, leads: 0, impressions: 2000, clicks: 0 }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("cpc_limit: all zeros does NOT trigger", () => {
+    const result = evaluateCondition(
+      "cpc_limit",
+      { metric: "cpc", operator: ">", value: 25, minSpent: 200 },
+      { spent: 0, leads: 0, impressions: 0, clicks: 0 }
+    );
+    expect(result).toBe(false);
+  });
+
+  test("cpc_limit: spent exactly equals minSpent AND cpc exceeds triggers", () => {
+    const result = evaluateCondition(
+      "cpc_limit",
+      { metric: "cpc", operator: ">", value: 25, minSpent: 200 },
+      { spent: 200, leads: 0, impressions: 500, clicks: 5 } // cpc=40
+    );
+    expect(result).toBe(true);
+  });
+
+  // ═══════════════════════════════════════════════════════════
   // Sprint 8 DoD #5: calculateSavings
   // ═══════════════════════════════════════════════════════════
 
