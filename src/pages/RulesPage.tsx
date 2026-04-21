@@ -12,8 +12,10 @@ import { useNavigate } from 'react-router-dom';
 import { TargetTreeSelector, TargetSelection } from '../components/TargetTreeSelector';
 import { ActionRadio, ActionMode, actionModeToFlags } from '../components/ActionRadio';
 import { UpgradeModal } from '../components/UpgradeModal';
+import { RuleConstructorForm, type ConditionRow } from '../components/RuleConstructorForm';
+import { usePermissions } from '../lib/usePermissions';
 
-type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'new_lead' | 'uz_budget_manage';
+type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'new_lead' | 'uz_budget_manage' | 'custom' | 'custom_l3';
 type TimeWindow = 'daily' | 'since_launch' | '24h' | '1h' | '6h';
 
 const TIME_WINDOW_OPTIONS: { value: TimeWindow; label: string; description: string }[] = [
@@ -34,6 +36,8 @@ const RULE_TYPE_LABELS: Record<RuleType, string> = {
   clicks_no_leads: 'Клики без результата',
   new_lead: 'Новый лид',
   uz_budget_manage: 'Работа с УЗ',
+  custom: 'Конструктор (AND)',
+  custom_l3: 'Кастомное правило',
 };
 
 const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
@@ -46,6 +50,8 @@ const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
   clicks_no_leads: 'Проверяет каждое объявление отдельно. Остановить, если N+ кликов без единого лида',
   new_lead: 'Проверяет каждое объявление отдельно. Уведомить в Telegram при получении нового лида',
   uz_budget_manage: 'Работает на уровне группы. Управление дневным бюджетом: автоматическое увеличение при приостановке и сброс в начале суток',
+  custom: 'Несколько условий, все должны выполниться одновременно',
+  custom_l3: 'Правило с кастомной логикой (настраивается администратором)',
 };
 
 const RULE_TYPE_UNITS: Record<RuleType, string> = {
@@ -58,6 +64,8 @@ const RULE_TYPE_UNITS: Record<RuleType, string> = {
   clicks_no_leads: 'кликов',
   new_lead: '',
   uz_budget_manage: '',
+  custom: '',
+  custom_l3: '',
 };
 
 /** Convert action flags to ActionMode */
@@ -336,7 +344,17 @@ export function RulesPage() {
               key={editingRuleId ?? 'new'}
               userId={user.userId}
               subscriptionTier={user.subscriptionTier}
-              existingRule={editingRule && !Array.isArray(editingRule.conditions) ? {
+              existingRule={editingRule ? (Array.isArray(editingRule.conditions) ? {
+                _id: editingRule._id,
+                name: editingRule.name,
+                type: editingRule.type as RuleType,
+                value: 0,
+                conditions: editingRule.conditions,
+                actions: editingRule.actions,
+                targetAccountIds: editingRule.targetAccountIds,
+                targetCampaignIds: editingRule.targetCampaignIds,
+                targetAdIds: editingRule.targetAdIds,
+              } : {
                 _id: editingRule._id,
                 name: editingRule.name,
                 type: editingRule.type as RuleType,
@@ -350,7 +368,7 @@ export function RulesPage() {
                 budgetStep: editingRule.conditions.budgetStep,
                 maxDailyBudget: editingRule.conditions.maxDailyBudget,
                 resetDaily: editingRule.conditions.resetDaily,
-              } : undefined}
+              }) : undefined}
               onSubmit={async (data) => {
                 setError(null);
                 try {
@@ -359,13 +377,14 @@ export function RulesPage() {
                       ruleId: editingRuleId as Id<"rules">,
                       userId: user.userId as Id<"users">,
                       name: data.name,
-                      value: data.value,
+                      value: data.type === 'custom' ? undefined : data.value,
                       timeWindow: data.timeWindow,
                       actions: data.actions,
                       targetAccountIds: data.targetAccountIds,
                       targetCampaignIds: data.targetCampaignIds,
                       targetAdPlanIds: data.targetAdPlanIds,
                       targetAdIds: data.targetAdIds,
+                      ...(data.conditionsArray ? { conditionsArray: data.conditionsArray } : {}),
                       ...(data.initialBudget !== undefined ? { initialBudget: data.initialBudget } : {}),
                       ...(data.budgetStep !== undefined ? { budgetStep: data.budgetStep } : {}),
                       ...(data.maxDailyBudget !== undefined ? { maxDailyBudget: data.maxDailyBudget } : {}),
@@ -384,13 +403,14 @@ export function RulesPage() {
                       userId: user.userId as Id<"users">,
                       name: data.name,
                       type: data.type,
-                      value: data.value,
+                      value: data.type === 'custom' ? undefined : data.value,
                       timeWindow: data.timeWindow,
                       actions: data.actions,
                       targetAccountIds: data.targetAccountIds,
                       targetCampaignIds: data.targetCampaignIds,
                       targetAdPlanIds: data.targetAdPlanIds,
                       targetAdIds: data.targetAdIds,
+                      ...(data.conditionsArray ? { conditionsArray: data.conditionsArray } : {}),
                       ...(data.initialBudget !== undefined ? { initialBudget: data.initialBudget } : {}),
                       ...(data.budgetStep !== undefined ? { budgetStep: data.budgetStep } : {}),
                       ...(data.maxDailyBudget !== undefined ? { maxDailyBudget: data.maxDailyBudget } : {}),
@@ -456,6 +476,7 @@ interface ExistingRuleData {
   type: RuleType;
   value: number;
   timeWindow?: TimeWindow;
+  conditions?: unknown; // L2: array of conditions; L1: single object
   actions: { stopAd: boolean; notify: boolean; notifyOnEveryIncrease?: boolean; notifyOnKeyEvents?: boolean };
   targetAccountIds: Id<"adAccounts">[];
   targetCampaignIds?: string[];
@@ -468,32 +489,47 @@ interface ExistingRuleData {
   resetDaily?: boolean;
 }
 
+interface RuleFormSubmitData {
+  name: string;
+  type: RuleType;
+  value: number;
+  timeWindow?: TimeWindow;
+  actions: { stopAd: boolean; notify: boolean; notifyOnEveryIncrease?: boolean; notifyOnKeyEvents?: boolean };
+  targetAccountIds: Id<"adAccounts">[];
+  targetCampaignIds?: string[];
+  targetAdPlanIds?: string[];
+  targetAdIds?: string[];
+  initialBudget?: number;
+  budgetStep?: number;
+  maxDailyBudget?: number;
+  resetDaily?: boolean;
+  // L2 constructor
+  conditionsArray?: { metric: string; operator: string; value: number }[];
+}
+
 interface RuleFormProps {
   userId: string;
   subscriptionTier: string;
   existingRule?: ExistingRuleData;
-  onSubmit: (data: {
-    name: string;
-    type: RuleType;
-    value: number;
-    timeWindow?: TimeWindow;
-    actions: { stopAd: boolean; notify: boolean; notifyOnEveryIncrease?: boolean; notifyOnKeyEvents?: boolean };
-    targetAccountIds: Id<"adAccounts">[];
-    targetCampaignIds?: string[];
-    targetAdPlanIds?: string[];
-    targetAdIds?: string[];
-    initialBudget?: number;
-    budgetStep?: number;
-    maxDailyBudget?: number;
-    resetDaily?: boolean;
-  }) => Promise<void>;
+  onSubmit: (data: RuleFormSubmitData) => Promise<void>;
   onCancel: () => void;
 }
 
 function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }: RuleFormProps) {
+  const { isInOrganization } = usePermissions();
   const [name, setName] = useState(existingRule?.name ?? '');
   const [type, setType] = useState<RuleType>(existingRule?.type ?? 'cpl_limit');
   const [value, setValue] = useState(existingRule ? String(existingRule.value) : '');
+  // L2 constructor mode
+  const isEditingConstructor = existingRule?.type === 'custom';
+  const [ruleMode, setRuleMode] = useState<'template' | 'constructor'>(isEditingConstructor ? 'constructor' : 'template');
+  const [constructorConditions, setConstructorConditions] = useState<ConditionRow[]>(
+    isEditingConstructor && Array.isArray(existingRule?.conditions)
+      ? (existingRule.conditions as { metric: string; operator: string; value: number }[]).map(c => ({
+          metric: c.metric, operator: c.operator, value: String(c.value),
+        }))
+      : [{ metric: 'spent', operator: '>', value: '' }]
+  );
   const [timeWindow, setTimeWindow] = useState<TimeWindow>(
     existingRule?.timeWindow ?? 'since_launch'
   );
@@ -532,7 +568,20 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
       setFormError('Введите название правила');
       return;
     }
-    if (type === 'uz_budget_manage') {
+
+    // Constructor mode validation
+    if (ruleMode === 'constructor') {
+      if (constructorConditions.length === 0) {
+        setFormError('Добавьте хотя бы одно условие');
+        return;
+      }
+      for (const c of constructorConditions) {
+        if (!c.value || isNaN(Number(c.value)) || Number(c.value) <= 0) {
+          setFormError('Все значения условий должны быть больше 0');
+          return;
+        }
+      }
+    } else if (type === 'uz_budget_manage') {
       const ib = Number(initialBudget);
       const bs = Number(budgetStep);
       const mdb = maxDailyBudget ? Number(maxDailyBudget) : undefined;
@@ -557,25 +606,43 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
 
     setSubmitting(true);
     try {
-      await onSubmit({
-        name: name.trim(),
-        type,
-        value: type === 'new_lead' || type === 'uz_budget_manage' ? 1 : numericValue,
-        timeWindow: (type === 'clicks_no_leads' || type === 'low_impressions') ? timeWindow : undefined,
-        actions: type === 'uz_budget_manage'
-          ? { ...flags, notifyOnEveryIncrease, notifyOnKeyEvents }
-          : flags,
-        targetAccountIds: targets.accountIds as Id<"adAccounts">[],
-        targetCampaignIds: targets.campaignIds.length > 0 ? targets.campaignIds : undefined,
-        targetAdPlanIds: targets.adPlanIds.length > 0 ? targets.adPlanIds : undefined,
-        targetAdIds: targets.adIds.length > 0 ? targets.adIds : undefined,
-        ...(type === 'uz_budget_manage' ? {
-          initialBudget: Number(initialBudget),
-          budgetStep: Number(budgetStep),
-          maxDailyBudget: maxDailyBudget ? Number(maxDailyBudget) : undefined,
-          resetDaily,
-        } : {}),
-      });
+      if (ruleMode === 'constructor') {
+        await onSubmit({
+          name: name.trim(),
+          type: 'custom',
+          value: 0, // not used for L2
+          actions: flags,
+          targetAccountIds: targets.accountIds as Id<"adAccounts">[],
+          targetCampaignIds: targets.campaignIds.length > 0 ? targets.campaignIds : undefined,
+          targetAdPlanIds: targets.adPlanIds.length > 0 ? targets.adPlanIds : undefined,
+          targetAdIds: targets.adIds.length > 0 ? targets.adIds : undefined,
+          conditionsArray: constructorConditions.map(c => ({
+            metric: c.metric,
+            operator: c.operator,
+            value: parseFloat(c.value),
+          })),
+        });
+      } else {
+        await onSubmit({
+          name: name.trim(),
+          type,
+          value: type === 'new_lead' || type === 'uz_budget_manage' ? 1 : numericValue,
+          timeWindow: (type === 'clicks_no_leads' || type === 'low_impressions') ? timeWindow : undefined,
+          actions: type === 'uz_budget_manage'
+            ? { ...flags, notifyOnEveryIncrease, notifyOnKeyEvents }
+            : flags,
+          targetAccountIds: targets.accountIds as Id<"adAccounts">[],
+          targetCampaignIds: targets.campaignIds.length > 0 ? targets.campaignIds : undefined,
+          targetAdPlanIds: targets.adPlanIds.length > 0 ? targets.adPlanIds : undefined,
+          targetAdIds: targets.adIds.length > 0 ? targets.adIds : undefined,
+          ...(type === 'uz_budget_manage' ? {
+            initialBudget: Number(initialBudget),
+            budgetStep: Number(budgetStep),
+            maxDailyBudget: maxDailyBudget ? Number(maxDailyBudget) : undefined,
+            resetDaily,
+          } : {}),
+        });
+      }
     } catch {
       // Error handled by parent
     } finally {
@@ -624,9 +691,54 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
         <div data-testid="condition-builder" className="space-y-3">
           <label className="block text-sm font-medium">Условие</label>
 
+          {/* Mode toggle for org users */}
+          {isInOrganization() && !isEditing && (
+            <div className="flex gap-2" data-testid="rule-mode-toggle">
+              <button
+                type="button"
+                onClick={() => setRuleMode('template')}
+                className={cn(
+                  'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                  ruleMode === 'template'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                )}
+              >
+                Из шаблона
+              </button>
+              <button
+                type="button"
+                onClick={() => setRuleMode('constructor')}
+                className={cn(
+                  'px-4 py-2 rounded-lg text-sm font-medium transition-colors',
+                  ruleMode === 'constructor'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/80'
+                )}
+              >
+                Конструктор
+              </button>
+            </div>
+          )}
+
+          {/* Constructor mode */}
+          {ruleMode === 'constructor' ? (
+            <div className="space-y-3">
+              <p className="text-xs text-muted-foreground">
+                Все условия должны выполниться одновременно (AND)
+              </p>
+              <RuleConstructorForm
+                conditions={constructorConditions}
+                onChange={setConstructorConditions}
+              />
+            </div>
+          ) : (
+          <>
           {/* Type selector */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            {(Object.keys(RULE_TYPE_LABELS) as RuleType[]).map((t) => (
+            {(Object.keys(RULE_TYPE_LABELS) as RuleType[])
+              .filter(t => t !== 'custom' && t !== 'custom_l3')
+              .map((t) => (
               <button
                 key={t}
                 type="button"
@@ -766,10 +878,12 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
               )}
             </div>
           )}
+          </>
+          )}
         </div>
 
-        {/* Time window (for clicks_no_leads and low_impressions) */}
-        {(type === 'clicks_no_leads' || type === 'low_impressions') && (
+        {/* Time window (for clicks_no_leads and low_impressions — template mode only) */}
+        {ruleMode === 'template' && (type === 'clicks_no_leads' || type === 'low_impressions') && (
           <div className="space-y-2" data-testid="time-window-selector">
             <label className="block text-sm font-medium">Период анализа</label>
             <div className="grid grid-cols-3 gap-2">
