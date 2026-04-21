@@ -14,6 +14,10 @@ export const TIER_RULE_LIMITS: Record<string, number> = {
   freemium: 3,
   start: 10,
   pro: Infinity,
+  agency_s: Infinity,
+  agency_m: Infinity,
+  agency_l: Infinity,
+  agency_xl: Infinity,
 };
 
 // Default metric/operator per rule type

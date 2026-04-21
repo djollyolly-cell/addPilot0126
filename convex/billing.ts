@@ -9,6 +9,8 @@ export const TIERS = {
     price: 0,
     accountsLimit: 1,
     rulesLimit: 3,
+    includedLoadUnits: 0,
+    overagePrice: 0,
     features: ["1 рекламный кабинет", "3 правила автоматизации", "Telegram-уведомления"],
   },
   start: {
@@ -16,6 +18,8 @@ export const TIERS = {
     price: 1290,
     accountsLimit: 3,
     rulesLimit: 10,
+    includedLoadUnits: 0,
+    overagePrice: 0,
     features: ["3 рекламных кабинета", "10 правил автоматизации", "Telegram-уведомления", "Базовая аналитика"],
   },
   pro: {
@@ -23,11 +27,55 @@ export const TIERS = {
     price: 2990,
     accountsLimit: 20, // grandfathered users get 27 via proAccountLimit field
     rulesLimit: -1, // unlimited
+    includedLoadUnits: 0,
+    overagePrice: 0,
     features: ["До 20 кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
+  },
+  // Agency tiers — load-units based
+  agency_s: {
+    name: "Agency S",
+    price: 14900,
+    accountsLimit: -1,
+    rulesLimit: -1,
+    includedLoadUnits: 30,
+    overagePrice: 600,
+    features: ["До 30 единиц нагрузки", "Конструктор правил", "Команда менеджеров", "Приоритетная поддержка"],
+  },
+  agency_m: {
+    name: "Agency M",
+    price: 24900,
+    accountsLimit: -1,
+    rulesLimit: -1,
+    includedLoadUnits: 60,
+    overagePrice: 500,
+    features: ["До 60 единиц нагрузки", "Конструктор правил", "Команда менеджеров", "Приоритетная поддержка"],
+  },
+  agency_l: {
+    name: "Agency L",
+    price: 39900,
+    accountsLimit: -1,
+    rulesLimit: -1,
+    includedLoadUnits: 120,
+    overagePrice: 400,
+    features: ["До 120 единиц нагрузки", "Кастомные типы правил", "Выделенный IP", "SLA"],
+  },
+  agency_xl: {
+    name: "Agency XL",
+    price: 59900,
+    accountsLimit: -1,
+    rulesLimit: -1,
+    includedLoadUnits: 200,
+    overagePrice: 350,
+    features: ["От 200 единиц нагрузки", "Кастомные типы", "Персональный менеджер", "Кастомная разработка"],
   },
 } as const;
 
 export type SubscriptionTier = keyof typeof TIERS;
+export type AgencyTier = "agency_s" | "agency_m" | "agency_l" | "agency_xl";
+export type IndividualTier = "freemium" | "start" | "pro";
+
+export const isAgencyTier = (tier: string): tier is AgencyTier =>
+  tier === "agency_s" || tier === "agency_m" || tier === "agency_l" || tier === "agency_xl";
 
 // Old prices before 2026-04-04 increase
 const OLD_PRICES = { start: 990, pro: 2490 } as const;
@@ -37,13 +85,28 @@ export const getUserPrices = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
-    if (!user) return { start: TIERS.start.price, pro: TIERS.pro.price };
 
+    const basePrices = {
+      start: TIERS.start.price,
+      pro: TIERS.pro.price,
+      agency_s: TIERS.agency_s.price,
+      agency_m: TIERS.agency_m.price,
+      agency_l: TIERS.agency_l.price,
+      agency_xl: TIERS.agency_xl.price,
+    };
+
+    if (!user) return basePrices;
+
+    // lockedPrices applies only to individual tiers (start/pro)
     const locked = user.lockedPrices;
     if (locked && locked.until > Date.now()) {
-      return { start: locked.start, pro: locked.pro };
+      return {
+        ...basePrices,
+        start: locked.start,
+        pro: locked.pro,
+      };
     }
-    return { start: TIERS.start.price, pro: TIERS.pro.price };
+    return basePrices;
   },
 });
 
@@ -73,7 +136,10 @@ export const getSubscription = query({
 
 // ─── Prorated Upgrade ────────────────────────────────
 
-const TIER_ORDER: Record<string, number> = { freemium: 0, start: 1, pro: 2 };
+const TIER_ORDER: Record<string, number> = {
+  freemium: 0, start: 1, pro: 2,
+  agency_s: 3, agency_m: 4, agency_l: 5, agency_xl: 6,
+};
 
 export interface UpgradePriceInput {
   currentTier: string;
@@ -115,11 +181,52 @@ export function calculateUpgradePrice(input: UpgradePriceInput): UpgradePriceRes
   return { credit, remainingDays, isUpgrade: true, currency: lastPaymentCurrency };
 }
 
-/** Query: get upgrade credit for prorated pricing */
+/**
+ * Решение 2: hybrid prorated formula.
+ * Primary: existing calculateUpgradePrice (uses lastPayment).
+ * Fallback: catalog price / 30 × remainingDays (when no payment history).
+ *
+ * Use case for fallback:
+ * - Grandfathered Pro users (no payment record)
+ * - Admin-granted tiers via admin.updateUserTier
+ * - Test orgs without prior subscription
+ */
+export function calculateUpgradePriceWithFallback(input: UpgradePriceInput): UpgradePriceResult {
+  const primary = calculateUpgradePrice(input);
+  if (primary.isUpgrade) return primary;
+
+  const { currentTier, newTier, subscriptionExpiresAt, now } = input;
+
+  if (currentTier === "freemium" || !subscriptionExpiresAt || subscriptionExpiresAt <= now) {
+    return { credit: 0, remainingDays: 0, isUpgrade: false };
+  }
+  if ((TIER_ORDER[newTier] ?? 0) <= (TIER_ORDER[currentTier] ?? 0)) {
+    return { credit: 0, remainingDays: 0, isUpgrade: false };
+  }
+
+  const catalogPrice = (TIERS as Record<string, { price: number }>)[currentTier]?.price;
+  if (!catalogPrice || catalogPrice <= 0) {
+    return { credit: 0, remainingDays: 0, isUpgrade: false };
+  }
+
+  const remainingDays = Math.ceil((subscriptionExpiresAt - now) / (24 * 60 * 60 * 1000));
+  const credit = Math.round((remainingDays / 30) * catalogPrice * 100) / 100;
+
+  return { credit, remainingDays, isUpgrade: true, currency: "RUB" };
+}
+
+/** Query: get upgrade credit for prorated pricing (with fallback) */
 export const getUpgradePrice = query({
   args: {
     userId: v.id("users"),
-    newTier: v.union(v.literal("start"), v.literal("pro")),
+    newTier: v.union(
+      v.literal("start"),
+      v.literal("pro"),
+      v.literal("agency_s"),
+      v.literal("agency_m"),
+      v.literal("agency_l"),
+      v.literal("agency_xl")
+    ),
   },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
@@ -127,15 +234,20 @@ export const getUpgradePrice = query({
 
     const currentTier = (user.subscriptionTier as string) ?? "freemium";
 
-    // Find last completed payment
     const payments = await ctx.db
       .query("payments")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .order("desc")
       .collect();
-    const lastPayment = payments.find((p) => p.status === "completed");
 
-    return calculateUpgradePrice({
+    // Filter lastPayment by tier category to prevent cross-contamination
+    // when owner has both individual and agency payment history
+    const targetIsAgency = isAgencyTier(args.newTier);
+    const lastPayment = payments.find((p) =>
+      p.status === "completed" && isAgencyTier(p.tier) === targetIsAgency
+    );
+
+    return calculateUpgradePriceWithFallback({
       currentTier,
       newTier: args.newTier,
       subscriptionExpiresAt: user.subscriptionExpiresAt,
@@ -160,13 +272,25 @@ type BepaidCheckoutResult = {
 export const createBepaidCheckout = action({
   args: {
     userId: v.id("users"),
-    tier: v.union(v.literal("start"), v.literal("pro")),
+    tier: v.union(
+      v.literal("start"), v.literal("pro"),
+      v.literal("agency_s"), v.literal("agency_m"),
+      v.literal("agency_l"), v.literal("agency_xl")
+    ),
     promoCode: v.optional(v.string()),
     referralCode: v.optional(v.string()),
     returnUrl: v.string(),
-    amountBYN: v.number(), // Price in BYN (calculated on frontend with NBRB rate)
+    amountBYN: v.number(),
     isUpgrade: v.optional(v.boolean()),
     creditAmount: v.optional(v.number()),
+    /** For agency tiers: which org will be upgraded */
+    orgId: v.optional(v.id("organizations")),
+    /** For agency new-org: name + niches (creates pending org) */
+    pendingOrgName: v.optional(v.string()),
+    pendingOrgNiches: v.optional(v.array(v.object({
+      niche: v.string(),
+      cabinetsCount: v.number(),
+    }))),
   },
   handler: async (ctx, args): Promise<BepaidCheckoutResult> => {
     // Mutual exclusion: promo code and referral code cannot be used together
@@ -174,12 +298,20 @@ export const createBepaidCheckout = action({
       throw new Error("Нельзя использовать промокод и реферальный код одновременно");
     }
 
+    // Validate agency args
+    const isAgency = isAgencyTier(args.tier);
+    if (isAgency && !args.orgId && !args.pendingOrgName) {
+      throw new Error("agency-тариф требует orgId или pendingOrgName");
+    }
+    if (isAgency && args.orgId && args.pendingOrgName) {
+      throw new Error("orgId и pendingOrgName взаимоисключаются");
+    }
+
     const shopId = process.env.BEPAID_SHOP_ID;
     const secretKey = process.env.BEPAID_SECRET_KEY;
     const isTestMode = process.env.BEPAID_TEST_MODE === "true";
-    const siteUrl = process.env.CONVEX_SITE_URL; // e.g., https://resilient-terrier-567.convex.site
+    const siteUrl = process.env.CONVEX_SITE_URL;
 
-    // If bePaid not configured, return mock mode indicator
     if (!shopId || !secretKey) {
       return {
         success: false,
@@ -193,6 +325,18 @@ export const createBepaidCheckout = action({
       throw new Error("Пользователь не найден");
     }
 
+    // For new agency: create pending org (idempotent)
+    let resolvedOrgId = args.orgId;
+    if (isAgency && !resolvedOrgId && args.pendingOrgName) {
+      resolvedOrgId = await ctx.runMutation(internal.organizations.createPending, {
+        name: args.pendingOrgName,
+        ownerId: args.userId,
+        subscriptionTier: args.tier as AgencyTier,
+        maxLoadUnits: TIERS[args.tier].includedLoadUnits,
+        nichesConfig: args.pendingOrgNiches,
+      });
+    }
+
     // Calculate referral discount
     let referralDiscount = 0;
     if (args.referralCode) {
@@ -203,7 +347,6 @@ export const createBepaidCheckout = action({
         referralDiscount = referrer.referralDiscount ?? 10;
       }
     } else if (!args.promoCode && (user as Record<string, unknown>).referralMilestone10Reached) {
-      // Auto-apply 15% discount for users with 10+ referrals
       referralDiscount = 15;
     }
 
@@ -211,7 +354,7 @@ export const createBepaidCheckout = action({
     const discountedBYN = referralDiscount > 0
       ? Math.round(args.amountBYN * (100 - referralDiscount) / 100 * 100) / 100
       : args.amountBYN;
-    const amountInCents = Math.round(discountedBYN * 100); // bePaid expects amount in minimal units (kopecks)
+    const amountInCents = Math.round(discountedBYN * 100);
 
     const orderId = `order_${args.userId}_${args.tier}_${Date.now()}`;
 
@@ -274,6 +417,7 @@ export const createBepaidCheckout = action({
         referralDiscount: referralDiscount > 0 ? referralDiscount : undefined,
         isUpgrade: args.isUpgrade,
         creditAmount: args.creditAmount,
+        orgId: resolvedOrgId,
       });
 
       return {
@@ -295,7 +439,11 @@ export const createBepaidCheckout = action({
 export const savePendingPayment = internalMutation({
   args: {
     userId: v.id("users"),
-    tier: v.union(v.literal("start"), v.literal("pro")),
+    tier: v.union(
+      v.literal("start"), v.literal("pro"),
+      v.literal("agency_s"), v.literal("agency_m"),
+      v.literal("agency_l"), v.literal("agency_xl")
+    ),
     orderId: v.string(),
     token: v.string(),
     amount: v.number(),
@@ -305,6 +453,7 @@ export const savePendingPayment = internalMutation({
     referralDiscount: v.optional(v.number()),
     isUpgrade: v.optional(v.boolean()),
     creditAmount: v.optional(v.number()),
+    orgId: v.optional(v.id("organizations")),
   },
   handler: async (ctx, args) => {
     await ctx.db.insert("payments", {
@@ -319,6 +468,7 @@ export const savePendingPayment = internalMutation({
       referralDiscount: args.referralDiscount,
       isUpgrade: args.isUpgrade,
       creditAmount: args.creditAmount,
+      orgId: args.orgId,
       status: "pending",
       createdAt: Date.now(),
     });
@@ -354,9 +504,11 @@ export const handleBepaidWebhook = internalMutation({
     }
 
     if (args.status === "successful") {
-      // Check promo code bonus days
+      const isAgencyPayment = isAgencyTier(payment.tier);
+
+      // Check promo code bonus days (individual tiers only)
       let bonusDays = 0;
-      if (payment.promoCode) {
+      if (payment.promoCode && !isAgencyPayment) {
         const promo = await ctx.db
           .query("promoCodes")
           .withIndex("by_code", (q) => q.eq("code", payment.promoCode!))
@@ -368,17 +520,18 @@ export const handleBepaidWebhook = internalMutation({
           await ctx.db.patch(promo._id, { usedCount: promo.usedCount + 1 });
         }
       }
+      // For agency: promo discount already applied during checkout, no bonus days
 
-      // Referral bonus
+      // Referral bonus — works for both individual and agency
       if (payment.referralCode) {
         const bonusResult = await ctx.runMutation(internal.referrals.applyReferralBonus, {
           referralCode: payment.referralCode,
           referredUserId: payment.userId,
           paymentId: payment._id,
+          paymentTier: payment.tier,
         });
 
         if (bonusResult) {
-          // Send Telegram notification to referrer
           await ctx.scheduler.runAfter(0, internal.telegram.sendReferralNotification, {
             referrerId: bonusResult.referrerId,
             bonusDays: bonusResult.bonusDays,
@@ -401,45 +554,42 @@ export const handleBepaidWebhook = internalMutation({
       const totalDays = 30 + bonusDays;
       const expiresAt = Date.now() + totalDays * 24 * 60 * 60 * 1000;
 
-      // Extend lockedPrices if user has them and subscription is continuous
-      const paidUser = await ctx.db.get(payment.userId);
-      const lockedUpdate: Record<string, unknown> = {};
-      if (paidUser?.lockedPrices) {
-        // Subscription is continuous if not yet expired at time of renewal
-        const isStillActive = paidUser.subscriptionExpiresAt && paidUser.subscriptionExpiresAt >= Date.now();
-        if (isStillActive) {
-          lockedUpdate.lockedPrices = {
-            ...paidUser.lockedPrices,
-            until: expiresAt,
-          };
+      if (payment.orgId) {
+        // Agency: update organizations record, not users
+        await ctx.runMutation(internal.organizations.updateSubscriptionFromPayment, {
+          orgId: payment.orgId,
+          tier: payment.tier as AgencyTier,
+          expiresAt,
+        });
+      } else {
+        // Individual: existing logic — patch users
+        const paidUser = await ctx.db.get(payment.userId);
+        const lockedUpdate: Record<string, unknown> = {};
+        if (paidUser?.lockedPrices) {
+          const isStillActive = paidUser.subscriptionExpiresAt && paidUser.subscriptionExpiresAt >= Date.now();
+          if (isStillActive) {
+            lockedUpdate.lockedPrices = {
+              ...paidUser.lockedPrices,
+              until: expiresAt,
+            };
+          }
         }
-      }
 
-      // Set proAccountLimit for new Pro subscribers (keep existing if re-subscribing)
-      const proLimitPatch: Record<string, unknown> = {};
-      if (payment.tier === "pro" && !paidUser?.proAccountLimit) {
-        proLimitPatch.proAccountLimit = 20;
-      }
+        const proLimitPatch: Record<string, unknown> = {};
+        if (payment.tier === "pro" && !paidUser?.proAccountLimit) {
+          proLimitPatch.proAccountLimit = 20;
+        }
 
-      // Agency tiers (agency_s/m/l/xl) are stored on organizations, not users.
-      // Plan 3 will handle org subscription activation via separate webhook path.
-      if (payment.tier === "start" || payment.tier === "pro") {
         await ctx.db.patch(payment.userId, {
-          subscriptionTier: payment.tier,
+          subscriptionTier: payment.tier as "start" | "pro",
           subscriptionExpiresAt: expiresAt,
           updatedAt: Date.now(),
           ...lockedUpdate,
           ...proLimitPatch,
         });
-      } else {
-        // Agency tier — only update timestamp on user (org handles tier).
-        // Full org activation is implemented in Plan 3.
-        await ctx.db.patch(payment.userId, {
-          updatedAt: Date.now(),
-        });
       }
 
-      console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId} (${totalDays} days, promo: ${payment.promoCode || "none"})`);
+      console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId} (${totalDays} days, promo: ${payment.promoCode || "none"}, orgId: ${payment.orgId || "none"})`);
 
       // Audit log: payment completed
       try { await ctx.runMutation(internal.auditLog.log, {
@@ -447,13 +597,14 @@ export const handleBepaidWebhook = internalMutation({
         category: "payment",
         action: "payment_completed",
         status: "success",
-        details: { tier: payment.tier, amount: args.amount / 100, promoCode: payment.promoCode },
+        details: { tier: payment.tier, amount: args.amount / 100, promoCode: payment.promoCode, orgId: payment.orgId },
       }); } catch { /* non-critical */ }
       // Admin alert: payment
-      const paidUserName = paidUser?.name || paidUser?.email || "—";
+      const alertUser = await ctx.db.get(payment.userId);
+      const alertUserName = alertUser?.name || alertUser?.email || "—";
       try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
         category: "payments",
-        text: `💰 <b>Оплата</b>\n\nПользователь: ${paidUserName}\nТариф: ${payment.tier}\nСумма: ${args.amount / 100} ${args.currency}`,
+        text: `💰 <b>Оплата</b>\n\nПользователь: ${alertUserName}\nТариф: ${payment.tier}\nСумма: ${args.amount / 100} ${args.currency}${payment.orgId ? "\nОрганизация: " + payment.orgId : ""}`,
       }); } catch { /* non-critical */ }
 
       return { success: true };
@@ -841,11 +992,21 @@ export const updateLimitsOnDowngrade = internalMutation({
     ),
   },
   handler: async (ctx, args) => {
+    // Skip downgrade for org-members — they have separate grace policies (Решение 4)
+    const user = await ctx.db.get(args.userId);
+    if (!user) return { accountsDeactivated: 0, rulesDeactivated: 0 };
+    if (user.organizationId) {
+      return {
+        accountsDeactivated: 0,
+        rulesDeactivated: 0,
+        skipped: "user is in organization, downgrade not applied",
+      };
+    }
+
     // For Pro tier, use user's personal limit; for others, use TIERS constant
     let newLimit: number;
     if (args.newTier === "pro") {
-      const user = await ctx.db.get(args.userId);
-      newLimit = user?.proAccountLimit ?? TIERS.pro.accountsLimit;
+      newLimit = user.proAccountLimit ?? TIERS.pro.accountsLimit;
     } else {
       newLimit = TIERS[args.newTier].accountsLimit;
     }
@@ -909,6 +1070,9 @@ export const handleExpiredSubscriptions = internalMutation({
     let processed = 0;
 
     for (const user of users) {
+      // Skip org-members — Plan 4 (Load Monitoring) handles org expiry separately
+      if (user.organizationId) continue;
+
       if (
         user.subscriptionTier !== "freemium" &&
         user.subscriptionExpiresAt &&

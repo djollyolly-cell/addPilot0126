@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation, query, internalQuery } from "./_generated/server";
+import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 
@@ -346,5 +346,119 @@ export const getMembershipForUser = internalQuery({
         q.eq("orgId", user.organizationId!).eq("userId", args.userId)
       )
       .first();
+  },
+});
+
+// ─── Billing Integration (Plan 3) ────────────────────
+
+/**
+ * Create a pending organization (subscriptionExpiresAt: undefined).
+ * Called from createBepaidCheckout when agency tier + pendingOrgName.
+ * Idempotent: if owner already has a pending org, returns its _id.
+ */
+export const createPending = internalMutation({
+  args: {
+    name: v.string(),
+    ownerId: v.id("users"),
+    subscriptionTier: v.union(
+      v.literal("agency_s"), v.literal("agency_m"),
+      v.literal("agency_l"), v.literal("agency_xl")
+    ),
+    maxLoadUnits: v.number(),
+    nichesConfig: v.optional(v.array(v.object({
+      niche: v.string(),
+      cabinetsCount: v.number(),
+    }))),
+  },
+  handler: async (ctx, args) => {
+    // Idempotency: return existing pending org for this owner
+    const existingOrgs = await ctx.db
+      .query("organizations")
+      .withIndex("by_ownerId", (q) => q.eq("ownerId", args.ownerId))
+      .collect();
+    const pendingOrg = existingOrgs.find((o) => !o.subscriptionExpiresAt);
+    if (pendingOrg) {
+      return pendingOrg._id;
+    }
+
+    // Runtime-validate niches
+    if (args.nichesConfig) {
+      for (const nc of args.nichesConfig) {
+        if (!AVAILABLE_NICHES.includes(nc.niche)) {
+          throw new Error(`Неизвестная ниша: ${nc.niche}. Доступные: ${AVAILABLE_NICHES.join(", ")}`);
+        }
+      }
+    }
+
+    return await ctx.db.insert("organizations", {
+      name: args.name,
+      ownerId: args.ownerId,
+      subscriptionTier: args.subscriptionTier,
+      // subscriptionExpiresAt: undefined — pending until webhook
+      maxLoadUnits: args.maxLoadUnits,
+      currentLoadUnits: 0,
+      nichesConfig: args.nichesConfig,
+      timezone: "Europe/Moscow",
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/**
+ * Update org subscription from successful payment webhook.
+ * Uses TIERS as single source of truth for maxLoadUnits.
+ */
+export const updateSubscriptionFromPayment = internalMutation({
+  args: {
+    orgId: v.id("organizations"),
+    tier: v.union(
+      v.literal("agency_s"), v.literal("agency_m"),
+      v.literal("agency_l"), v.literal("agency_xl")
+    ),
+    expiresAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const { TIERS } = await import("./billing");
+
+    await ctx.db.patch(args.orgId, {
+      subscriptionTier: args.tier,
+      subscriptionExpiresAt: args.expiresAt,
+      maxLoadUnits: TIERS[args.tier].includedLoadUnits,
+      updatedAt: Date.now(),
+    });
+
+    // Clear all grace flags via replace (patch can't remove optional fields)
+    await ctx.runMutation(internal.organizations.clearGraceFlags, {
+      orgId: args.orgId,
+    });
+  },
+});
+
+/**
+ * Clear all grace/overage flags from organization.
+ * Uses ctx.db.replace() because Convex patch({field: undefined}) SKIPS the field.
+ *
+ * Used by:
+ * - Plan 3: handleBepaidWebhook (via updateSubscriptionFromPayment)
+ * - Plan 4: load monitoring cron (when overage resolved)
+ */
+export const clearGraceFlags = internalMutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const org = await ctx.db.get(args.orgId);
+    if (!org) return;
+
+    // Build clean doc without grace fields using destructuring
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const {
+      _id, _creationTime,
+      overageNotifiedAt: _a,
+      overageGraceStartedAt: _c, featuresDisabledAt: _d,
+      expiredGracePhase: _e, expiredGraceStartedAt: _f,
+      pendingCredit: _g, pendingCreditCurrency: _h,
+      ...clean
+    } = org;
+
+    await ctx.db.replace(args.orgId, { ...clean, updatedAt: Date.now() });
   },
 });

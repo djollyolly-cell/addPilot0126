@@ -158,6 +158,7 @@ export const applyReferralBonus = internalMutation({
     referralCode: v.string(),
     referredUserId: v.id("users"),
     paymentId: v.id("payments"),
+    paymentTier: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const referrer = await ctx.db
@@ -180,7 +181,12 @@ export const applyReferralBonus = internalMutation({
       .withIndex("by_referredId", (q) => q.eq("referredId", args.referredUserId))
       .first();
 
-    const bonusDays = 7;
+    // Tier-specific bonus days
+    const TIER_BONUS_DAYS: Record<string, number> = {
+      start: 7, pro: 14,
+      agency_s: 14, agency_m: 14, agency_l: 21, agency_xl: 30,
+    };
+    const bonusDays = TIER_BONUS_DAYS[args.paymentTier ?? "start"] ?? 7;
     const now = Date.now();
 
     if (existingReg) {
