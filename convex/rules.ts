@@ -260,7 +260,7 @@ export const create = mutation({
     const now = Date.now();
 
     // Build conditions based on level
-    let conditions: any;
+    let conditions: Record<string, unknown> | { metric: string; operator: string; value: number }[];
     if (isL2) {
       conditions = args.conditionsArray; // array
     } else {
@@ -289,7 +289,7 @@ export const create = mutation({
       userId: args.userId,
       orgId: user?.organizationId,
       name: args.name.trim(),
-      type: args.type as any, // schema union validates at DB level
+      type: args.type as "cpl_limit" | "min_ctr" | "fast_spend" | "spend_no_leads" | "budget_limit" | "low_impressions" | "clicks_no_leads" | "new_lead" | "uz_budget_manage" | "custom" | "custom_l3",
       customRuleTypeCode: isL3 ? args.customRuleTypeCode : undefined,
       conditions,
       actions: {

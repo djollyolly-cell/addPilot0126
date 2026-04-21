@@ -4,6 +4,7 @@ import {
   getMetricValue,
   evaluateCustomConditions,
   type MetricsSnapshot,
+  type RuleCondition,
 } from "../../convex/ruleEngine";
 
 describe("getMetricValue", () => {
@@ -69,7 +70,7 @@ describe("evaluateCondition with type='custom' (L2)", () => {
   it("triggers when single condition is true", () => {
     const result = evaluateCondition(
       "custom",
-      [{ metric: "spent", operator: ">", value: 500 }] as any,
+      [{ metric: "spent", operator: ">", value: 500 }],
       m
     );
     expect(result).toBe(true);
@@ -78,7 +79,7 @@ describe("evaluateCondition with type='custom' (L2)", () => {
   it("does not trigger when single condition is false", () => {
     const result = evaluateCondition(
       "custom",
-      [{ metric: "spent", operator: ">", value: 5000 }] as any,
+      [{ metric: "spent", operator: ">", value: 5000 }],
       m
     );
     expect(result).toBe(false);
@@ -90,7 +91,7 @@ describe("evaluateCondition with type='custom' (L2)", () => {
       [
         { metric: "spent", operator: ">", value: 500 },
         { metric: "cpc", operator: ">", value: 10 },
-      ] as any,
+      ],
       m
     );
     expect(result).toBe(true);
@@ -102,7 +103,7 @@ describe("evaluateCondition with type='custom' (L2)", () => {
       [
         { metric: "spent", operator: ">", value: 500 },
         { metric: "cpc", operator: ">", value: 100 },  // false
-      ] as any,
+      ],
       m
     );
     expect(result).toBe(false);
@@ -115,17 +116,17 @@ describe("evaluateCondition with type='custom' (L2)", () => {
     };
     const result = evaluateCondition(
       "custom",
-      [{ metric: "reach", operator: ">", value: 100 }] as any,
+      [{ metric: "reach", operator: ">", value: 100 }],
       mNoReach
     );
     expect(result).toBe(false);
   });
 
   it("supports all operators", () => {
-    expect(evaluateCondition("custom", [{ metric: "spent", operator: ">=", value: 1000 }] as any, m)).toBe(true);
-    expect(evaluateCondition("custom", [{ metric: "spent", operator: "<=", value: 1000 }] as any, m)).toBe(true);
-    expect(evaluateCondition("custom", [{ metric: "spent", operator: "==", value: 1000 }] as any, m)).toBe(true);
-    expect(evaluateCondition("custom", [{ metric: "spent", operator: "<", value: 2000 }] as any, m)).toBe(true);
+    expect(evaluateCondition("custom", [{ metric: "spent", operator: ">=", value: 1000 }], m)).toBe(true);
+    expect(evaluateCondition("custom", [{ metric: "spent", operator: "<=", value: 1000 }], m)).toBe(true);
+    expect(evaluateCondition("custom", [{ metric: "spent", operator: "==", value: 1000 }], m)).toBe(true);
+    expect(evaluateCondition("custom", [{ metric: "spent", operator: "<", value: 2000 }], m)).toBe(true);
   });
 
   it("returns false for non-array condition when type=custom", () => {
@@ -140,7 +141,7 @@ describe("evaluateCondition with type='custom' (L2)", () => {
   it("returns false for empty array", () => {
     const result = evaluateCondition(
       "custom",
-      [] as any,
+      [] as RuleCondition[],
       m
     );
     expect(result).toBe(false);
@@ -152,7 +153,7 @@ describe("evaluateCondition with type='custom' (L2)", () => {
     };
     const result = evaluateCondition(
       "custom",
-      [{ metric: "cpl", operator: ">", value: 200 }] as any,
+      [{ metric: "cpl", operator: ">", value: 200 }],
       mNoCpl
     );
     // cpl = 500/2 = 250 > 200 = true
