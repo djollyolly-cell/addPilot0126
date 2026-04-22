@@ -289,8 +289,11 @@ export function RulesPage() {
                         {/* Info */}
                         <div className="flex-1 min-w-0">
                           <p className="font-medium text-sm truncate">{rule.name}</p>
-                          <p className="text-xs text-muted-foreground">
-                            {RULE_TYPE_LABELS[rule.type as RuleType]}
+                          <p className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap">
+                            <span>{RULE_TYPE_LABELS[rule.type as RuleType]}</span>
+                            {rule.type === 'cpc_limit' && (
+                              <span className="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium bg-warning/15 text-warning border border-warning/30">Бета</span>
+                            )}
                             {!Array.isArray(rule.conditions) && (
                               rule.type === 'uz_budget_manage'
                                 ? ` · ${rule.conditions.initialBudget ?? 0}₽ +${rule.conditions.budgetStep ?? 0}₽`
@@ -774,7 +777,12 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
                 )}
                 data-testid={`rule-type-${t}`}
               >
-                <p className="font-medium">{RULE_TYPE_LABELS[t]}</p>
+                <p className="font-medium flex items-center gap-1.5">
+                  {RULE_TYPE_LABELS[t]}
+                  {t === 'cpc_limit' && (
+                    <span className="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium bg-warning/15 text-warning border border-warning/30">Бета</span>
+                  )}
+                </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {RULE_TYPE_DESCRIPTIONS[t]}
                 </p>
