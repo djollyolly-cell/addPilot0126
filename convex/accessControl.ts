@@ -133,7 +133,7 @@ export const validateAdPlanIds = internalQuery({
     for (const planId of args.adPlanIds) {
       const camps = await ctx.db
         .query("campaigns")
-        .filter((q) => q.eq(q.field("adPlanId"), planId))
+        .withIndex("by_adPlanId", (q) => q.eq("adPlanId", planId))
         .collect();
       if (camps.length === 0) {
         // Plan ID not found — could be new, allow it

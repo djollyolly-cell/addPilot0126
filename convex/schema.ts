@@ -147,7 +147,8 @@ export default defineSchema({
   })
     .index("by_accountId", ["accountId"])
     .index("by_vkCampaignId", ["vkCampaignId"])
-    .index("by_accountId_vkCampaignId", ["accountId", "vkCampaignId"]),
+    .index("by_accountId_vkCampaignId", ["accountId", "vkCampaignId"])
+    .index("by_adPlanId", ["adPlanId"]),
 
   ads: defineTable({
     accountId: v.id("adAccounts"),
