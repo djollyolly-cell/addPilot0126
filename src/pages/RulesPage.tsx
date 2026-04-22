@@ -292,7 +292,7 @@ export function RulesPage() {
                           <p className="text-xs text-muted-foreground flex items-center gap-1 flex-wrap">
                             <span>{RULE_TYPE_LABELS[rule.type as RuleType]}</span>
                             {rule.type === 'cpc_limit' && (
-                              <span className="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium bg-warning/15 text-warning border border-warning/30">Бета</span>
+                              <span className="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-900/40 dark:text-amber-400 dark:border-amber-700">Бета</span>
                             )}
                             {!Array.isArray(rule.conditions) && (
                               rule.type === 'uz_budget_manage'
@@ -780,7 +780,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
                 <p className="font-medium flex items-center gap-1.5">
                   {RULE_TYPE_LABELS[t]}
                   {t === 'cpc_limit' && (
-                    <span className="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium bg-warning/15 text-warning border border-warning/30">Бета</span>
+                    <span className="inline-flex items-center px-1 py-0.5 rounded text-[10px] font-medium bg-amber-100 text-amber-700 border border-amber-300 dark:bg-amber-900/40 dark:text-amber-400 dark:border-amber-700">Бета</span>
                   )}
                 </p>
                 <p className="text-xs text-muted-foreground mt-0.5">
