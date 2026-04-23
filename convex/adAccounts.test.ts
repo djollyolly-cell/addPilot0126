@@ -525,6 +525,49 @@ describe("adAccounts", () => {
     });
   });
 
+  describe("getCampaignByVkId", () => {
+    test("returns campaign for correct account only", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+      await t.mutation(api.users.updateTier, { userId, tier: "start" });
+
+      const acc1 = await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "ACC_A",
+        name: "Кабинет A",
+        accessToken: "token_a",
+      });
+      const acc2 = await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "ACC_B",
+        name: "Кабинет B",
+        accessToken: "token_b",
+      });
+
+      // Same vkCampaignId in two different accounts
+      await t.mutation(api.adAccounts.upsertCampaign, {
+        accountId: acc1,
+        vkCampaignId: "C999",
+        name: "Кампания A",
+        status: "1",
+      });
+      await t.mutation(api.adAccounts.upsertCampaign, {
+        accountId: acc2,
+        vkCampaignId: "C999",
+        name: "Кампания B",
+        status: "1",
+      });
+
+      // Should return the campaign from acc2, not acc1
+      const result = await t.query(api.adAccounts.getCampaignByVkId, {
+        accountId: acc2,
+        vkCampaignId: "C999",
+      });
+      expect(result?.name).toBe("Кампания B");
+      expect(result?.accountId).toBe(acc2);
+    });
+  });
+
   // ═══════════════════════════════════════════════════════════
   // Sprint 21 — Settings: API tab queries
   // ═══════════════════════════════════════════════════════════

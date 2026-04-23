@@ -1461,7 +1461,9 @@ export const getCampaignByVkId = query({
   handler: async (ctx, args) => {
     return await ctx.db
       .query("campaigns")
-      .withIndex("by_vkCampaignId", (q) => q.eq("vkCampaignId", args.vkCampaignId))
+      .withIndex("by_accountId_vkCampaignId", (q) =>
+        q.eq("accountId", args.accountId).eq("vkCampaignId", args.vkCampaignId)
+      )
       .first();
   },
 });
