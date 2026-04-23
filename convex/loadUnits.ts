@@ -441,7 +441,7 @@ export const archiveOrgAccounts = internalMutation({
       .collect();
     let archived = 0;
     for (const acc of accounts) {
-      if (acc.status !== "archived") {
+      if (acc.status !== "archived" && acc.status !== "deleting") {
         await ctx.db.patch(acc._id, {
           statusBeforeArchive: acc.status,  // save for restore
           status: "archived",

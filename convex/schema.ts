@@ -99,7 +99,8 @@ export default defineSchema({
       v.literal("active"),
       v.literal("paused"),
       v.literal("error"),
-      v.literal("archived")
+      v.literal("archived"),
+      v.literal("deleting")
     ),
     lastSyncAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
@@ -334,7 +335,8 @@ export default defineSchema({
     clicks: v.number(),
   })
     .index("by_adId_timestamp", ["adId", "timestamp"])
-    .index("by_timestamp", ["timestamp"]),
+    .index("by_timestamp", ["timestamp"])
+    .index("by_accountId", ["accountId"]),
 
   notifications: defineTable({
     userId: v.id("users"),
