@@ -125,6 +125,7 @@ export const list = query({
   },
 });
 
+
 /** Find existing adAccount by userId + agencyCabinetId (or vitaminCabinetId).
  *  Used to prevent duplicates on reconnection — cabinetId is stable, vkAccountId is not. */
 export const findByAgencyCabinetId = internalQuery({
@@ -471,6 +472,92 @@ export const clearAccountData = mutation({
       }
       await ctx.db.delete(campaign._id);
     }
+  },
+});
+
+const DELETE_BATCH_SIZE = 200;
+const DELETE_MAX_RETRIES = 10;
+
+/** Batched async deletion of account data. Schedules itself until everything is deleted. */
+export const deleteBatch = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    retryCount: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return; // Already deleted
+
+    const retries = args.retryCount ?? 0;
+    if (retries >= DELETE_MAX_RETRIES) {
+      console.error(`deleteBatch: max retries (${DELETE_MAX_RETRIES}) reached for account ${args.accountId}`);
+      return;
+    }
+
+    const reschedule = async () => {
+      await ctx.scheduler.runAfter(0, internal.adAccounts.deleteBatch, {
+        accountId: args.accountId,
+        retryCount: 0,
+      });
+    };
+
+    // 1. Delete ads
+    const ads = await ctx.db
+      .query("ads")
+      .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", args.accountId))
+      .take(DELETE_BATCH_SIZE);
+    if (ads.length > 0) {
+      for (const ad of ads) await ctx.db.delete(ad._id);
+      await reschedule();
+      return;
+    }
+
+    // 2. Delete campaigns
+    const campaigns = await ctx.db
+      .query("campaigns")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .take(DELETE_BATCH_SIZE);
+    if (campaigns.length > 0) {
+      for (const c of campaigns) await ctx.db.delete(c._id);
+      await reschedule();
+      return;
+    }
+
+    // 3. Delete metricsRealtime
+    const realtime = await ctx.db
+      .query("metricsRealtime")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .take(DELETE_BATCH_SIZE);
+    if (realtime.length > 0) {
+      for (const m of realtime) await ctx.db.delete(m._id);
+      await reschedule();
+      return;
+    }
+
+    // 4. Delete metricsDaily
+    const daily = await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_accountId_date", (q) => q.eq("accountId", args.accountId))
+      .take(DELETE_BATCH_SIZE);
+    if (daily.length > 0) {
+      for (const m of daily) await ctx.db.delete(m._id);
+      await reschedule();
+      return;
+    }
+
+    // 5. Delete actionLogs
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .take(DELETE_BATCH_SIZE);
+    if (logs.length > 0) {
+      for (const l of logs) await ctx.db.delete(l._id);
+      await reschedule();
+      return;
+    }
+
+    // 6. All data deleted — delete the account itself
+    await ctx.db.delete(args.accountId);
   },
 });
 
