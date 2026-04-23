@@ -568,6 +568,42 @@ describe("adAccounts", () => {
     });
   });
 
+  describe("deleteByIds", () => {
+    test("deletes specified campaign and ad IDs", async () => {
+      const t = convexTest(schema);
+      const userId = await createTestUser(t);
+
+      const accountId = await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "100001",
+        name: "Кабинет",
+        accessToken: "token_1",
+      });
+
+      // Create 3 campaigns
+      const c1 = await t.mutation(api.adAccounts.upsertCampaign, {
+        accountId, vkCampaignId: "C1", name: "Keep", status: "1",
+      });
+      const c2 = await t.mutation(api.adAccounts.upsertCampaign, {
+        accountId, vkCampaignId: "C2", name: "Delete me", status: "1",
+      });
+      const c3 = await t.mutation(api.adAccounts.upsertCampaign, {
+        accountId, vkCampaignId: "C3", name: "Keep too", status: "1",
+      });
+
+      // Delete only c2
+      const result = await t.mutation(internal.adAccounts.deleteByIds, {
+        ids: [c2],
+      });
+      expect(result.deleted).toBe(1);
+
+      // c2 is gone
+      const campaigns = await t.query(api.adAccounts.listCampaigns, { accountId });
+      expect(campaigns).toHaveLength(2);
+      expect(campaigns.map((c: any) => c.vkCampaignId).sort()).toEqual(["C1", "C3"]);
+    });
+  });
+
   // ═══════════════════════════════════════════════════════════
   // Sprint 21 — Settings: API tab queries
   // ═══════════════════════════════════════════════════════════

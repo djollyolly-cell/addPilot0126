@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import { paginationOptsValidator } from "convex/server";
 import { mutation, query, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { checkOrgWritable, checkFeaturesDisabled } from "./loadUnits";
@@ -557,6 +558,57 @@ export const deleteBatch = internalMutation({
 
     // 6. All data deleted — delete the account itself
     await ctx.db.delete(args.accountId);
+  },
+});
+
+const DELETE_BY_IDS_LIMIT = 200;
+
+/** Paginated list of campaigns for an account. Used by syncNow action for stale cleanup. */
+export const listCampaignPage = internalQuery({
+  args: {
+    accountId: v.id("adAccounts"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("campaigns")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .paginate(args.paginationOpts);
+  },
+});
+
+/** Paginated list of ads for an account. Used by syncNow action for stale cleanup. */
+export const listAdPage = internalQuery({
+  args: {
+    accountId: v.id("adAccounts"),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("ads")
+      .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", args.accountId))
+      .paginate(args.paginationOpts);
+  },
+});
+
+/** Delete records by explicit _id array. Max 200 per call. */
+export const deleteByIds = internalMutation({
+  args: {
+    ids: v.array(v.string()),
+  },
+  handler: async (ctx, args) => {
+    if (args.ids.length > DELETE_BY_IDS_LIMIT) {
+      throw new Error(`deleteByIds: max ${DELETE_BY_IDS_LIMIT} IDs per call`);
+    }
+    let deleted = 0;
+    for (const id of args.ids) {
+      const doc = await ctx.db.get(id as any);
+      if (doc) {
+        await ctx.db.delete(doc._id);
+        deleted++;
+      }
+    }
+    return { deleted };
   },
 });
 
