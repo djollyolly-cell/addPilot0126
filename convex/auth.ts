@@ -941,19 +941,9 @@ export const getValidTokenForAccount = internalAction({
 
     // No credentials at all — agency/manual API keys
     if (!clientId && !clientSecret) {
-      // tokenExpiresAt=0 means "invalidated by TOKEN_EXPIRED" — go straight to recovery
-      if (account.tokenExpiresAt === 0) {
-        try {
-          const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId: args.accountId });
-          if (recovered) {
-            const fresh = await ctx.runQuery(api.adAccounts.get, { accountId: args.accountId });
-            if (fresh?.accessToken) return fresh.accessToken;
-          }
-        } catch (recErr) {
-          console.log(`[getValidTokenForAccount] «${account.name}» (${args.accountId}): recovery from invalidated failed: ${recErr}`);
-        }
-        throw new Error("TOKEN_EXPIRED: токен недействителен и не удалось восстановить");
-      }
+      // tokenExpiresAt=0 means "invalidated by TOKEN_EXPIRED" — no special handling,
+      // falls through to line `tokenExpiresAt > now + buffer` (0 > now = false)
+      // → then to the standard expired-token cascade (agency_client_credentials → Vitamin etc.)
       // If token has no expiry (undefined/null), check liveness before returning
       if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
         const alive = await quickTokenCheck(account.accessToken);

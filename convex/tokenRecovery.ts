@@ -306,16 +306,35 @@ export const handleTokenExpired = internalAction({
       return true;
     }
 
-    // 3. Token is really dead — try recovery BEFORE invalidation
+    // 3. Token is really dead — invalidate tokenExpiresAt FIRST so that
+    //    getValidTokenForAccount doesn't short-circuit on stale expiry and
+    //    actually tries the agency refresh cascade (Vitamin, GetUNIQ, etc.)
+    await ctx.runMutation(internal.tokenRecovery.setTokenExpiry, {
+      accountId: args.accountId,
+      tokenExpiresAt: 0,
+    });
+    console.log(
+      `[handleTokenExpired] «${account.name}» (${args.accountId}): token dead, set tokenExpiresAt=0`
+    );
+
+    // 4. Now try recovery — with tokenExpiresAt=0 the cascade will go through
+    //    agency refresh methods instead of returning the stale token
     try {
-      const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, {
+      const newToken = await ctx.runAction(internal.auth.getValidTokenForAccount, {
         accountId: args.accountId,
       });
-      if (recovered) {
-        console.log(
-          `[handleTokenExpired] «${account.name}» (${args.accountId}): recovered successfully`
-        );
-        return true;
+      if (newToken) {
+        // Verify the new token is actually alive
+        const alive = await quickTokenCheck(newToken);
+        if (alive) {
+          await ctx.runMutation(internal.tokenRecovery.markRecoverySuccess, {
+            accountId: args.accountId,
+          });
+          console.log(
+            `[handleTokenExpired] «${account.name}» (${args.accountId}): recovered successfully`
+          );
+          return true;
+        }
       }
     } catch (recErr) {
       console.log(
@@ -323,12 +342,12 @@ export const handleTokenExpired = internalAction({
       );
     }
 
-    // 4. Recovery failed — only NOW invalidate
+    // 5. Recovery failed — mark as error
     await ctx.runMutation(internal.adAccounts.invalidateAccountToken, {
       accountId: args.accountId,
     });
     console.log(
-      `[handleTokenExpired] «${account.name}» (${args.accountId}): token dead, invalidated after failed recovery`
+      `[handleTokenExpired] «${account.name}» (${args.accountId}): all recovery failed, invalidated`
     );
     return false;
   },
