@@ -1362,25 +1362,19 @@ export const syncNow = action({
         accountId: args.accountId,
       });
 
-      // For agency accounts, clear old data before re-sync
-      // (prevents stale campaigns from a previously used wrong token)
-      if (account.vkAccountId.startsWith("agency_")) {
-        await ctx.runMutation(api.adAccounts.clearAccountData, {
-          accountId: args.accountId,
-          userId: args.userId,
-        });
-      }
-
       // Fetch ALL campaigns from myTarget API (with pagination, up to 250/page)
       const mtCampaigns = await ctx.runAction(internal.vkApi.getCampaignsForAccount, {
         accessToken,
       });
 
-      // Upsert campaigns
+      // Upsert campaigns and collect valid VK IDs for stale cleanup
+      const validCampaignIds = new Set<string>();
       for (const campaign of mtCampaigns) {
+        const vkCampaignId = String(campaign.id);
+        validCampaignIds.add(vkCampaignId);
         await ctx.runMutation(api.adAccounts.upsertCampaign, {
           accountId: args.accountId,
-          vkCampaignId: String(campaign.id),
+          vkCampaignId,
           adPlanId: campaign.ad_plan_id ? String(campaign.ad_plan_id) : undefined,
           name: campaign.name || `Кампания ${campaign.id}`,
           status: campaign.status,
@@ -1394,28 +1388,86 @@ export const syncNow = action({
         accessToken,
       });
 
-      // Upsert ads (banners)
+      // Upsert ads (banners) and collect valid VK IDs
+      const validAdIds = new Set<string>();
       let adsCount = 0;
       for (const banner of mtBanners) {
-        // Find the campaign in our DB
         const campaign = await ctx.runQuery(api.adAccounts.getCampaignByVkId, {
           accountId: args.accountId,
           vkCampaignId: String(banner.campaign_id),
         });
 
         if (campaign) {
-          // Extract banner name from textblocks or use id
+          const vkAdId = String(banner.id);
+          validAdIds.add(vkAdId);
           const bannerName = banner.textblocks?.title?.text || `Баннер ${banner.id}`;
           await ctx.runMutation(api.adAccounts.upsertAd, {
             accountId: args.accountId,
             campaignId: campaign._id,
-            vkAdId: String(banner.id),
+            vkAdId,
             name: bannerName,
             status: banner.status,
             approved: banner.moderation_status,
           });
           adsCount++;
         }
+      }
+
+      // --- Stale cleanup: scan DB records in action (no read limit), delete stale ones ---
+      // 1. Paginate all ads in DB, find stale _ids
+      const staleAdIds: string[] = [];
+      {
+        let done = false;
+        let cursor: string | null = null;
+        while (!done) {
+          const paginationOpts = { numItems: 500, cursor } as { numItems: number; cursor: string | null };
+          const page: { page: Array<{ _id: string; vkAdId: string }>; isDone: boolean; continueCursor: string } =
+            await ctx.runQuery(internal.adAccounts.listAdPage, {
+              accountId: args.accountId,
+              paginationOpts,
+            });
+          for (const ad of page.page) {
+            if (!validAdIds.has(ad.vkAdId)) {
+              staleAdIds.push(ad._id);
+            }
+          }
+          done = page.isDone;
+          cursor = page.continueCursor;
+        }
+      }
+
+      // 2. Paginate all campaigns in DB, find stale _ids
+      const staleCampaignIds: string[] = [];
+      {
+        let done = false;
+        let cursor: string | null = null;
+        while (!done) {
+          const paginationOpts = { numItems: 500, cursor } as { numItems: number; cursor: string | null };
+          const page: { page: Array<{ _id: string; vkCampaignId: string }>; isDone: boolean; continueCursor: string } =
+            await ctx.runQuery(internal.adAccounts.listCampaignPage, {
+              accountId: args.accountId,
+              paginationOpts,
+            });
+          for (const c of page.page) {
+            if (!validCampaignIds.has(c.vkCampaignId)) {
+              staleCampaignIds.push(c._id);
+            }
+          }
+          done = page.isDone;
+          cursor = page.continueCursor;
+        }
+      }
+
+      // 3. Delete stale ads first (prevents orphans), then campaigns
+      for (let i = 0; i < staleAdIds.length; i += 200) {
+        await ctx.runMutation(internal.adAccounts.deleteByIds, {
+          ids: staleAdIds.slice(i, i + 200),
+        });
+      }
+      for (let i = 0; i < staleCampaignIds.length; i += 200) {
+        await ctx.runMutation(internal.adAccounts.deleteByIds, {
+          ids: staleCampaignIds.slice(i, i + 200),
+        });
       }
 
       // Update sync timestamp and clear any previous error
