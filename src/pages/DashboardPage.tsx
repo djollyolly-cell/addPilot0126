@@ -11,6 +11,7 @@ import {
   Download, Image, Lock,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { DisconnectDialog } from '../components/DisconnectDialog';
 import { Link, useNavigate } from 'react-router-dom';
 import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
@@ -421,6 +422,7 @@ export function DashboardPage() {
   const [customStart, setCustomStart] = useState('');
   const [customEnd, setCustomEnd] = useState('');
   const [dateError, setDateError] = useState<string | null>(null);
+  const [disconnectTarget, setDisconnectTarget] = useState<{ id: string; name: string; isAgency: boolean } | null>(null);
 
   const chartRef = useRef<HTMLDivElement | null>(null);
   const handleExportPng = useExportPng(chartRef);
@@ -568,9 +570,17 @@ export function DashboardPage() {
     await setActiveAccount({ userId: typedUserId, accountId });
   };
 
-  const handleDeleteAccount = async (accountId: Id<"adAccounts">) => {
-    if (!typedUserId) return;
-    await disconnectAccount({ accountId, userId: typedUserId });
+  const handleDeleteAccount = async () => {
+    if (!typedUserId || !disconnectTarget) return;
+    try {
+      await disconnectAccount({
+        accountId: disconnectTarget.id as Id<"adAccounts">,
+        userId: typedUserId,
+      });
+    } catch (err) {
+      console.error("Disconnect failed:", err);
+    }
+    setDisconnectTarget(null);
   };
 
   return (
@@ -736,7 +746,7 @@ export function DashboardPage() {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium truncate">{account.name}</p>
                     <p className="text-xs text-muted-foreground">
-                      {account.status === 'active' ? 'Активен' : account.status === 'paused' ? 'Приостановлен' : 'Ошибка'}
+                      {account.status === 'active' ? 'Активен' : account.status === 'paused' ? 'Приостановлен' : account.status === 'deleting' ? 'Удаляется...' : 'Ошибка'}
                     </p>
                   </div>
                   {isActive && (
@@ -746,9 +756,14 @@ export function DashboardPage() {
                   )}
                   <button
                     type="button"
+                    disabled={account.status === 'deleting'}
                     onClick={(e) => {
                       e.stopPropagation();
-                      handleDeleteAccount(account._id as Id<"adAccounts">);
+                      setDisconnectTarget({
+                        id: account._id,
+                        name: account.name,
+                        isAgency: !!account.agencyProviderId,
+                      });
                     }}
                     className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors shrink-0"
                     title="Удалить кабинет"
@@ -1059,6 +1074,14 @@ export function DashboardPage() {
 
       {/* ── Event Feed ── */}
       {typedUserId && <EventFeed userId={typedUserId} accounts={accounts} />}
+
+      <DisconnectDialog
+        open={!!disconnectTarget}
+        onOpenChange={(open) => { if (!open) setDisconnectTarget(null); }}
+        accountName={disconnectTarget?.name ?? ''}
+        isAgency={disconnectTarget?.isAgency ?? false}
+        onConfirm={handleDeleteAccount}
+      />
     </div>
   );
 }
