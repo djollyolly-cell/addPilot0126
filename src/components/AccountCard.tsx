@@ -1,5 +1,5 @@
 import { useState, memo } from 'react';
-import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Trash2, ChevronDown, ChevronRight, Pencil, Check, X } from 'lucide-react';
+import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Loader2, Trash2, ChevronDown, ChevronRight, Pencil, Check, X } from 'lucide-react';
 import { useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
@@ -8,13 +8,14 @@ import { SyncButton } from './SyncButton';
 import { CampaignList } from './CampaignList';
 import { BusinessProfileEditor } from './BusinessProfileEditor';
 import { cn } from '../lib/utils';
+import { DisconnectDialog } from './DisconnectDialog';
 
 interface AccountCardProps {
   account: {
     _id: string;
     vkAccountId: string;
     name: string;
-    status: 'active' | 'paused' | 'error';
+    status: 'active' | 'paused' | 'error' | 'deleting';
     lastSyncAt?: number;
     lastError?: string;
     mtAdvertiserId?: string;
@@ -43,6 +44,12 @@ const statusConfig = {
     label: 'Ошибка',
     color: 'text-destructive',
     bg: 'bg-destructive/10',
+  },
+  deleting: {
+    icon: Loader2,
+    label: 'Удаляется...',
+    color: 'text-muted-foreground',
+    bg: 'bg-muted/50',
   },
 };
 
@@ -88,7 +95,7 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
   const StatusIcon = status.icon;
 
   return (
-    <Card data-testid="account-card" data-account-id={account.vkAccountId}>
+    <Card data-testid="account-card" data-account-id={account.vkAccountId} className={cn(account.status === 'deleting' && 'opacity-60 pointer-events-none')}>
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-4">
           {/* Account info */}
@@ -185,7 +192,7 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
                 )}
               </div>
               <div className={cn('inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs', status.bg, status.color)}>
-                <StatusIcon className="w-3 h-3" />
+                <StatusIcon className={cn("w-3 h-3", account.status === 'deleting' && 'animate-spin')} />
                 {status.label}
               </div>
               {account.status === 'error' && account.lastError && (
@@ -197,48 +204,28 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
           </div>
 
           {/* Actions */}
-          <div className="flex items-center gap-1 shrink-0">
-            <button
-              type="button"
-              onClick={() => setShowDisconnectConfirm(true)}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
-              title="Отключить кабинет"
-              data-testid="disconnect-button"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-
-        {/* Disconnect confirmation */}
-        {showDisconnectConfirm && (
-          <div className="mt-3 p-3 rounded-lg bg-destructive/5 border border-destructive/20" data-testid="disconnect-confirm">
-            <p className="text-sm font-medium text-destructive mb-1">Отключить кабинет «{account.name}»?</p>
-            <p className="text-xs text-muted-foreground mb-3">
-              {account.agencyProviderId
-                ? 'Для повторного подключения нужно будет запросить доступ у вашего агентского провайдера.'
-                : 'Для повторного подключения потребуется обратиться в поддержку VK с гарантийным письмом от собственника рекламного кабинета.'}
-            </p>
-            <div className="flex items-center gap-2">
+          {account.status !== 'deleting' && (
+            <div className="flex items-center gap-1 shrink-0">
               <button
                 type="button"
-                onClick={() => { setShowDisconnectConfirm(false); onDisconnect(account._id); }}
-                className="px-3 py-1.5 text-xs font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
-                data-testid="disconnect-confirm-yes"
+                onClick={() => setShowDisconnectConfirm(true)}
+                className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                title="Отключить кабинет"
+                data-testid="disconnect-button"
               >
-                Отключить
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowDisconnectConfirm(false)}
-                className="px-3 py-1.5 text-xs font-medium rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors"
-                data-testid="disconnect-confirm-no"
-              >
-                Отмена
+                <Trash2 className="w-4 h-4" />
               </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
+
+        <DisconnectDialog
+          open={showDisconnectConfirm}
+          onOpenChange={setShowDisconnectConfirm}
+          accountName={account.name}
+          isAgency={!!account.agencyProviderId}
+          onConfirm={() => { setShowDisconnectConfirm(false); onDisconnect(account._id); }}
+        />
 
         {/* Sync */}
         <div className="mt-3 pt-3 border-t">

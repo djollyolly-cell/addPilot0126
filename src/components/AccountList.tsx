@@ -5,7 +5,7 @@ interface Account {
   _id: string;
   vkAccountId: string;
   name: string;
-  status: 'active' | 'paused' | 'error';
+  status: 'active' | 'paused' | 'error' | 'deleting';
   lastSyncAt?: number;
   lastError?: string;
   mtAdvertiserId?: string;
