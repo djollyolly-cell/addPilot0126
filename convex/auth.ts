@@ -1852,6 +1852,7 @@ export const getExpiringAccounts = internalQuery({
     const now = Date.now();
     const MAX_EXPIRED_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
     const accounts = await ctx.db.query("adAccounts").collect();
+    // Note: "deleting", "paused", "archived" excluded — no token refresh for them
     return accounts.filter(
       (a) =>
         (a.status === "active" || a.status === "error") &&
