@@ -568,8 +568,8 @@ describe("adAccounts", () => {
     });
   });
 
-  describe("deleteByIds", () => {
-    test("deletes specified campaign and ad IDs", async () => {
+  describe("deleteStaleCampaigns", () => {
+    test("deletes specified campaign IDs", async () => {
       const t = convexTest(schema);
       const userId = await createTestUser(t);
 
@@ -592,7 +592,7 @@ describe("adAccounts", () => {
       });
 
       // Delete only c2
-      const result = await t.mutation(internal.adAccounts.deleteByIds, {
+      const result = await t.mutation(internal.adAccounts.deleteStaleCampaigns, {
         ids: [c2],
       });
       expect(result.deleted).toBe(1);

@@ -594,20 +594,41 @@ export const listAdPage = internalQuery({
   },
 });
 
-/** Delete records by explicit _id array. Max 200 per call. */
-export const deleteByIds = internalMutation({
+/** Delete stale campaigns by _id array. Max 200 per call. */
+export const deleteStaleCampaigns = internalMutation({
   args: {
-    ids: v.array(v.string()),
+    ids: v.array(v.id("campaigns")),
   },
   handler: async (ctx, args) => {
     if (args.ids.length > DELETE_BY_IDS_LIMIT) {
-      throw new Error(`deleteByIds: max ${DELETE_BY_IDS_LIMIT} IDs per call`);
+      throw new Error(`deleteStaleCampaigns: max ${DELETE_BY_IDS_LIMIT} IDs per call`);
     }
     let deleted = 0;
     for (const id of args.ids) {
-      const doc = await ctx.db.get(id as any);
+      const doc = await ctx.db.get(id);
       if (doc) {
-        await ctx.db.delete(doc._id);
+        await ctx.db.delete(id);
+        deleted++;
+      }
+    }
+    return { deleted };
+  },
+});
+
+/** Delete stale ads by _id array. Max 200 per call. */
+export const deleteStaleAds = internalMutation({
+  args: {
+    ids: v.array(v.id("ads")),
+  },
+  handler: async (ctx, args) => {
+    if (args.ids.length > DELETE_BY_IDS_LIMIT) {
+      throw new Error(`deleteStaleAds: max ${DELETE_BY_IDS_LIMIT} IDs per call`);
+    }
+    let deleted = 0;
+    for (const id of args.ids) {
+      const doc = await ctx.db.get(id);
+      if (doc) {
+        await ctx.db.delete(id);
         deleted++;
       }
     }
@@ -1416,22 +1437,25 @@ export const syncNow = action({
         }
       }
 
-      // --- Stale cleanup: scan DB records in action (no read limit), delete stale ones ---
+      // --- Stale cleanup: paginate DB records (each query < 4096 reads), delete stale ones ---
+      // Each ctx.runQuery() is a separate transaction with its own 4096 read limit.
+      // At 500 records/page, each query uses ~500 reads — well under the limit.
+
       // 1. Paginate all ads in DB, find stale _ids
-      const staleAdIds: string[] = [];
+      const staleAdDocIds: Array<any> = []; // Id<"ads">[] — typed at call site
       {
         let done = false;
         let cursor: string | null = null;
         while (!done) {
           const paginationOpts = { numItems: 500, cursor } as { numItems: number; cursor: string | null };
-          const page: { page: Array<{ _id: string; vkAdId: string }>; isDone: boolean; continueCursor: string } =
+          const page: { page: Array<{ _id: any; vkAdId: string }>; isDone: boolean; continueCursor: string } =
             await ctx.runQuery(internal.adAccounts.listAdPage, {
               accountId: args.accountId,
               paginationOpts,
             });
           for (const ad of page.page) {
             if (!validAdIds.has(ad.vkAdId)) {
-              staleAdIds.push(ad._id);
+              staleAdDocIds.push(ad._id);
             }
           }
           done = page.isDone;
@@ -1440,20 +1464,20 @@ export const syncNow = action({
       }
 
       // 2. Paginate all campaigns in DB, find stale _ids
-      const staleCampaignIds: string[] = [];
+      const staleCampaignDocIds: Array<any> = []; // Id<"campaigns">[] — typed at call site
       {
         let done = false;
         let cursor: string | null = null;
         while (!done) {
           const paginationOpts = { numItems: 500, cursor } as { numItems: number; cursor: string | null };
-          const page: { page: Array<{ _id: string; vkCampaignId: string }>; isDone: boolean; continueCursor: string } =
+          const page: { page: Array<{ _id: any; vkCampaignId: string }>; isDone: boolean; continueCursor: string } =
             await ctx.runQuery(internal.adAccounts.listCampaignPage, {
               accountId: args.accountId,
               paginationOpts,
             });
           for (const c of page.page) {
             if (!validCampaignIds.has(c.vkCampaignId)) {
-              staleCampaignIds.push(c._id);
+              staleCampaignDocIds.push(c._id);
             }
           }
           done = page.isDone;
@@ -1462,14 +1486,14 @@ export const syncNow = action({
       }
 
       // 3. Delete stale ads first (prevents orphans), then campaigns
-      for (let i = 0; i < staleAdIds.length; i += 200) {
-        await ctx.runMutation(internal.adAccounts.deleteByIds, {
-          ids: staleAdIds.slice(i, i + 200),
+      for (let i = 0; i < staleAdDocIds.length; i += 200) {
+        await ctx.runMutation(internal.adAccounts.deleteStaleAds, {
+          ids: staleAdDocIds.slice(i, i + 200),
         });
       }
-      for (let i = 0; i < staleCampaignIds.length; i += 200) {
-        await ctx.runMutation(internal.adAccounts.deleteByIds, {
-          ids: staleCampaignIds.slice(i, i + 200),
+      for (let i = 0; i < staleCampaignDocIds.length; i += 200) {
+        await ctx.runMutation(internal.adAccounts.deleteStaleCampaigns, {
+          ids: staleCampaignDocIds.slice(i, i + 200),
         });
       }
 
