@@ -52,7 +52,7 @@ crons.interval(
   internal.creatives.cleanupExpired
 );
 
-// Clean up old AI generation records (older than 60 days) — daily at 04:00 UTC
+// Clean up old AI generation records (older than 35 days, was 60) — daily at 04:00 UTC
 crons.cron(
   "cleanup-old-ai-generations",
   "0 4 * * *",
@@ -145,7 +145,21 @@ crons.cron(
   internal.logCleanup.runDaily
 );
 
-// Clean up old metricsRealtime records (older than 4 days) — every 6 hours
+// Clean up old actionLogs (older than 90 days) — daily at 02:30 UTC
+crons.cron(
+  "cleanup-old-action-logs",
+  "30 2 * * *",
+  internal.logCleanup.cleanupOldActionLogs
+);
+
+// Clean up old metricsDaily (older than 90 days) — every 6 hours (large volume)
+crons.cron(
+  "cleanup-old-metrics-daily",
+  "15 */6 * * *",
+  internal.logCleanup.cleanupOldMetricsDaily
+);
+
+// Clean up old metricsRealtime records (older than 2 days, was 4) — every 6 hours
 crons.cron(
   "cleanup-old-realtime-metrics",
   "0 */6 * * *",

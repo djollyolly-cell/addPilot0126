@@ -62,11 +62,11 @@ export const getUsage = query({
   },
 });
 
-// Cleanup old records (older than 60 days)
+// Cleanup old records (older than 35 days — must cover 30-day usage window)
 export const cleanupOldRecords = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const cutoff = Date.now() - 60 * 24 * 60 * 60 * 1000;
+    const cutoff = Date.now() - 35 * 24 * 60 * 60 * 1000;
     const old = await ctx.db
       .query("aiGenerations")
       .withIndex("by_createdAt", (q) => q.lt("createdAt", cutoff))

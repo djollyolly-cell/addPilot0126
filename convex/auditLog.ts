@@ -85,14 +85,14 @@ export const list = query({
   },
 });
 
-// ─── TTL-чистка (90 дней) ───
+// ─── TTL-чистка (10 дней) ───
 
 export const cleanupOld = internalMutation({
   handler: async (ctx) => {
-    const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+    const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
     const old = await ctx.db
       .query("auditLog")
-      .withIndex("by_createdAt", (q) => q.lt("createdAt", ninetyDaysAgo))
+      .withIndex("by_createdAt", (q) => q.lt("createdAt", tenDaysAgo))
       .take(500);
     for (const doc of old) {
       await ctx.db.delete(doc._id);

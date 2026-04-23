@@ -304,13 +304,13 @@ describe("metrics", () => {
 
   // ── Cleanup: deleteRealtimeBatch ──
 
-  test("deleteRealtimeBatch deletes records older than 4 days", async () => {
+  test("deleteRealtimeBatch deletes records older than retention period (2 days)", async () => {
     const t = convexTest(schema);
     const { accountId } = await createTestUserWithAccount(t);
 
     const now = Date.now();
     const fiveDaysAgo = now - 5 * 86_400_000;
-    const twoDaysAgo = now - 2 * 86_400_000;
+    const oneDayAgo = now - 1 * 86_400_000;
 
     // Insert old record (5 days ago) — should be deleted
     await t.run(async (ctx) => {
@@ -325,12 +325,12 @@ describe("metrics", () => {
       });
     });
 
-    // Insert fresh record (2 days ago) — should survive
+    // Insert fresh record (1 day ago) — should survive
     await t.run(async (ctx) => {
       await ctx.db.insert("metricsRealtime", {
         accountId,
         adId: "ad_fresh",
-        timestamp: twoDaysAgo,
+        timestamp: oneDayAgo,
         spent: 200,
         leads: 2,
         impressions: 1000,

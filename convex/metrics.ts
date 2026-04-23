@@ -3,7 +3,7 @@ import { mutation, query, internalMutation, internalAction, internalQuery } from
 import { internal } from "./_generated/api";
 
 // ── Cleanup constants ──
-const RETENTION_DAYS = 4;
+const RETENTION_DAYS = 2;
 const CLEANUP_MAX_RUNNING_MS = 12 * 60 * 60 * 1000; // 12h zombie threshold
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

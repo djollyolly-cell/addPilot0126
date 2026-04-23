@@ -292,7 +292,8 @@ export default defineSchema({
     .index("by_ruleId", ["ruleId"])
     .index("by_ruleId_createdAt", ["ruleId", "createdAt"])
     .index("by_accountId", ["accountId"])
-    .index("by_orgId_date", ["orgId", "createdAt"]),
+    .index("by_orgId_date", ["orgId", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
 
   systemLogs: defineTable({
     userId: v.optional(v.id("users")),
@@ -323,7 +324,8 @@ export default defineSchema({
     cpc: v.optional(v.number()),
   })
     .index("by_accountId_date", ["accountId", "date"])
-    .index("by_adId_date", ["adId", "date"]),
+    .index("by_adId_date", ["adId", "date"])
+    .index("by_date", ["date"]),
 
   metricsRealtime: defineTable({
     accountId: v.id("adAccounts"),
