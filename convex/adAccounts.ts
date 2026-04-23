@@ -350,27 +350,32 @@ export const disconnect = mutation({
     if (account.userId !== args.userId) {
       throw new Error("Нет доступа к этому кабинету");
     }
+    if (account.status === "deleting") {
+      throw new Error("Кабинет уже удаляется");
+    }
 
-    // Delete related campaigns
+    // Phase 1: Mark as deleting
+    await ctx.db.patch(args.accountId, { status: "deleting" as const });
+
+    // Clean up rules referencing this account
     const campaigns = await ctx.db
       .query("campaigns")
       .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
       .collect();
-
     const campaignIds = new Set(campaigns.map((c) => c._id as string));
 
-    // Collect all ad IDs before deletion (for rule cleanup)
-    const allAds = [];
+    // Collect ad IDs for rule cleanup (not deleting here — deleteBatch handles that)
+    const adIds = new Set<string>();
     for (const campaign of campaigns) {
       const ads = await ctx.db
         .query("ads")
         .withIndex("by_campaignId", (q) => q.eq("campaignId", campaign._id))
-        .collect();
-      allAds.push(...ads);
+        .take(500);
+      for (const ad of ads) {
+        adIds.add(ad._id as string);
+      }
     }
-    const adIds = new Set(allAds.map((a) => a._id as string));
 
-    // Clean up rules that reference this account/campaigns/ads
     const userRules = await ctx.db
       .query("rules")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
@@ -390,7 +395,6 @@ export const disconnect = mutation({
       );
 
       if (newAccountIds.length === 0) {
-        // Rule has no accounts left — deactivate
         await ctx.db.patch(rule._id, {
           targetAccountIds: newAccountIds,
           targetCampaignIds: newCampaignIds,
@@ -406,14 +410,6 @@ export const disconnect = mutation({
       }
     }
 
-    // Delete campaigns and ads
-    for (const ad of allAds) {
-      await ctx.db.delete(ad._id);
-    }
-    for (const campaign of campaigns) {
-      await ctx.db.delete(campaign._id);
-    }
-
     // Clear activeAccountId if this was the active account
     const settings = await ctx.db
       .query("userSettings")
@@ -427,7 +423,7 @@ export const disconnect = mutation({
       });
     }
 
-    // Audit log: account disconnected
+    // Audit log + admin alert
     try { await ctx.runMutation(internal.auditLog.log, {
       userId: args.userId,
       category: "account",
@@ -440,8 +436,10 @@ export const disconnect = mutation({
       text: `🔌 <b>Отключён кабинет</b>\n\nКабинет: ${account.name}`,
     }); } catch { /* non-critical */ }
 
-    // Delete the account itself
-    await ctx.db.delete(args.accountId);
+    // Phase 2: Schedule async batch deletion
+    await ctx.scheduler.runAfter(0, internal.adAccounts.deleteBatch, {
+      accountId: args.accountId,
+    });
 
     return { success: true };
   },
@@ -456,6 +454,7 @@ export const clearAccountData = mutation({
   handler: async (ctx, args) => {
     const account = await ctx.db.get(args.accountId);
     if (!account || account.userId !== args.userId) return;
+    if (account.status === "deleting") return;
 
     const campaigns = await ctx.db
       .query("campaigns")
