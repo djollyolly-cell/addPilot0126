@@ -446,7 +446,10 @@ export const disconnect = mutation({
   },
 });
 
-// Clear all campaigns and ads for an account (used before re-sync of agency accounts)
+/**
+ * @deprecated No longer used — syncNow uses paginated stale cleanup instead.
+ * Kept temporarily for API compatibility. Will be removed in a future cleanup.
+ */
 export const clearAccountData = mutation({
   args: {
     accountId: v.id("adAccounts"),
