@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as accessControl from "../accessControl.js";
 import type * as adAccounts from "../adAccounts.js";
 import type * as admin from "../admin.js";
 import type * as adminAlerts from "../adminAlerts.js";
@@ -32,18 +33,23 @@ import type * as creativeAnalytics from "../creativeAnalytics.js";
 import type * as creatives from "../creatives.js";
 import type * as credentialHistory from "../credentialHistory.js";
 import type * as crons from "../crons.js";
+import type * as customRules from "../customRules.js";
 import type * as email from "../email.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as healthReport from "../healthReport.js";
 import type * as http from "../http.js";
+import type * as loadUnits from "../loadUnits.js";
 import type * as logCleanup from "../logCleanup.js";
 import type * as metrics from "../metrics.js";
 import type * as migrations from "../migrations.js";
+import type * as orgAuth from "../orgAuth.js";
+import type * as organizations from "../organizations.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as referrals from "../referrals.js";
 import type * as reports from "../reports.js";
 import type * as ruleEngine from "../ruleEngine.js";
 import type * as rules from "../rules.js";
+import type * as shared_ruleConstants from "../shared/ruleConstants.js";
 import type * as syncMetrics from "../syncMetrics.js";
 import type * as systemLogger from "../systemLogger.js";
 import type * as telegram from "../telegram.js";
@@ -65,6 +71,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  accessControl: typeof accessControl;
   adAccounts: typeof adAccounts;
   admin: typeof admin;
   adminAlerts: typeof adminAlerts;
@@ -89,18 +96,23 @@ declare const fullApi: ApiFromModules<{
   creatives: typeof creatives;
   credentialHistory: typeof credentialHistory;
   crons: typeof crons;
+  customRules: typeof customRules;
   email: typeof email;
   healthCheck: typeof healthCheck;
   healthReport: typeof healthReport;
   http: typeof http;
+  loadUnits: typeof loadUnits;
   logCleanup: typeof logCleanup;
   metrics: typeof metrics;
   migrations: typeof migrations;
+  orgAuth: typeof orgAuth;
+  organizations: typeof organizations;
   rateLimit: typeof rateLimit;
   referrals: typeof referrals;
   reports: typeof reports;
   ruleEngine: typeof ruleEngine;
   rules: typeof rules;
+  "shared/ruleConstants": typeof shared_ruleConstants;
   syncMetrics: typeof syncMetrics;
   systemLogger: typeof systemLogger;
   telegram: typeof telegram;
