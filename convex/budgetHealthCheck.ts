@@ -511,26 +511,27 @@ export const checkZeroSpendUzCampaigns = internalAction({
 
         let alertSent = false;
         if (!recentAlert) {
-          // Send Telegram to user
-          try {
-            const chatId = await ctx.runQuery(internal.telegram.getUserChatId, {
-              userId: zs.userId,
-            });
-            if (chatId) {
-              await ctx.runAction(internal.telegram.sendMessage, {
-                chatId,
-                text: [
-                  `⚠️ <b>Правило «${zs.ruleName}»</b> работает на кампании без расхода ${zs.zeroDays} дн.`,
-                  `Кампания: ${zs.campaignId}`,
-                  `Причина: ${reason}`,
-                  `→ Проверьте кампанию в VK или деактивируйте правило`,
-                ].join("\n"),
-              });
-              alertSent = true;
-            }
-          } catch (err) {
-            console.warn(`[zeroSpend] Failed to send alert to user ${zs.userId}:`, err);
-          }
+          // TEMPORARILY DISABLED: user Telegram alerts for zero-spend campaigns
+          // Re-enable after investigating false positives
+          // try {
+          //   const chatId = await ctx.runQuery(internal.telegram.getUserChatId, {
+          //     userId: zs.userId,
+          //   });
+          //   if (chatId) {
+          //     await ctx.runAction(internal.telegram.sendMessage, {
+          //       chatId,
+          //       text: [
+          //         `⚠️ <b>Правило «${zs.ruleName}»</b> работает на кампании без расхода ${zs.zeroDays} дн.`,
+          //         `Кампания: ${zs.campaignId}`,
+          //         `Причина: ${reason}`,
+          //         `→ Проверьте кампанию в VK или деактивируйте правило`,
+          //       ].join("\n"),
+          //     });
+          //     alertSent = true;
+          //   }
+          // } catch (err) {
+          //   console.warn(`[zeroSpend] Failed to send alert to user ${zs.userId}:`, err);
+          // }
 
           // Log to actionLogs for dedup
           try {
