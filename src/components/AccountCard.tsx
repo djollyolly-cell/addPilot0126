@@ -18,6 +18,7 @@ interface AccountCardProps {
     lastSyncAt?: number;
     lastError?: string;
     mtAdvertiserId?: string;
+    agencyProviderId?: string;
   };
   userId: string;
   onSync: (accountId: string) => Promise<void>;
@@ -48,6 +49,7 @@ const statusConfig = {
 export const AccountCard = memo(function AccountCard({ account, userId, onSync, onDisconnect }: AccountCardProps) {
   const [showCampaigns, setShowCampaigns] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
+  const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const [advId, setAdvId] = useState(account.mtAdvertiserId || '');
   const [advSaving, setAdvSaving] = useState(false);
   const [isEditingName, setIsEditingName] = useState(false);
@@ -198,7 +200,7 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
           <div className="flex items-center gap-1 shrink-0">
             <button
               type="button"
-              onClick={() => onDisconnect(account._id)}
+              onClick={() => setShowDisconnectConfirm(true)}
               className="p-1.5 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
               title="Отключить кабинет"
               data-testid="disconnect-button"
@@ -207,6 +209,36 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
             </button>
           </div>
         </div>
+
+        {/* Disconnect confirmation */}
+        {showDisconnectConfirm && (
+          <div className="mt-3 p-3 rounded-lg bg-destructive/5 border border-destructive/20" data-testid="disconnect-confirm">
+            <p className="text-sm font-medium text-destructive mb-1">Отключить кабинет «{account.name}»?</p>
+            <p className="text-xs text-muted-foreground mb-3">
+              {account.agencyProviderId
+                ? 'Для повторного подключения нужно будет запросить доступ у вашего агентского провайдера.'
+                : 'Для повторного подключения потребуется обратиться в поддержку VK с гарантийным письмом от собственника рекламного кабинета.'}
+            </p>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => { setShowDisconnectConfirm(false); onDisconnect(account._id); }}
+                className="px-3 py-1.5 text-xs font-medium rounded-md bg-destructive text-destructive-foreground hover:bg-destructive/90 transition-colors"
+                data-testid="disconnect-confirm-yes"
+              >
+                Отключить
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowDisconnectConfirm(false)}
+                className="px-3 py-1.5 text-xs font-medium rounded-md bg-secondary text-secondary-foreground hover:bg-secondary/80 transition-colors"
+                data-testid="disconnect-confirm-no"
+              >
+                Отмена
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Sync */}
         <div className="mt-3 pt-3 border-t">

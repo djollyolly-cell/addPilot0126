@@ -356,15 +356,60 @@ export const disconnect = mutation({
       .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
       .collect();
 
+    const campaignIds = new Set(campaigns.map((c) => c._id as string));
+
+    // Collect all ad IDs before deletion (for rule cleanup)
+    const allAds = [];
     for (const campaign of campaigns) {
-      // Delete ads for each campaign
       const ads = await ctx.db
         .query("ads")
         .withIndex("by_campaignId", (q) => q.eq("campaignId", campaign._id))
         .collect();
-      for (const ad of ads) {
-        await ctx.db.delete(ad._id);
+      allAds.push(...ads);
+    }
+    const adIds = new Set(allAds.map((a) => a._id as string));
+
+    // Clean up rules that reference this account/campaigns/ads
+    const userRules = await ctx.db
+      .query("rules")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+
+    for (const rule of userRules) {
+      if (!rule.targetAccountIds.includes(args.accountId)) continue;
+
+      const newAccountIds = rule.targetAccountIds.filter(
+        (id) => id !== args.accountId
+      );
+      const newCampaignIds = (rule.targetCampaignIds || []).filter(
+        (id) => !campaignIds.has(id)
+      );
+      const newAdIds = (rule.targetAdIds || []).filter(
+        (id) => !adIds.has(id)
+      );
+
+      if (newAccountIds.length === 0) {
+        // Rule has no accounts left — deactivate
+        await ctx.db.patch(rule._id, {
+          targetAccountIds: newAccountIds,
+          targetCampaignIds: newCampaignIds,
+          targetAdIds: newAdIds,
+          isActive: false,
+        });
+      } else {
+        await ctx.db.patch(rule._id, {
+          targetAccountIds: newAccountIds,
+          targetCampaignIds: newCampaignIds,
+          targetAdIds: newAdIds,
+        });
       }
+    }
+
+    // Delete campaigns and ads
+    for (const ad of allAds) {
+      await ctx.db.delete(ad._id);
+    }
+    for (const campaign of campaigns) {
       await ctx.db.delete(campaign._id);
     }
 
