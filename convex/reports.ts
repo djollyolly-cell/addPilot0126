@@ -226,11 +226,11 @@ async function fetchAllData(
   const [adPlansData, adGroupsData, packagesData] = await Promise.all([
     callMtApi<{ items: MtAdPlanRaw[]; count: number }>(
       "ad_plans.json", accessToken,
-      { fields: "id,name,status,objective,budget_limit,budget_limit_day", limit: "250", _status: "active,blocked" }
+      { fields: "id,name,status,objective,budget_limit,budget_limit_day", limit: "250", _status__in: "active,blocked" }
     ),
     callMtApi<{ items: MtAdGroupRaw[]; count: number }>(
       "ad_groups.json", accessToken,
-      { fields: "id,name,status,ad_plan_id,package_id,budget_limit,budget_limit_day", limit: "250", _status: "active,blocked" }
+      { fields: "id,name,status,ad_plan_id,package_id,budget_limit,budget_limit_day", limit: "250", _status__in: "active,blocked" }
     ),
     // packages.json max limit=50 (VK API constraint). Non-fatal: if fails, objectives won't have labels.
     callMtApi<{ items: { id: number; name: string }[] }>(
@@ -263,7 +263,7 @@ async function fetchAllData(
   while (true) {
     const bannersData = await callMtApi<{ items: MtBannerRaw[]; count: number }>(
       "banners.json", accessToken,
-      { fields: "id,campaign_id,textblocks,status,moderation_status", limit: "250", offset: String(offset), _status: "active,blocked" }
+      { fields: "id,campaign_id,textblocks,status,moderation_status", limit: "250", offset: String(offset), _status__in: "active,blocked" }
     );
     const items = bannersData.items || [];
     banners = banners.concat(items);

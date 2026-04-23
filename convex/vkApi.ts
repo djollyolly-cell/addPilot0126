@@ -948,7 +948,7 @@ export const getMtAdPlans = action({
     const data = await callMtApi<{ items: { id: number; name: string; status: string; objective: string; budget_limit: number | null; budget_limit_day: number | null }[]; count: number }>(
       "ad_plans.json",
       args.accessToken,
-      { fields: "id,name,status,objective,budget_limit,budget_limit_day", limit: "250", _status: "active,blocked" }
+      { fields: "id,name,status,objective,budget_limit,budget_limit_day", limit: "250", _status__in: "active,blocked" }
     );
     return data.items || [];
   },
@@ -965,7 +965,7 @@ export const getMtAdGroups = internalAction({
       const res = await callMtApi<{ items: { id: number; ad_plan_id: number }[] }>(
         "campaigns.json",
         args.accessToken,
-        { fields: "id,ad_plan_id", limit: String(LIMIT), offset: String(offset), _status: "active,blocked" }
+        { fields: "id,ad_plan_id", limit: String(LIMIT), offset: String(offset), _status__in: "active,blocked" }
       );
       const items = res.items || [];
       for (const g of items) {
@@ -1007,7 +1007,7 @@ export const getMtBanners = action({
     const params: Record<string, string> = {
       fields: "id,campaign_id,textblocks,status,moderation_status,created,updated,content",
       limit: "250",
-      _status: "active,blocked",
+      _status__in: "active,blocked",
     };
     if (args.campaignId) {
       params._campaign_id = args.campaignId;
@@ -1451,7 +1451,7 @@ export const getCampaignsForAccount = internalAction({
       const data = await callMtApi<{ items: MtCampaign[]; count: number }>(
         "campaigns.json",
         args.accessToken,
-        { fields: "id,name,status,package_id,budget_limit,budget_limit_day,delivery,ad_plan_id", limit: String(LIMIT), offset: String(offset), _status: "active,blocked" }
+        { fields: "id,name,status,package_id,budget_limit,budget_limit_day,delivery,ad_plan_id", limit: String(LIMIT), offset: String(offset), _status__in: "active,blocked" }
       );
       const items = data.items || [];
       allCampaigns.push(...items);
