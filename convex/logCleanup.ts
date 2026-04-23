@@ -36,10 +36,9 @@ export const cleanupOldActionLogs = internalMutation({
   },
 });
 
-// ─── Cleanup metricsDaily (90 дней), batch 500, cron каждый час ───
-// Постепенная очистка: 500 записей/час = ~12 000/день.
-// При бэклоге ~720K записей — очистка за ~60 дней.
-// Безопасно для сервера: не создаёт всплеск dead tuples.
+// ─── Cleanup metricsDaily (90 дней), batch 500, cron каждые 15 мин ───
+// Постепенная очистка: 500 × 96/день = ~48 000/день (3% от metricsRealtime churn).
+// При бэклоге ~720K записей — очистка за ~15 дней.
 
 export const cleanupOldMetricsDaily = internalMutation({
   handler: async (ctx) => {

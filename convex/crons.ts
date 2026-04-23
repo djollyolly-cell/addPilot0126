@@ -152,10 +152,11 @@ crons.cron(
   internal.logCleanup.cleanupOldActionLogs
 );
 
-// Clean up old metricsDaily (older than 90 days) — every hour, 500/batch (gradual)
+// Clean up old metricsDaily (older than 90 days) — every 15 min, 500/batch (gradual)
+// 48K deletes/day = 3% of metricsRealtime churn. Backlog ~720K clears in ~15 days.
 crons.interval(
   "cleanup-old-metrics-daily",
-  { hours: 1 },
+  { minutes: 15 },
   internal.logCleanup.cleanupOldMetricsDaily
 );
 
