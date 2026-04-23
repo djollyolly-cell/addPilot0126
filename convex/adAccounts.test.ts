@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { expect, test, describe } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { groupBannersByAdPlan } from "./adAccounts";
 
@@ -297,7 +297,7 @@ describe("adAccounts", () => {
   });
 
   describe("disconnect", () => {
-    test("disconnects and deletes an account", async () => {
+    test("disconnects and marks account as deleting", async () => {
       const t = convexTest(schema);
       const userId = await createTestUser(t);
 
@@ -315,8 +315,10 @@ describe("adAccounts", () => {
 
       expect(result.success).toBe(true);
 
+      // Account should still exist but with status "deleting"
       const account = await t.query(api.adAccounts.get, { accountId });
-      expect(account).toBeNull();
+      expect(account).not.toBeNull();
+      expect(account!.status).toBe("deleting");
     });
 
     test("throws when disconnecting another user's account", async () => {
@@ -344,7 +346,7 @@ describe("adAccounts", () => {
       ).rejects.toThrow("Нет доступа");
     });
 
-    test("deletes related campaigns and ads on disconnect", async () => {
+    test("disconnect marks as deleting, deleteBatch cascade-deletes data", async () => {
       const t = convexTest(schema);
       const userId = await createTestUser(t);
 
@@ -372,8 +374,23 @@ describe("adAccounts", () => {
         status: "1",
       });
 
-      // Disconnect
+      // Disconnect — marks as deleting, does NOT delete data yet
       await t.mutation(api.adAccounts.disconnect, { accountId, userId });
+
+      // Campaign still exists (deleteBatch hasn't run yet)
+      const campaignBefore = await t.query(api.adAccounts.getCampaignByVkId, {
+        accountId,
+        vkCampaignId: "C001",
+      });
+      expect(campaignBefore).not.toBeNull();
+
+      // Run deleteBatch to cascade-delete (simulating scheduler)
+      // Keep running until account is fully deleted
+      for (let i = 0; i < 10; i++) {
+        const acc = await t.query(api.adAccounts.get, { accountId });
+        if (!acc) break;
+        await t.mutation(internal.adAccounts.deleteBatch, { accountId });
+      }
 
       // Verify cascade delete
       const campaign = await t.query(api.adAccounts.getCampaignByVkId, {
@@ -381,6 +398,10 @@ describe("adAccounts", () => {
         vkCampaignId: "C001",
       });
       expect(campaign).toBeNull();
+
+      // Account itself should be deleted
+      const account = await t.query(api.adAccounts.get, { accountId });
+      expect(account).toBeNull();
     });
   });
 
