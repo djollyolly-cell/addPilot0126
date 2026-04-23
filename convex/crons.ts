@@ -152,10 +152,10 @@ crons.cron(
   internal.logCleanup.cleanupOldActionLogs
 );
 
-// Clean up old metricsDaily (older than 90 days) — every 6 hours (large volume)
-crons.cron(
+// Clean up old metricsDaily (older than 90 days) — every hour, 500/batch (gradual)
+crons.interval(
   "cleanup-old-metrics-daily",
-  "15 */6 * * *",
+  { hours: 1 },
   internal.logCleanup.cleanupOldMetricsDaily
 );
 

@@ -316,12 +316,12 @@ CONVEX_INSTANCE_SECRET=2de125637ad4cefdbb60e5e350aa0894545bc813a4bc296fcdbd3e350
 
 ### Этап 1: Сократить данные (безопасно, без даунтайма) ✅ РЕАЛИЗОВАНО 23.04
 1. ✅ Сократить `RETENTION_DAYS` с 4 до 2 в `convex/metrics.ts`
-2. ✅ Добавить cleanup cron для `metricsDaily` (90 дней retention) + массовый cleanup (`triggerMetricsDailyCleanup`)
+2. ✅ Добавить cleanup cron для `metricsDaily` (90 дней retention, 500/час — постепенно)
 3. ✅ Добавить cleanup cron для `actionLogs` (90 дней retention)
 4. ✅ Сократить retention: systemLogs 30→10 дн, auditLog 90→10 дн, aiGenerations 60→35 дн
 5. ✅ Добавить индексы: `actionLogs.by_createdAt`, `metricsDaily.by_date`
 6. ⬜ Задеплоить → cleanup автоматически удалит старые данные
-7. ⬜ После деплоя: вызвать `triggerMetricsDailyCleanup()` для массовой очистки ~720K записей
+7. ✅ metricsDaily cleanup постепенный: 500 записей/час ≈ 12K/день. Бэклог ~720K очистится за ~60 дней без нагрузки
 
 **Ожидаемый результат:** удалено ~1.6 млн metricsRealtime + ~720K metricsDaily + ~120K actionLogs = ~2.4 млн документов. Dead tuples увеличатся временно, но потом autovacuum переиспользует их.
 
