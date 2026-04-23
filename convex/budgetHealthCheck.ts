@@ -509,7 +509,7 @@ export const checkZeroSpendUzCampaigns = internalAction({
         });
         const shortName = typeof userName === "string" ? userName.split(" ")[0] : "—";
 
-        let alertSent = false;
+        const alertSent = false;
         if (!recentAlert) {
           // TEMPORARILY DISABLED: user Telegram alerts for zero-spend campaigns
           // Re-enable after investigating false positives
