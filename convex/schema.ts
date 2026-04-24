@@ -990,4 +990,19 @@ export default defineSchema({
     .index("by_orgId_date", ["orgId", "date"])
     .index("by_orgId_capturedAt", ["orgId", "capturedAt"]),
 
+  communityProfiles: defineTable({
+    userId: v.id("users"),
+    vkGroupId: v.number(),
+    vkGroupName: v.string(),
+    vkGroupAvatarUrl: v.optional(v.string()),
+    vkCommunityToken: v.string(),
+    senlerApiKey: v.optional(v.string()),
+    lastValidatedAt: v.number(),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_userId_group", ["userId", "vkGroupId"]),
+
 }, { schemaValidation: false });
