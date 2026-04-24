@@ -33,7 +33,9 @@ import {
   Send,
   AlertCircle,
   Gift,
+  Users,
 } from 'lucide-react';
+import { CommunityProfilesSection } from "@/components/CommunityProfilesSection";
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
 
@@ -55,7 +57,7 @@ export function SettingsPage() {
   const { user } = useAuth();
   const location = useLocation();
   const initialTab = (location.state as { tab?: string })?.tab || 'profile';
-  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral'>(initialTab as 'profile' | 'telegram' | 'api' | 'business' | 'referral');
+  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral' | 'communities'>(initialTab as 'profile' | 'telegram' | 'api' | 'business' | 'referral' | 'communities');
 
   if (!user) {
     return (
@@ -140,6 +142,19 @@ export function SettingsPage() {
             <Gift className="w-4 h-4" />
             Рефералы
           </button>
+          <button
+            data-testid="tab-communities"
+            onClick={() => setActiveTab('communities')}
+            className={cn(
+              'pb-3 px-1 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5',
+              activeTab === 'communities'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Users className="w-4 h-4" />
+            Сообщества
+          </button>
         </nav>
       </div>
 
@@ -152,6 +167,8 @@ export function SettingsPage() {
         <ApiTab userId={user.userId as Id<'users'>} />
       ) : activeTab === 'referral' ? (
         <ReferralTab userId={user.userId} />
+      ) : activeTab === 'communities' ? (
+        <CommunityProfilesSection />
       ) : (
         <BusinessTab userId={user.userId} />
       )}

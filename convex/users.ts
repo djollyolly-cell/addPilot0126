@@ -643,6 +643,15 @@ export const deleteUser = mutation({
       await ctx.db.delete(notification._id);
     }
 
+    // Delete community profiles
+    const communityProfiles = await ctx.db
+      .query("communityProfiles")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const profile of communityProfiles) {
+      await ctx.db.delete(profile._id);
+    }
+
     // Finally delete the user
     await ctx.db.delete(args.userId);
 
