@@ -1,3 +1,4 @@
+// eslint-disable-next-line no-useless-escape
 const PHONE_REGEX = /(?:\+?(?:375|380|7)|8)[\s\-\(\)\.]?\d{2,3}[\s\-\(\)\.]?\d{3}[\s\-\.]?\d{2}[\s\-\.]?\d{2}/g;
 
 export interface ExtractedPhone {

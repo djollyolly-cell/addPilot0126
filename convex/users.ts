@@ -652,6 +652,15 @@ export const deleteUser = mutation({
       await ctx.db.delete(profile._id);
     }
 
+    // Delete report templates
+    const reportTemplates = await ctx.db
+      .query("reportTemplates")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const tmpl of reportTemplates) {
+      await ctx.db.delete(tmpl._id);
+    }
+
     // Finally delete the user
     await ctx.db.delete(args.userId);
 
