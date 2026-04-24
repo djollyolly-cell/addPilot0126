@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
-import type { MtVideoStats, MtCampaign } from "./vkApi";
+import type { MtVideoStats, MtCampaign, MtStatItem } from "./vkApi";
 import { withTimeout } from "./vkApi";
 import { quickTokenCheck } from "./tokenRecovery";
 
@@ -98,22 +98,29 @@ export const syncAll = internalAction({
           { accountId: account._id }
         );
 
-        // Fetch statistics, lead counts, and banners (for campaign mapping) in parallel
-        const [stats, leadCounts, banners] = await Promise.all([
-          ctx.runAction(api.vkApi.getMtStatistics, {
-            accessToken,
-            dateFrom: date,
-            dateTo: date,
-            accountId: account._id,
-          }),
-          ctx.runAction(api.vkApi.getMtLeadCounts, {
-            accessToken,
-            dateFrom: date,
-            dateTo: date,
-            accountId: account._id,
-          }),
-          ctx.runAction(api.vkApi.getMtBanners, { accessToken, accountId: account._id }),
-        ]);
+        // Fetch banners first (only active/blocked), then use their IDs for stats + leads
+        const banners = await ctx.runAction(api.vkApi.getMtBanners, { accessToken, accountId: account._id });
+
+        const bannerIds = banners.map((b: { id: number }) => String(b.id)).join(",");
+
+        // Fetch statistics and lead counts in parallel, using known banner IDs
+        const [stats, leadCounts] = bannerIds
+          ? await Promise.all([
+              ctx.runAction(api.vkApi.getMtStatistics, {
+                accessToken,
+                dateFrom: date,
+                dateTo: date,
+                accountId: account._id,
+                bannerIds,
+              }),
+              ctx.runAction(api.vkApi.getMtLeadCounts, {
+                accessToken,
+                dateFrom: date,
+                dateTo: date,
+                accountId: account._id,
+              }),
+            ])
+          : [[] as MtStatItem[], {} as Record<string, number>];
 
         // Build bannerId → campaignId map
         const bannerCampaignMap = new Map<string, string>();
