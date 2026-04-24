@@ -80,7 +80,7 @@ export const getRecent = internalQuery({
   },
 });
 
-// ─── TTL-чистка (10 дней) ───
+// ─── TTL-чистка (10 дней), batch 2000 ───
 
 export const cleanupOld = internalMutation({
   handler: async (ctx) => {
@@ -88,7 +88,7 @@ export const cleanupOld = internalMutation({
     const old = await ctx.db
       .query("systemLogs")
       .withIndex("by_createdAt", (q) => q.lt("createdAt", tenDaysAgo))
-      .take(500);
+      .take(2000);
     for (const doc of old) {
       await ctx.db.delete(doc._id);
     }

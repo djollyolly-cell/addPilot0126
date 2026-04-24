@@ -98,14 +98,14 @@ export const cleanupOldTokenHistory = internalMutation({
     const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
     let deleted = 0;
 
-    // Only delete accessToken and refreshToken records
+    // Only delete accessToken and refreshToken records, batch 500 per field
     for (const field of ["accessToken", "refreshToken"] as const) {
       const old = await ctx.db
         .query("credentialHistory")
         .withIndex("by_field_changedAt", (q) =>
           q.eq("field", field).lt("changedAt", tenDaysAgo)
         )
-        .collect();
+        .take(500);
 
       for (const record of old) {
         await ctx.db.delete(record._id);
@@ -116,6 +116,7 @@ export const cleanupOldTokenHistory = internalMutation({
     if (deleted > 0) {
       console.log(`[credentialHistory] Cleaned up ${deleted} old token records`);
     }
+    return { deleted };
   },
 });
 
