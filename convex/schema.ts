@@ -990,4 +990,41 @@ export default defineSchema({
     .index("by_orgId_date", ["orgId", "date"])
     .index("by_orgId_capturedAt", ["orgId", "capturedAt"]),
 
+  communityProfiles: defineTable({
+    userId: v.id("users"),
+    vkGroupId: v.number(),
+    vkGroupName: v.string(),
+    vkGroupAvatarUrl: v.optional(v.string()),
+    vkCommunityToken: v.string(),
+    senlerApiKey: v.optional(v.string()),
+    lastValidatedAt: v.number(),
+    lastError: v.optional(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  })
+    .index("by_userId", ["userId"])
+    .index("by_userId_group", ["userId", "vkGroupId"]),
+
+  reportTemplates: defineTable({
+    userId: v.id("users"),
+    name: v.string(),
+    description: v.optional(v.string()),
+    filters: v.object({
+      accountIds: v.array(v.id("adAccounts")),
+      campaignIds: v.optional(v.array(v.string())),
+      groupIds: v.optional(v.array(v.number())),
+      communityIds: v.optional(v.array(v.number())),
+      campaignStatus: v.optional(v.string()),
+    }),
+    granularity: v.union(
+      v.literal("day"),
+      v.literal("day_campaign"),
+      v.literal("day_group"),
+      v.literal("day_banner")
+    ),
+    fields: v.array(v.string()),
+    createdAt: v.number(),
+    updatedAt: v.number(),
+  }).index("by_userId", ["userId"]),
+
 }, { schemaValidation: false });

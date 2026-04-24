@@ -18,6 +18,7 @@ import {
   Target,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { ClientReportTab } from './reports/ClientReportTab';
 
 // ─── Types (match backend) ──────────────────────────────────────────
 
@@ -149,6 +150,35 @@ function StatCells({ impressions, clicks, ctr, spent, leads, cpl, muted }: {
 // ─── Main component ─────────────────────────────────────────────────
 
 export function ReportsPage() {
+  const [tab, setTab] = useState<'hierarchy' | 'client'>('hierarchy');
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center border-b border-border">
+        <button
+          onClick={() => setTab('hierarchy')}
+          className={`px-4 py-2 text-sm font-medium ${
+            tab === 'hierarchy' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground'
+          }`}
+          data-testid="tab-hierarchy"
+        >
+          Иерархия
+        </button>
+        <button
+          onClick={() => setTab('client')}
+          className={`px-4 py-2 text-sm font-medium ${
+            tab === 'client' ? 'border-b-2 border-primary text-primary' : 'text-muted-foreground'
+          }`}
+          data-testid="tab-client"
+        >
+          Отчёт клиенту
+        </button>
+      </div>
+      {tab === 'hierarchy' ? <HierarchyReportTab /> : <ClientReportTab />}
+    </div>
+  );
+}
+
+function HierarchyReportTab() {
   const { user } = useAuth();
   const userId = user?.userId as Id<'users'> | undefined;
 
