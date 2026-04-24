@@ -931,6 +931,85 @@ export const getMtLeadCounts = action({
   },
 });
 
+// Fetch lead details (phone, email, name) from Lead Ads API
+// Plain function (not a Convex action) — called directly from clientReport.buildReport
+export async function fetchLeadDetails(
+  accessToken: string,
+  dateFrom: string,
+  dateTo: string,
+): Promise<Array<{
+  vkLeadId: number;
+  formId: number;
+  bannerId: number;
+  createdAt: number;
+  phone?: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+}>> {
+  const subs = await callMtApi<{ items: Array<{ id: number; banner_id: number }> }>(
+    "lead_ads/vkontakte/subscriptions.json",
+    accessToken,
+    { limit: "250" }
+  );
+  if (!subs.items || subs.items.length === 0) return [];
+
+  const formToBanner = new Map<number, number>();
+  for (const sub of subs.items) {
+    formToBanner.set(sub.id, sub.banner_id);
+  }
+
+  const leads: Array<{
+    vkLeadId: number;
+    formId: number;
+    bannerId: number;
+    createdAt: number;
+    phone?: string;
+    email?: string;
+    firstName?: string;
+    lastName?: string;
+  }> = [];
+
+  const formIds = subs.items.map((s) => s.id).join(",");
+  const data = await callMtApi<{
+    items: Array<{
+      form_id: number;
+      leads: Array<{
+        id: number;
+        created: string;
+        banner_id?: number;
+        data: Record<string, string>;
+      }>;
+    }>;
+  }>(
+    "lead_ads/vkontakte/leads.json",
+    accessToken,
+    {
+      form_id: formIds,
+      date_from: dateFrom,
+      date_to: dateTo,
+      limit: "250",
+    }
+  );
+
+  for (const form of data.items ?? []) {
+    const bannerId = formToBanner.get(form.form_id) ?? 0;
+    for (const lead of form.leads ?? []) {
+      leads.push({
+        vkLeadId: lead.id,
+        formId: form.form_id,
+        bannerId: lead.banner_id ?? bannerId,
+        createdAt: new Date(lead.created).getTime(),
+        phone: lead.data?.phone,
+        email: lead.data?.email,
+        firstName: lead.data?.name,
+        lastName: lead.data?.surname,
+      });
+    }
+  }
+  return leads;
+}
+
 // Get ad_plans (VK Ads campaigns) via myTarget API v2
 // This is the authoritative source for campaign data (more complete than campaigns.json)
 export const getMtAdPlans = action({
