@@ -314,7 +314,7 @@ export const connect = mutation({
     }); } catch { /* non-critical */ }
     try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
       category: "accountConnections",
-      text: `🔗 <b>Подключён кабинет</b>\n\nКабинет: ${args.name}\nVK ID: ${args.vkAccountId}`,
+      text: `🔗 <b>Подключён кабинет</b>\n\nПользователь: ${user.name || user.email || "—"}\nКабинет: ${args.name}\nVK ID: ${args.vkAccountId}`,
     }); } catch { /* non-critical */ }
 
     return accountId;
@@ -425,6 +425,8 @@ export const disconnect = mutation({
     }
 
     // Audit log + admin alert
+    const disconnectUser = await ctx.db.get(args.userId);
+    const disconnectUserName = disconnectUser?.name || disconnectUser?.email || "—";
     try { await ctx.runMutation(internal.auditLog.log, {
       userId: args.userId,
       category: "account",
@@ -434,7 +436,7 @@ export const disconnect = mutation({
     }); } catch { /* non-critical */ }
     try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
       category: "accountConnections",
-      text: `🔌 <b>Отключён кабинет</b>\n\nКабинет: ${account.name}`,
+      text: `🔌 <b>Отключён кабинет</b>\n\nПользователь: ${disconnectUserName}\nКабинет: ${account.name}`,
     }); } catch { /* non-critical */ }
 
     // Phase 2: Schedule async batch deletion
