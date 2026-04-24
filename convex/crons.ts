@@ -211,4 +211,11 @@ crons.cron(
   internal.loadUnits.coldDeleteArchived
 );
 
+// Daily validation of community profile tokens (VK + Senler) at 04:45 UTC
+crons.cron(
+  "validate-community-profiles",
+  "45 4 * * *",
+  internal.communityProfiles.dailyValidateAll
+);
+
 export default crons;
