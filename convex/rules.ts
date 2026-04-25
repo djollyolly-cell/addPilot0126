@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { mutation, query, action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import { checkOrgWritable } from "./loadUnits";
 
 /**
@@ -62,7 +63,7 @@ async function validateRotationConflicts(
   ctx: { db: any },
   userId: Id<"users">,
   targetCampaignIds: string[] | undefined,
-  targetAccountIds: Id<"adAccounts">[],
+  _targetAccountIds: Id<"adAccounts">[],
   excludeRuleId?: Id<"rules">
 ): Promise<string | null> {
   const allRules = await ctx.db
