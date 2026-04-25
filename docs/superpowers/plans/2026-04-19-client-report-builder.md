@@ -6,7 +6,7 @@
 
 **Goal:** Новая вкладка «Отчёт клиенту» в `ReportsPage`: настраиваемый конструктор с полями, гранулярностью, фильтрами, шаблонами (10 на пользователя). Данные собираются on-demand при нажатии «Применить», без хранения диалогов/сообщений. Выгрузка в Excel.
 
-**Architecture:** Backend делит работу между каталогом полей (`lib/reportFieldCatalog.ts`), парсером номеров (`lib/phoneExtractor.ts`), расширенными API-клиентами VK и Senler, и монолитным action'ом `buildReport` в `clientReport.ts`. Frontend — один крупный компонент `ClientReportTab` + три вспомогательных (FieldPicker, TemplateSelector, PhonesDrawer) + утилита экспорта в Excel.
+**Architecture:** Backend делит работу между каталогом полей (`reportFieldCatalog.ts`), парсером номеров (`phoneExtractor.ts`), расширенными API-клиентами VK и Senler, и монолитным action'ом `buildReport` в `clientReport.ts`. Frontend — один крупный компонент `ClientReportTab` + три вспомогательных (FieldPicker, TemplateSelector, PhonesDrawer) + утилита экспорта в Excel.
 
 **Tech Stack:** Convex actions/mutations/queries, `xlsx` для Excel, React/TypeScript, shadcn/ui.
 
@@ -17,8 +17,8 @@
 ## File Structure
 
 **Backend (создаём):**
-- `convex/lib/reportFieldCatalog.ts` — каталог полей (общий для backend+frontend)
-- `convex/lib/phoneExtractor.ts` — regex + нормализация
+- `convex/reportFieldCatalog.ts` — каталог полей (общий для backend+frontend)
+- `convex/phoneExtractor.ts` — regex + нормализация
 - `convex/reportTemplates.ts` — CRUD шаблонов
 - `convex/clientReport.ts` — главный action `buildReport`
 
@@ -28,7 +28,7 @@
 - `convex/senlerApi.ts` — добавить `getSubscribersByDateRange`
 
 **Backend (тесты):**
-- `convex/lib/phoneExtractor.test.ts` — юнит-тесты регекса/нормализации
+- `convex/phoneExtractor.test.ts` — юнит-тесты регекса/нормализации
 - `convex/reportTemplates.test.ts` — лимит/уникальность/ownership
 
 **Frontend (создаём):**
@@ -51,7 +51,7 @@
 
 - [ ] **Step 1: Добавить таблицу в `convex/schema.ts`**
 
-Сразу после добавленной в Plan A таблицы `communityProfiles`:
+Добавить после `communityProfiles` (добавленной в Plan A), перед закрывающей строкой `}, { schemaValidation: false });`:
 
 ```typescript
   reportTemplates: defineTable({
@@ -60,7 +60,7 @@
     description: v.optional(v.string()),
     filters: v.object({
       accountIds: v.array(v.id("adAccounts")),
-      campaignIds: v.optional(v.array(v.number())),
+      campaignIds: v.optional(v.array(v.string())),  // VK campaign IDs as strings (matches metricsDaily.campaignId)
       groupIds: v.optional(v.array(v.number())),
       communityIds: v.optional(v.array(v.number())),
       campaignStatus: v.optional(v.string()),
@@ -94,7 +94,7 @@ git commit -m "feat(schema): add reportTemplates table"
 ## Task 2: Каталог полей отчёта
 
 **Files:**
-- Create: `convex/lib/reportFieldCatalog.ts`
+- Create: `convex/reportFieldCatalog.ts`
 
 - [ ] **Step 1: Создать файл**
 
@@ -131,7 +131,7 @@ export const FIELD_CATALOG: FieldDefinition[] = [
   { id: "cpl", label: "CPL", category: "ads", dependencies: ["leads", "spent"] },
 
   // Community
-  { id: "group_joinings", label: "Подписки на группу", category: "community" },
+  // group_joinings убран — нет надёжного источника данных (нужен VK statistics events API, выходит за scope)
   { id: "message_starts", label: "Старты сообщений", category: "community", requiresCommunityProfile: true },
   { id: "phones_count", label: "Номеров найдено", category: "community", requiresCommunityProfile: true },
   { id: "phones_detail", label: "Номера: детали", category: "community", dependencies: ["phones_count"], requiresCommunityProfile: true },
@@ -162,7 +162,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add convex/lib/reportFieldCatalog.ts
+git add convex/reportFieldCatalog.ts
 git commit -m "feat(reports): add field catalog shared between backend and frontend"
 ```
 
@@ -171,13 +171,13 @@ git commit -m "feat(reports): add field catalog shared between backend and front
 ## Task 3: Phone extractor с тестами
 
 **Files:**
-- Create: `convex/lib/phoneExtractor.ts`
-- Create: `convex/lib/phoneExtractor.test.ts`
+- Create: `convex/phoneExtractor.ts`
+- Create: `convex/phoneExtractor.test.ts`
 
 - [ ] **Step 1: Failing тесты**
 
 ```typescript
-// convex/lib/phoneExtractor.test.ts
+// convex/phoneExtractor.test.ts
 import { describe, test, expect } from "vitest";
 import { extractPhones, normalizePhone } from "./phoneExtractor";
 
@@ -208,6 +208,10 @@ describe("extractPhones", () => {
     const r = extractPhones("тел: 80291234567");
     expect(r.map((p) => p.phone)).toEqual(["+375291234567"]);
   });
+  test("89991234567 is RU not BY", () => {
+    const r = extractPhones("тел: 89991234567");
+    expect(r.map((p) => p.phone)).toEqual(["+79991234567"]);
+  });
   test("returns empty for text without phones", () => {
     expect(extractPhones("просто текст без цифр")).toEqual([]);
   });
@@ -216,13 +220,13 @@ describe("extractPhones", () => {
 
 - [ ] **Step 2: Запустить — упадут**
 
-Run: `npx vitest run convex/lib/phoneExtractor.test.ts`
+Run: `npx vitest run convex/phoneExtractor.test.ts`
 Expected: FAIL
 
 - [ ] **Step 3: Реализовать**
 
 ```typescript
-// convex/lib/phoneExtractor.ts
+// convex/phoneExtractor.ts
 
 const PHONE_REGEX = /(?:\+?(?:375|380|7)|8)[\s\-\(\)\.]?\d{2,3}[\s\-\(\)\.]?\d{3}[\s\-\.]?\d{2}[\s\-\.]?\d{2}/g;
 
@@ -233,9 +237,15 @@ export interface ExtractedPhone {
 
 export function normalizePhone(raw: string): string {
   const digits = raw.replace(/\D/g, "");
-  // BY: 8029... → +375 29...
+  // BY mobile codes: 029, 033, 044, 025, 017
+  const BY_CODES = ["029", "033", "044", "025", "017"];
   if (digits.startsWith("80") && digits.length === 11) {
-    return "+375" + digits.slice(2);
+    const code = digits.slice(1, 4);  // e.g. "029"
+    if (BY_CODES.includes(code)) {
+      return "+375" + digits.slice(2);
+    }
+    // Not a BY code — treat as RU (8 → +7)
+    return "+7" + digits.slice(1);
   }
   if (digits.startsWith("8") && digits.length === 11) {
     return "+7" + digits.slice(1);
@@ -243,7 +253,6 @@ export function normalizePhone(raw: string): string {
   if (digits.startsWith("375") || digits.startsWith("380") || digits.startsWith("7")) {
     return "+" + digits;
   }
-  // Fallback — just prefix +
   return "+" + digits;
 }
 
@@ -267,13 +276,13 @@ export function extractPhones(text: string): ExtractedPhone[] {
 
 - [ ] **Step 4: Тесты должны пройти**
 
-Run: `npx vitest run convex/lib/phoneExtractor.test.ts`
+Run: `npx vitest run convex/phoneExtractor.test.ts`
 Expected: PASS (7 тестов)
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add convex/lib/phoneExtractor.ts convex/lib/phoneExtractor.test.ts
+git add convex/phoneExtractor.ts convex/phoneExtractor.test.ts
 git commit -m "feat(reports): add phone extractor for Russia/Belarus/Ukraine formats"
 ```
 
@@ -573,13 +582,13 @@ Expected: FAIL
 ```typescript
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
-import { isValidField } from "./lib/reportFieldCatalog";
+import { isValidField } from "./reportFieldCatalog";
 
 const TEMPLATE_LIMIT = 10;
 
 const filtersValidator = v.object({
   accountIds: v.array(v.id("adAccounts")),
-  campaignIds: v.optional(v.array(v.number())),
+  campaignIds: v.optional(v.array(v.string())),
   groupIds: v.optional(v.array(v.number())),
   communityIds: v.optional(v.array(v.number())),
   campaignStatus: v.optional(v.string()),
@@ -817,11 +826,11 @@ export type Granularity = "day" | "day_campaign" | "day_group" | "day_banner";
 export interface ReportRow {
   date: string;
   weekday?: string;
-  campaignId?: number;
+  campaignId?: string;
   campaignName?: string;
-  groupId?: number;
+  groupId?: string;
   groupName?: string;
-  adId?: number;
+  adId?: string;
   adName?: string;
   communityId?: number;
   communityName?: string;
@@ -835,7 +844,6 @@ export interface ReportRow {
   cpm?: number;
   leads?: number;
   cpl?: number;
-  group_joinings?: number;
   message_starts?: number;
   phones_count?: number;
   senler_subs?: number;
@@ -850,9 +858,9 @@ export interface PhoneEntry {
   dialogUrl?: string;
   source: "vk_dialog" | "lead_ad";
   // Контекст в зависимости от гранулярности
-  campaignId?: number;
-  groupId?: number;
-  adId?: number;
+  campaignId?: string;
+  groupId?: string;
+  adId?: string;
 }
 
 export interface ReportResult {
@@ -861,13 +869,7 @@ export interface ReportResult {
   rows: ReportRow[];
   totals: Partial<ReportRow>;
   phonesDetail: PhoneEntry[];
-  communitySummary?: Array<{
-    communityId: number;
-    name: string;
-    newDialogs: number;
-    phonesFound: number;
-    senlerSubs: number;
-  }>;
+  // communitySummary — отложено, данные агрегируются в rows/totals
   partialErrors: string[];
 }
 
@@ -917,7 +919,7 @@ export const buildReport = action({
   args: {
     userId: v.id("users"),
     accountIds: v.array(v.id("adAccounts")),
-    campaignIds: v.optional(v.array(v.number())),
+    campaignIds: v.optional(v.array(v.string())),
     groupIds: v.optional(v.array(v.number())),
     communityIds: v.optional(v.array(v.number())),
     campaignStatus: v.optional(v.string()),
@@ -1007,26 +1009,26 @@ export const buildReport = action({
 
 function buildKey(
   granularity: Granularity,
-  m: { date: string; campaignId?: number; adId: string }
+  m: { date: string; campaignId?: string; adId: string }
 ): string {
   switch (granularity) {
     case "day": return m.date;
-    case "day_campaign": return `${m.date}|c${m.campaignId ?? 0}`;
-    case "day_group": return `${m.date}|c${m.campaignId ?? 0}|g`;
+    case "day_campaign": return `${m.date}|c${m.campaignId ?? ""}`;
+    case "day_group": return `${m.date}|c${m.campaignId ?? ""}|g`;
     case "day_banner": return `${m.date}|a${m.adId}`;
   }
 }
 
 function initRow(
   granularity: Granularity,
-  m: { date: string; campaignId?: number; adId: string }
+  m: { date: string; campaignId?: string; adId: string }
 ): ReportRow {
   const row: ReportRow = { date: m.date };
   if (granularity === "day_campaign" || granularity === "day_group" || granularity === "day_banner") {
     row.campaignId = m.campaignId;
   }
   if (granularity === "day_banner") {
-    row.adId = Number(m.adId);
+    row.adId = m.adId;
   }
   return row;
 }
@@ -1034,7 +1036,7 @@ function initRow(
 function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> {
   const totals: Partial<ReportRow> = {};
   let impressions = 0, clicks = 0, spent = 0, leads = 0;
-  let messageStarts = 0, phonesCount = 0, senlerSubs = 0, groupJoinings = 0;
+  let messageStarts = 0, phonesCount = 0, senlerSubs = 0;
   for (const r of rows) {
     impressions += r.impressions ?? 0;
     clicks += r.clicks ?? 0;
@@ -1043,7 +1045,6 @@ function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> 
     messageStarts += r.message_starts ?? 0;
     phonesCount += r.phones_count ?? 0;
     senlerSubs += r.senler_subs ?? 0;
-    groupJoinings += r.group_joinings ?? 0;
   }
   if (fields.includes("impressions")) totals.impressions = impressions;
   if (fields.includes("clicks")) totals.clicks = clicks;
@@ -1057,7 +1058,6 @@ function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> 
   if (fields.includes("message_starts")) totals.message_starts = messageStarts;
   if (fields.includes("phones_count")) totals.phones_count = phonesCount;
   if (fields.includes("senler_subs")) totals.senler_subs = senlerSubs;
-  if (fields.includes("group_joinings")) totals.group_joinings = groupJoinings;
   return totals;
 }
 ```
@@ -1104,7 +1104,7 @@ export const _readCommunityProfiles = internalQuery({
 
 ```typescript
 import { messagesGetConversations, messagesGetHistory, usersGet } from "./vkCommunityApi";
-import { extractPhones, normalizePhone } from "./lib/phoneExtractor";
+import { extractPhones, normalizePhone } from "./phoneExtractor";
 ```
 
 В теле `buildReport`, после Ad metrics секции, добавить:
@@ -1234,8 +1234,12 @@ import { extractPhones, normalizePhone } from "./lib/phoneExtractor";
 
 ```typescript
 function buildKeyFromDate(granularity: Granularity, date: string): string {
-  // Для community-агрегатов у нас нет campaignId/adId — возвращаем по дате
-  return granularity === "day" ? date : `${date}|community`;
+  // Для community-агрегатов у нас нет campaignId/adId.
+  // При day — агрегируем в ту же строку (дата — общий ключ для всех источников).
+  // При day_campaign/day_group/day_banner — создаём отдельную строку с префиксом "comm:",
+  // чтобы community-данные не смешивались с ad-строками (у которых ключ = date|campaignId|...).
+  if (granularity === "day") return date;
+  return `comm:${date}`;
 }
 ```
 
@@ -1274,80 +1278,91 @@ Expected: найти `getMtLeadCounts` (уже есть для подсчёта)
 
 - [ ] **Step 2: Добавить новую функцию в `vkApi.ts`**
 
-После `getMtLeadCounts` добавить:
+После `getMtLeadCounts` добавить plain exported async function (НЕ Convex action, т.к. `ctx.runAction()` из action запрещён в Convex):
 
 ```typescript
-// Get lead details (with contact info) per banner
-export const getMtLeadDetails = internalAction({
-  args: {
-    accessToken: v.string(),
-    dateFrom: v.string(),   // "YYYY-MM-DD"
-    dateTo: v.string(),
-  },
-  handler: async (_ctx, args) => {
-    // Сначала получаем все form_id по subscriptions
-    const subs = await callMtApi<{ items: Array<{ id: number; banner_id: number }> }>(
-      "lead_ads/vkontakte/subscriptions.json",
-      args.accessToken,
-      { limit: "250" }
-    );
-    const formIds = Array.from(new Set(subs.items.map((s) => s.id)));
+// In convex/vkApi.ts — exported utility function (NOT a Convex action)
+// Called directly from clientReport.buildReport action
 
-    const leads: Array<{
-      vkLeadId: number;
-      formId: number;
-      bannerId: number;
-      createdAt: number;
-      phone?: string;
-      email?: string;
-      firstName?: string;
-      lastName?: string;
-    }> = [];
+export async function fetchLeadDetails(
+  accessToken: string,
+  dateFrom: string,
+  dateTo: string,
+): Promise<Array<{
+  vkLeadId: number;
+  formId: number;
+  bannerId: number;
+  createdAt: number;
+  phone?: string;
+  email?: string;
+  firstName?: string;
+  lastName?: string;
+}>> {
+  const subs = await callMtApi<{ items: Array<{ id: number; banner_id: number }> }>(
+    "lead_ads/vkontakte/subscriptions.json",
+    accessToken,
+    { limit: "250" }
+  );
+  const formIds = Array.from(new Set(subs.items.map((s) => s.id)));
 
-    for (const formId of formIds) {
-      const data = await callMtApi<{
-        items: Array<{
-          form_id: number;
-          leads: Array<{
-            id: number;
-            created: string;
-            banner_id: number;
-            data: Record<string, string>;
-          }>;
+  const leads: Array<{
+    vkLeadId: number;
+    formId: number;
+    bannerId: number;
+    createdAt: number;
+    phone?: string;
+    email?: string;
+    firstName?: string;
+    lastName?: string;
+  }> = [];
+
+  for (const formId of formIds) {
+    const data = await callMtApi<{
+      items: Array<{
+        form_id: number;
+        leads: Array<{
+          id: number;
+          created: string;
+          banner_id: number;
+          data: Record<string, string>;
         }>;
-      }>(
-        "lead_ads/vkontakte/leads.json",
-        args.accessToken,
-        {
-          form_id: String(formId),
-          date_from: args.dateFrom,
-          date_to: args.dateTo,
-          limit: "250",
-        }
-      );
-      for (const form of data.items) {
-        for (const lead of form.leads) {
-          leads.push({
-            vkLeadId: lead.id,
-            formId: form.form_id,
-            bannerId: lead.banner_id,
-            createdAt: new Date(lead.created).getTime(),
-            phone: lead.data.phone,
-            email: lead.data.email,
-            firstName: lead.data.name,
-            lastName: lead.data.surname,
-          });
-        }
+      }>;
+    }>(
+      "lead_ads/vkontakte/leads.json",
+      accessToken,
+      {
+        form_id: String(formId),
+        date_from: dateFrom,
+        date_to: dateTo,
+        limit: "250",
+      }
+    );
+    for (const form of data.items) {
+      for (const lead of form.leads) {
+        leads.push({
+          vkLeadId: lead.id,
+          formId: form.form_id,
+          bannerId: lead.banner_id,
+          createdAt: new Date(lead.created).getTime(),
+          phone: lead.data.phone,
+          email: lead.data.email,
+          firstName: lead.data.name,
+          lastName: lead.data.surname,
+        });
       }
     }
-    return leads;
-  },
-});
+  }
+  return leads;
+}
 ```
 
-(Добавить `internalAction` в импорты, если его нет.)
-
 - [ ] **Step 3: В `clientReport.ts` — дёрнуть lead details**
+
+В импорты `clientReport.ts` добавить:
+
+```typescript
+import { fetchLeadDetails } from "./vkApi";
+```
 
 После блока community-диалогов, перед `totals`:
 
@@ -1361,11 +1376,11 @@ export const getMtLeadDetails = internalAction({
       for (const acc of accounts) {
         if (!acc.accessToken) continue;
         try {
-          const leads = await ctx.runAction(internal.vkApi.getMtLeadDetails, {
-            accessToken: acc.accessToken,
-            dateFrom: args.dateFrom,
-            dateTo: args.dateTo,
-          });
+          const leads = await fetchLeadDetails(
+            acc.accessToken,
+            args.dateFrom,
+            args.dateTo,
+          );
           for (const lead of leads) {
             if (lead.phone) {
               phonesDetail.push({
@@ -1425,7 +1440,13 @@ git commit -m "feat(clientReport): add Lead Ads details fetching for phones_deta
 
 - [ ] **Step 1: Добавить Senler-блок и финализирующую логику**
 
-После Lead Ads блока, перед totals:
+Сначала добавить статический импорт в начало файла `convex/clientReport.ts`:
+
+```typescript
+import { getSubscribersByDateRange } from "./senlerApi";
+```
+
+Затем после Lead Ads блока, перед totals:
 
 ```typescript
     // 4. Senler subs
@@ -1439,7 +1460,6 @@ git commit -m "feat(clientReport): add Lead Ads details fetching for phones_deta
       for (const profile of profiles) {
         if (!profile.senlerApiKey) continue;
         try {
-          const { getSubscribersByDateRange } = await import("./senlerApi");
           const subs = await getSubscribersByDateRange(
             profile.senlerApiKey, fromTs, toTs
           );
@@ -1511,7 +1531,7 @@ git commit -m "feat(clientReport): add Senler subs fetching and phones_count agg
 Т.к. convex/lib не импортируется в frontend (разные tsconfig), дублируем каталог:
 
 ```typescript
-// Mirror of convex/lib/reportFieldCatalog.ts
+// Mirror of convex/reportFieldCatalog.ts
 // Держать в синхронизации вручную — изменения в backend отражать здесь.
 
 export type FieldCategory = "time" | "ads" | "community";
@@ -1536,7 +1556,6 @@ export const FIELD_CATALOG: FieldDefinition[] = [
   { id: "cpm", label: "CPM", category: "ads", dependencies: ["impressions", "spent"] },
   { id: "leads", label: "Лиды (формы)", category: "ads" },
   { id: "cpl", label: "CPL", category: "ads", dependencies: ["leads", "spent"] },
-  { id: "group_joinings", label: "Подписки на группу", category: "community" },
   { id: "message_starts", label: "Старты сообщений", category: "community", requiresCommunityProfile: true },
   { id: "phones_count", label: "Номеров найдено", category: "community", requiresCommunityProfile: true },
   { id: "phones_detail", label: "Номера: детали", category: "community", dependencies: ["phones_count"], requiresCommunityProfile: true },
@@ -2360,10 +2379,9 @@ git commit -m "feat(reports): add ClientReportTab main component"
 
 Текущий экспорт `ReportsPage` уже возвращает страницу с иерархией. Нам нужно добавить переключение между двумя вкладками.
 
-Открыть `src/pages/ReportsPage.tsx`. Сразу после импортов вверху добавить:
+Открыть `src/pages/ReportsPage.tsx`. `useState` уже импортирован. Добавить только импорт `ClientReportTab` после существующих импортов:
 
 ```tsx
-import { useState } from "react";
 import { ClientReportTab } from "./reports/ClientReportTab";
 ```
 
@@ -2436,7 +2454,7 @@ git commit -m "feat(reports): add tabs (Hierarchy / Client report) to ReportsPag
 - [ ] **Step 1: Прогнать все новые тесты**
 
 ```bash
-npx vitest run convex/lib/phoneExtractor.test.ts convex/reportTemplates.test.ts
+npx vitest run convex/phoneExtractor.test.ts convex/reportTemplates.test.ts
 ```
 Expected: PASS (всего ~15 тестов новых)
 
@@ -2472,10 +2490,44 @@ Expected: PASS (≤ 50 warnings)
 
 ---
 
+## Task 20: Каскадное удаление reportTemplates при deleteUser
+
+**Files:**
+- Modify: `convex/users.ts`
+
+- [ ] **Step 1: Добавить удаление reportTemplates в `deleteUser`**
+
+В `convex/users.ts`, функция `deleteUser`. Добавить блок **перед** `// Finally delete the user`:
+
+```typescript
+    // Delete report templates
+    const reportTemplates = await ctx.db
+      .query("reportTemplates")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const tmpl of reportTemplates) {
+      await ctx.db.delete(tmpl._id);
+    }
+```
+
+- [ ] **Step 2: Typecheck**
+
+Run: `npx tsc --noEmit -p convex/tsconfig.json`
+Expected: PASS
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add convex/users.ts
+git commit -m "fix(users): cascade delete reportTemplates on user deletion"
+```
+
+---
+
 ## Done criteria
 
 - [ ] Схема содержит `reportTemplates` с индексом
-- [ ] Каталог полей (17 позиций) в backend + frontend
+- [ ] Каталог полей (16 позиций, без group_joinings) в backend + frontend
 - [ ] Phone extractor с тестами покрывает RU/BY/UA
 - [ ] VK API расширен (getConversations, getHistory, usersGet)
 - [ ] Senler API расширен (getSubscribersByDateRange)
@@ -2484,5 +2536,6 @@ Expected: PASS (≤ 50 warnings)
 - [ ] UI: ClientReportTab + FieldPicker + TemplateSelector + PhonesDrawer
 - [ ] Excel export (3 листа)
 - [ ] Вкладки в ReportsPage работают
+- [ ] `deleteUser` каскадно удаляет reportTemplates
 - [ ] Все тесты проходят, typecheck/lint — clean
 - [ ] Ручная проверка на реальных данных

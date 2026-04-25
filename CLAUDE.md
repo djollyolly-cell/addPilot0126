@@ -47,6 +47,32 @@ Detailed rules are in `.claude/rules/`:
 - **Path alias:** `@/*` → `./src/*`
 - **Testing:** Add `data-testid` to key elements.
 
+## Plans & Schema Changes
+
+- Before writing/reviewing a plan: READ every file the plan modifies.
+- New table with `userId` → add to `deleteUser` cascade + `data-retention.md`.
+- After writing a plan: integration check — every import path, every type, every UI pattern verified against real code. Do NOT claim "done" without this.
+
+## Pre-Commit Verification
+
+- ALWAYS run `npx tsc --noEmit -p convex/tsconfig.json` before committing Convex changes. Must see clean output — no exceptions.
+- After adding/renaming files in `convex/` — `_generated/api.ts` must be in sync; typecheck catches missing `internal.*` references.
+- Check source files for encoding issues (broken UTF-8 characters like `Но��еров`).
+
+## Feature Implementation Checks
+
+- **Data chain first:** Before implementing a feature, trace DB schema → backend query → frontend display. If a field is missing in `schema.ts`, the feature **cannot work** — don't build UI for it.
+- **Happy path walkthrough:** After writing aggregation/grouping code, mentally walk 1 example through the full pipeline. Verify grouping keys produce unique values for distinct entities.
+- **Fresh data vs cache:** For client-facing reports, call VK API directly (`fetchStatsBatched` + `statistics/banners/day.json`) instead of reading from `metricsDaily` cache. Cache is for rule engine 5-min monitoring, not for accurate reports.
+- **Leads context matters:** Rule engine uses `countLeadsFromRow()` with Math.max from 5 sources. Client report (`clientReport.ts`) splits results by campaign objective via `resolveCategory(packageSlug, objective)` into categories (subscribes/messages/lead_forms/other). Don't mix these approaches.
+- **Verify real API responses before writing parsers.** Never assume response format — write a diagnostic script, call the API, inspect actual data. Package names turned out to be technical slugs (`or_tt_crossdevice_..._pricedGoals_join`), not human-readable Russian strings.
+- **Date filtering:** When extracting data from messages/events, always filter by the requested date range (`>= fromTs && <= toTs`). Don't let old data leak into reports.
+- **Dialog start = first message date**, not last. Use `messagesGetHistory(rev=0, count=1)` to get the actual first message in a conversation.
+- **Expected API errors:** Handle known non-error responses gracefully (e.g. Lead Ads 404 = account has no lead forms → skip silently, don't add to `partialErrors`).
+- **Floating point:** Round `spent` after each summation with `Math.round(... * 100) / 100` to avoid values like `3399.9999999999995`.
+- **Never offer UI options the backend can't fulfill** (e.g. `day_group` granularity when the data source has no `groupId` field).
+- **NEVER write rules/docs about code without reading the actual current code first.** Verify every function name, every argument, every mechanic against the real file.
+
 ## Debugging & Fix Discipline
 
 - Do not fix symptoms before identifying the root cause.

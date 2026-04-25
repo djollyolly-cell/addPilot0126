@@ -27,9 +27,9 @@
 - `convex/communityProfiles.test.ts` — unit-тесты на мутации (create/update/remove) + лимит
 
 **Frontend (создаём):**
-- `src/pages/settings/CommunityProfilesSection.tsx` — карточка со списком
-- `src/pages/settings/components/CommunityProfileModal.tsx` — 3-шаговая модалка
-- `src/pages/settings/components/CommunityProfileCard.tsx` — маленький компонент карточки одного профиля
+- `src/components/CommunityProfilesSection.tsx` — карточка со списком
+- `src/components/CommunityProfileModal.tsx` — 3-шаговая модалка
+- `src/components/CommunityProfileCard.tsx` — маленький компонент карточки одного профиля
 
 **Frontend (модифицируем):**
 - `src/pages/SettingsPage.tsx` — добавить секцию
@@ -43,7 +43,7 @@
 
 - [ ] **Step 1: Открыть `convex/schema.ts` и добавить таблицу после `payments`**
 
-Найти строку `payments: defineTable({` (примерно строка 358) и после закрывающей скобки/индексов этой таблицы добавить:
+Добавить перед закрывающей строкой `}, { schemaValidation: false });` (строка ~993, после таблицы `loadUnitsHistory`):
 
 ```typescript
   communityProfiles: defineTable({
@@ -86,38 +86,48 @@ VK API — это `api.vk.com/method/*`, параметры в query-string, т�
 - [ ] **Step 1: Создать `convex/vkCommunityApi.ts`**
 
 ```typescript
-// VK API client — separate from vkApi.ts (myTarget), uses api.vk.com
+// VK API client — separate from vkApi.ts (myTarget API, uses target.my.com)
+// This file uses VK API (api.vk.com) for community methods (groups, messages)
+// Version 5.199 required for groups.getById new response format { groups: [...] }
+// (vkApi.ts uses 5.131 for myTarget — different API, different versioning)
 // Docs: https://dev.vk.com/ru/method
 const VK_API_BASE = "https://api.vk.com/method";
 const VK_API_VERSION = "5.199";
 
 export type VkApiError = { code: number; message: string };
 
+const VK_MAX_RETRIES = 3;
+const VK_RETRY_DELAY_MS = 400;
+
 async function callVkApi<T>(
   method: string,
   accessToken: string,
   params: Record<string, string | number> = {}
 ): Promise<T> {
-  const url = new URL(`${VK_API_BASE}/${method}`);
-  for (const [k, v] of Object.entries(params)) {
-    url.searchParams.set(k, String(v));
-  }
-  url.searchParams.set("access_token", accessToken);
-  url.searchParams.set("v", VK_API_VERSION);
+  for (let attempt = 0; attempt < VK_MAX_RETRIES; attempt++) {
+    const url = new URL(`${VK_API_BASE}/${method}`);
+    for (const [k, v] of Object.entries(params)) {
+      url.searchParams.set(k, String(v));
+    }
+    url.searchParams.set("access_token", accessToken);
+    url.searchParams.set("v", VK_API_VERSION);
 
-  const res = await fetch(url.toString());
-  if (!res.ok) {
-    throw new Error(`VK API HTTP ${res.status}: ${await res.text()}`);
+    const res = await fetch(url.toString());
+    if (!res.ok) {
+      throw new Error(`VK API HTTP ${res.status}: ${await res.text()}`);
+    }
+    const json = (await res.json()) as { response?: T; error?: VkApiError };
+    if (json.error) {
+      // Code 6 = Too many requests per second — retry with backoff
+      if (json.error.code === 6 && attempt < VK_MAX_RETRIES - 1) {
+        await new Promise((r) => setTimeout(r, VK_RETRY_DELAY_MS * (attempt + 1)));
+        continue;
+      }
+      throw new Error(`VK API error ${json.error.code}: ${json.error.message}`);
+    }
+    return json.response as T;
   }
-  const json = (await res.json()) as { response?: T; error?: VkApiError };
-  if (json.error) {
-    const err = json.error;
-    // Code 5 = Authorization failed (bad token)
-    // Code 15 = Access denied
-    // Code 100 = Invalid parameter
-    throw new Error(`VK API error ${err.code}: ${err.message}`);
-  }
-  return json.response as T;
+  throw new Error("VK API: max retries exceeded");
 }
 
 export interface VkGroupInfo {
@@ -796,11 +806,11 @@ export const dailyValidateAll = internalAction({
 В конец файла (перед `export default crons;`) добавить:
 
 ```typescript
-// Daily validation of community profile tokens (VK + Senler) at 04:15 UTC
-// (offset 15 min from cleanup-old-ai-generations cron)
+// Daily validation of community profile tokens (VK + Senler) at 04:45 UTC
+// (offset 45 min from cleanup-old-ai-generations cron)
 crons.cron(
   "validate-community-profiles",
-  "15 4 * * *",
+  "45 4 * * *",
   internal.communityProfiles.dailyValidateAll
 );
 ```
@@ -814,7 +824,7 @@ Expected: PASS
 
 ```bash
 git add convex/communityProfiles.ts convex/crons.ts
-git commit -m "feat(communityProfiles): add daily validation cron (04:15 UTC)"
+git commit -m "feat(communityProfiles): add daily validation cron (04:45 UTC)"
 ```
 
 ---
@@ -824,7 +834,7 @@ git commit -m "feat(communityProfiles): add daily validation cron (04:15 UTC)"
 Маленький компонент для одной карточки — отображение + кнопки. Выносим в отдельный файл, чтобы основная секция была проще.
 
 **Files:**
-- Create: `src/pages/settings/components/CommunityProfileCard.tsx`
+- Create: `src/components/CommunityProfileCard.tsx`
 
 - [ ] **Step 1: Создать компонент**
 
@@ -832,9 +842,10 @@ git commit -m "feat(communityProfiles): add daily validation cron (04:15 UTC)"
 import { Button } from "@/components/ui/button";
 import { formatRelativeTime } from "@/lib/utils";
 import { AlertCircle, CheckCircle, Pencil, Trash2 } from "lucide-react";
+import { Id } from "../../convex/_generated/dataModel";
 
 export interface CommunityProfile {
-  _id: string;
+  _id: Id<"communityProfiles">;
   vkGroupId: number;
   vkGroupName: string;
   vkGroupAvatarUrl?: string;
@@ -885,7 +896,7 @@ export function CommunityProfileCard({
               Ошибка токена
             </span>
           ) : (
-            <span className="flex items-center gap-1 text-green-600">
+            <span className="flex items-center gap-1 text-success">
               <CheckCircle className="h-3 w-3" />
               Токен проверен {formatRelativeTime(profile.lastValidatedAt)}
             </span>
@@ -919,7 +930,7 @@ Expected: PASS (в новом файле не должно быть ошибок
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/pages/settings/components/CommunityProfileCard.tsx
+git add src/components/CommunityProfileCard.tsx
 git commit -m "feat(settings/community-profiles): add CommunityProfileCard component"
 ```
 
@@ -928,15 +939,15 @@ git commit -m "feat(settings/community-profiles): add CommunityProfileCard compo
 ## Task 12: Frontend — `CommunityProfileModal` (3-шаговый мастер)
 
 **Files:**
-- Create: `src/pages/settings/components/CommunityProfileModal.tsx`
+- Create: `src/components/CommunityProfileModal.tsx`
 
 - [ ] **Step 1: Создать компонент (единый файл с внутренним стейт-машиной шагов)**
 
 ```tsx
 import { useState } from "react";
 import { useAction, useMutation } from "convex/react";
-import { api } from "../../../../convex/_generated/api";
-import { Id } from "../../../../convex/_generated/dataModel";
+import { api } from "../../convex/_generated/api";
+import { Id } from "../../convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1097,7 +1108,7 @@ export function CommunityProfileModal({
 
         {step === "senler" && validated && (
           <div className="space-y-3">
-            <div className="p-3 rounded-lg bg-green-500/10 text-green-700 text-sm flex items-center gap-2">
+            <div className="p-3 rounded-lg bg-success/10 text-success text-sm flex items-center gap-2">
               <CheckCircle className="h-4 w-4" />
               Сообщество: <strong>{validated.vkGroupName}</strong>
             </div>
@@ -1140,8 +1151,8 @@ export function CommunityProfileModal({
           <div className="space-y-3">
             <div className="p-3 rounded-lg bg-muted text-sm space-y-1">
               <div>Сообщество: <strong>{validated.vkGroupName}</strong></div>
-              <div>VK токен: <span className="text-green-600">ok</span></div>
-              <div>Senler: {skipSenler ? "не подключён" : <span className="text-green-600">ok</span>}</div>
+              <div>VK токен: <span className="text-success">ok</span></div>
+              <div>Senler: {skipSenler ? "не подключён" : <span className="text-success">ok</span>}</div>
             </div>
             <div className="flex gap-2 justify-end">
               <Button variant="outline" onClick={() => setStep("senler")}>Назад</Button>
@@ -1170,7 +1181,7 @@ Expected: PASS
 - [ ] **Step 3: Commit**
 
 ```bash
-git add src/pages/settings/components/CommunityProfileModal.tsx
+git add src/components/CommunityProfileModal.tsx
 git commit -m "feat(settings/community-profiles): add 3-step CommunityProfileModal wizard"
 ```
 
@@ -1179,7 +1190,7 @@ git commit -m "feat(settings/community-profiles): add 3-step CommunityProfileMod
 ## Task 13: Frontend — `CommunityProfilesSection` + Wire into `SettingsPage`
 
 **Files:**
-- Create: `src/pages/settings/CommunityProfilesSection.tsx`
+- Create: `src/components/CommunityProfilesSection.tsx`
 - Modify: `src/pages/SettingsPage.tsx`
 
 - [ ] **Step 1: Создать секцию**
@@ -1187,14 +1198,14 @@ git commit -m "feat(settings/community-profiles): add 3-step CommunityProfileMod
 ```tsx
 import { useState } from "react";
 import { useQuery, useMutation } from "convex/react";
-import { api } from "../../../convex/_generated/api";
-import { Id } from "../../../convex/_generated/dataModel";
+import { api } from "../../convex/_generated/api";
+import { Id } from "../../convex/_generated/dataModel";
 import { useAuth } from "@/lib/useAuth";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Plus, Loader2, Users } from "lucide-react";
-import { CommunityProfileCard } from "./components/CommunityProfileCard";
-import { CommunityProfileModal } from "./components/CommunityProfileModal";
+import { CommunityProfileCard } from "@/components/CommunityProfileCard";
+import { CommunityProfileModal } from "@/components/CommunityProfileModal";
 
 const PROFILE_LIMIT = 50;
 
@@ -1281,16 +1292,63 @@ export function CommunityProfilesSection() {
 
 - [ ] **Step 2: Wire секцию в `SettingsPage.tsx`**
 
-Открыть `src/pages/SettingsPage.tsx`, найти импорты вверху, добавить:
+Открыть `src/pages/SettingsPage.tsx`.
+
+**2a.** Добавить импорт вверху:
 
 ```tsx
-import { CommunityProfilesSection } from "./settings/CommunityProfilesSection";
+import { CommunityProfilesSection } from "@/components/CommunityProfilesSection";
 ```
 
-Найти основной JSX страницы (скорее всего обёрнут в `<div className="space-y-6">`), добавить в подходящем месте (например, после блока «Уведомления»):
+**2b.** SettingsPage использует inline union type прямо в `useState` (строка 58). **Нет отдельного type-alias.** Расширить union, добавив `'communities'`:
 
 ```tsx
-<CommunityProfilesSection />
+// Было (строка 58):
+const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral'>(initialTab as 'profile' | 'telegram' | 'api' | 'business' | 'referral');
+// Стало:
+const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral' | 'communities'>(initialTab as 'profile' | 'telegram' | 'api' | 'business' | 'referral' | 'communities');
+```
+
+**2c.** Найти блок с кнопками-вкладками — это `<button>` элементы (НЕ `<Button>`) с паттерном `border-b-2` внутри `<nav className="flex gap-4">` (строки 82-142). Добавить **после** последнего `</button>` (строка 142) новую вкладку в том же стиле:
+
+```tsx
+          <button
+            data-testid="tab-communities"
+            onClick={() => setActiveTab('communities')}
+            className={cn(
+              'pb-3 px-1 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5',
+              activeTab === 'communities'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Users className="w-4 h-4" />
+            Сообщества
+          </button>
+```
+
+(Добавить `Users` в импорт `lucide-react`, если его ещё нет.)
+
+**2d.** Найти блок рендера контента (строки 147-157) — это **цепочка тернаров**, не набор `&&`-блоков. Добавить ветку `communities` **перед** финальным `else` (BusinessTab). Было:
+
+```tsx
+      ) : activeTab === 'referral' ? (
+        <ReferralTab userId={user.userId} />
+      ) : (
+        <BusinessTab userId={user.userId} />
+      )}
+```
+
+Стало:
+
+```tsx
+      ) : activeTab === 'referral' ? (
+        <ReferralTab userId={user.userId} />
+      ) : activeTab === 'communities' ? (
+        <CommunityProfilesSection />
+      ) : (
+        <BusinessTab userId={user.userId} />
+      )}
 ```
 
 - [ ] **Step 3: Запустить dev-сервер и проверить вручную**
@@ -1315,7 +1373,7 @@ Expected: PASS (не более 50 warnings)
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/pages/settings/CommunityProfilesSection.tsx src/pages/SettingsPage.tsx
+git add src/components/CommunityProfilesSection.tsx src/pages/SettingsPage.tsx
 git commit -m "feat(settings): wire CommunityProfilesSection into SettingsPage"
 ```
 
@@ -1361,6 +1419,40 @@ git log --oneline -15
 
 ---
 
+## Task 14: Каскадное удаление при deleteUser
+
+**Files:**
+- Modify: `convex/users.ts`
+
+- [ ] **Step 1: Добавить удаление communityProfiles в `deleteUser`**
+
+В `convex/users.ts`, функция `deleteUser` (строка ~587). Добавить блок **перед** `// Finally delete the user` (строка ~646):
+
+```typescript
+    // Delete community profiles
+    const communityProfiles = await ctx.db
+      .query("communityProfiles")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const profile of communityProfiles) {
+      await ctx.db.delete(profile._id);
+    }
+```
+
+- [ ] **Step 2: Typecheck**
+
+Run: `npx tsc --noEmit -p convex/tsconfig.json`
+Expected: PASS
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add convex/users.ts
+git commit -m "fix(users): cascade delete communityProfiles on user deletion"
+```
+
+---
+
 ## Done criteria
 
 - [ ] Схема содержит таблицу `communityProfiles` с двумя индексами
@@ -1368,5 +1460,6 @@ git log --oneline -15
 - [ ] CRUD mutations работают, с проверками owner / limit / dedup
 - [ ] Daily cron зарегистрирован и валидирует токены
 - [ ] UI позволяет добавить/редактировать/удалить профиль
+- [ ] `deleteUser` каскадно удаляет communityProfiles
 - [ ] Все unit-тесты проходят, typecheck/lint — без ошибок
 - [ ] Задеплоено в продакшен (или dev convex) и проверено вручную

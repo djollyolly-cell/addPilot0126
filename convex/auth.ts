@@ -1645,7 +1645,13 @@ const PROACTIVE_REFRESH_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours
 const ADMIN_CHAT_ID = "325307765";
 
 // Unrecoverable VK API errors — no point retrying
-const UNRECOVERABLE_ERRORS = ["invalid_token", "token has been deleted", "token_revoked"];
+const UNRECOVERABLE_ERRORS = [
+  "invalid_token",
+  "token has been deleted",
+  "token_revoked",
+  "refresh_token is missing or invalid",  // VK ID: refresh token was rotated but new one not saved
+  "session is compromised",               // VK ID: one-time refresh token was reused
+];
 
 function isUnrecoverable(err: unknown): boolean {
   const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
