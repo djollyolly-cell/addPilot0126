@@ -54,6 +54,126 @@ function validateRuleValue(
   return null;
 }
 
+// ---- Video rotation conflict checks ----
+
+/** Check if any campaigns overlap with an active video_rotation rule */
+async function validateRotationConflicts(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: { db: any },
+  userId: Id<"users">,
+  targetCampaignIds: string[] | undefined,
+  targetAccountIds: Id<"adAccounts">[],
+  excludeRuleId?: Id<"rules">
+): Promise<string | null> {
+  const allRules = await ctx.db
+    .query("rules")
+    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .collect();
+
+  const activeRules = allRules.filter(
+    (r: any) => r.isActive && (!excludeRuleId || r._id !== excludeRuleId)
+  );
+
+  for (const r of activeRules) {
+    if (r.type === "video_rotation") {
+      if (targetCampaignIds) {
+        const otherCampaigns = new Set(r.targetCampaignIds ?? []);
+        for (const cId of targetCampaignIds) {
+          if (otherCampaigns.has(cId)) {
+            return `Кампания ${cId} уже участвует в ротации "${r.name}"`;
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Check that rotation campaigns are not covered by any other rule on same accounts */
+async function validateNoConflictingRules(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: { db: any },
+  userId: Id<"users">,
+  targetAccountIds: Id<"adAccounts">[],
+  targetCampaignIds: string[],
+  excludeRuleId?: Id<"rules">
+): Promise<string | null> {
+  const allRules = await ctx.db
+    .query("rules")
+    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .collect();
+
+  const activeRules = allRules.filter(
+    (r: any) => r.isActive && r.type !== "video_rotation" && (!excludeRuleId || r._id !== excludeRuleId)
+  );
+
+  const accountSet = new Set(targetAccountIds.map(String));
+  const campaignSet = new Set(targetCampaignIds);
+
+  for (const r of activeRules) {
+    const rAccountIds = (r.targetAccountIds ?? []).map(String);
+    const hasOverlappingAccount = rAccountIds.some((aId: string) => accountSet.has(aId));
+
+    if (hasOverlappingAccount && (!r.targetCampaignIds || r.targetCampaignIds.length === 0)) {
+      return `На аккаунте есть правило "${r.name}" без фильтра кампаний — ротация невозможна`;
+    }
+
+    if (r.targetCampaignIds) {
+      for (const cId of r.targetCampaignIds) {
+        if (campaignSet.has(cId)) {
+          return `Кампания ${cId} используется в правиле "${r.name}" — ротация невозможна`;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Reverse check: when creating a non-rotation rule, check if campaigns are in rotation */
+async function validateNotInRotation(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx: { db: any },
+  userId: Id<"users">,
+  targetAccountIds: Id<"adAccounts">[],
+  targetCampaignIds: string[] | undefined,
+  excludeRuleId?: Id<"rules">
+): Promise<string | null> {
+  const allRules = await ctx.db
+    .query("rules")
+    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
+    .collect();
+
+  const activeRotations = allRules.filter(
+    (r: any) => r.isActive && r.type === "video_rotation" && (!excludeRuleId || r._id !== excludeRuleId)
+  );
+
+  if (activeRotations.length === 0) return null;
+
+  const accountSet = new Set(targetAccountIds.map(String));
+
+  for (const rot of activeRotations) {
+    const rotAccountIds = (rot.targetAccountIds ?? []).map(String);
+    const hasOverlappingAccount = rotAccountIds.some((aId: string) => accountSet.has(aId));
+
+    if (!hasOverlappingAccount) continue;
+
+    if (!targetCampaignIds || targetCampaignIds.length === 0) {
+      return `На аккаунте есть активная ротация "${rot.name}" — правило без фильтра кампаний невозможно`;
+    }
+
+    const rotCampaigns = new Set(rot.targetCampaignIds ?? []);
+    for (const cId of targetCampaignIds) {
+      if (rotCampaigns.has(cId)) {
+        return `Кампания ${cId} участвует в ротации "${rot.name}" — назначение правил запрещено`;
+      }
+    }
+  }
+
+  return null;
+}
+
 // List rules for a user
 export const list = query({
   args: {
@@ -122,6 +242,13 @@ export const create = mutation({
     resetDaily: v.optional(v.boolean()),
     // cpc_limit specific: minimum spent before CPC check kicks in
     minSpent: v.optional(v.number()),
+    // video_rotation specific fields
+    slotDurationHours: v.optional(v.number()),
+    rotationDailyBudget: v.optional(v.number()),
+    campaignOrder: v.optional(v.array(v.string())),
+    rotationQuietHoursEnabled: v.optional(v.boolean()),
+    rotationQuietHoursStart: v.optional(v.string()),
+    rotationQuietHoursEnd: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     // Check write access (org in read_only/frozen blocks all writes)
@@ -148,7 +275,8 @@ export const create = mutation({
     const isL2 = args.type === "custom";
     const isL3 = args.type === "custom_l3";
 
-    if (!isL1 && !isL2 && !isL3) {
+    const isRotation = args.type === "video_rotation";
+    if (!isL1 && !isL2 && !isL3 && !isRotation) {
       throw new Error(`Неизвестный тип правила: ${args.type}`);
     }
 
@@ -215,6 +343,31 @@ export const create = mutation({
       }
     }
 
+    // Validate video_rotation specific fields
+    if (isRotation) {
+      const userCheck = await ctx.db.get(args.userId);
+      if (!userCheck) throw new Error("Пользователь не найден");
+      if (!userCheck.isAdmin && !userCheck.videoRotationEnabled) {
+        throw new Error("Модуль ротации не активирован");
+      }
+      if (!args.slotDurationHours || args.slotDurationHours < 1 || args.slotDurationHours > 24 || !Number.isInteger(args.slotDurationHours)) {
+        throw new Error("Время слота: от 1 до 24 часов (целое число)");
+      }
+      if (!args.rotationDailyBudget || args.rotationDailyBudget <= 0) {
+        throw new Error("Бюджет на сутки должен быть больше 0");
+      }
+      if (!args.targetCampaignIds || args.targetCampaignIds.length < 2) {
+        throw new Error("Минимум 2 кампании для ротации");
+      }
+      if (args.targetCampaignIds.length > 50) {
+        throw new Error("Максимум 50 кампаний в ротации");
+      }
+      const rotConflict = await validateRotationConflicts(ctx, args.userId, args.targetCampaignIds, args.targetAccountIds);
+      if (rotConflict) throw new Error(rotConflict);
+      const ruleConflict = await validateNoConflictingRules(ctx, args.userId, args.targetAccountIds, args.targetCampaignIds);
+      if (ruleConflict) throw new Error(ruleConflict);
+    }
+
     // Check tier limits
     const user = await ctx.db.get(args.userId);
     if (!user) {
@@ -245,6 +398,12 @@ export const create = mutation({
       );
     }
 
+    // Check if campaigns are in an active rotation (reverse validation)
+    if (!isRotation) {
+      const rotCheck = await validateNotInRotation(ctx, args.userId, args.targetAccountIds, args.targetCampaignIds);
+      if (rotCheck) throw new Error(rotCheck);
+    }
+
     // Check autoStop permission
     const canAutoStop = user.subscriptionTier !== "freemium";
     if (!canAutoStop && args.actions.stopAd) {
@@ -272,7 +431,19 @@ export const create = mutation({
     // Build conditions based on level
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let conditions: any;
-    if (isL2) {
+    if (isRotation) {
+      conditions = {
+        metric: "rotation",
+        operator: ">",
+        value: 0,
+        slotDurationHours: args.slotDurationHours,
+        dailyBudget: args.rotationDailyBudget,
+        quietHoursEnabled: args.rotationQuietHoursEnabled ?? false,
+        quietHoursStart: args.rotationQuietHoursStart,
+        quietHoursEnd: args.rotationQuietHoursEnd,
+        campaignOrder: args.campaignOrder ?? args.targetCampaignIds,
+      };
+    } else if (isL2) {
       conditions = args.conditionsArray; // array — validated non-empty above
     } else {
       // L1 / L3: single object
@@ -304,7 +475,7 @@ export const create = mutation({
       userId: args.userId,
       orgId: user?.organizationId,
       name: args.name.trim(),
-      type: args.type as "cpl_limit" | "min_ctr" | "fast_spend" | "spend_no_leads" | "budget_limit" | "low_impressions" | "clicks_no_leads" | "new_lead" | "uz_budget_manage" | "custom" | "custom_l3",
+      type: args.type as "cpl_limit" | "min_ctr" | "fast_spend" | "spend_no_leads" | "budget_limit" | "low_impressions" | "clicks_no_leads" | "new_lead" | "uz_budget_manage" | "custom" | "custom_l3" | "video_rotation",
       customRuleTypeCode: isL3 ? args.customRuleTypeCode : undefined,
       conditions,
       actions: {
@@ -568,10 +739,29 @@ export const toggleActive = mutation({
       }
     }
 
+    // Handle video_rotation activation/deactivation
+    if (rule.type === "video_rotation") {
+      if (newActive) {
+        const rotConflict = await validateRotationConflicts(ctx, args.userId, rule.targetCampaignIds, rule.targetAccountIds, args.ruleId);
+        if (rotConflict) throw new Error(rotConflict);
+        const ruleConflict = await validateNoConflictingRules(ctx, args.userId, rule.targetAccountIds, rule.targetCampaignIds ?? [], args.ruleId);
+        if (ruleConflict) throw new Error(ruleConflict);
+      }
+    }
+
     await ctx.db.patch(args.ruleId, {
       isActive: newActive,
       updatedAt: Date.now(),
     });
+
+    // Schedule rotation activate/deactivate (must run outside mutation)
+    if (rule.type === "video_rotation") {
+      if (newActive) {
+        await ctx.scheduler.runAfter(0, internal.videoRotation.activate, { ruleId: args.ruleId });
+      } else {
+        await ctx.scheduler.runAfter(0, internal.videoRotation.deactivate, { ruleId: args.ruleId });
+      }
+    }
 
     // Audit log
     try { await ctx.runMutation(internal.auditLog.log, {
@@ -609,6 +799,20 @@ export const remove = mutation({
       status: "success",
       details: { ruleName: rule.name },
     }); } catch { /* non-critical */ }
+
+    // Deactivate rotation if active
+    if (rule.type === "video_rotation" && rule.isActive) {
+      await ctx.scheduler.runAfter(0, internal.videoRotation.deactivate, { ruleId: args.ruleId });
+    }
+
+    // Clean up rotationState
+    const rotState = await ctx.db
+      .query("rotationState")
+      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .first();
+    if (rotState) {
+      await ctx.db.delete(rotState._id);
+    }
 
     await ctx.db.delete(args.ruleId);
     return { success: true };
