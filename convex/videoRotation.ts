@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { query, internalAction, internalMutation, internalQuery } from "./_generated/server";
+import { action, query, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
@@ -759,5 +759,72 @@ export const getRotationStatus = query({
       slotStartedAt: state.slotStartedAt,
       lastError: state.lastError,
     };
+  },
+});
+
+// TEMP: Public action to manually trigger activate for debugging
+export const debugActivate = action({
+  args: { ruleId: v.id("rules") },
+  handler: async (ctx, args) => {
+    try {
+      const rule = await ctx.runQuery(internal.rules.getRule, { ruleId: args.ruleId });
+      if (!rule || rule.type !== "video_rotation") {
+        return { error: "Правило не найдено или имеет неверный тип" };
+      }
+      const conditions = rule.conditions as RotationConditions;
+      const { campaignOrder, dailyBudget } = conditions;
+      if (!campaignOrder || campaignOrder.length < 2) {
+        return { error: "Минимум 2 кампании", conditions };
+      }
+
+      const accountId = rule.targetAccountIds[0];
+      console.log("[debugActivate] accountId:", accountId);
+
+      const accessToken = await ctx.runAction(
+        internal.auth.getValidTokenForAccount,
+        { accountId }
+      );
+      console.log("[debugActivate] got token, length:", accessToken?.length);
+
+      const campaigns = await ctx.runAction(
+        internal.vkApi.getCampaignsForAccount,
+        { accessToken }
+      ) as VkCampaign[];
+      console.log("[debugActivate] campaigns from VK:", campaigns.length);
+
+      const targetSet = new Set(rule.targetCampaignIds ?? []);
+      const matched = campaigns.filter(c => targetSet.has(String(c.id)));
+      console.log("[debugActivate] matched target campaigns:", matched.map(c => ({ id: c.id, name: c.name, status: c.status })));
+
+      // Try to start first campaign
+      const firstCampaignId = Number(campaignOrder[0]);
+      console.log("[debugActivate] starting campaign:", firstCampaignId);
+
+      await ctx.runAction(api.vkApi.updateMtCampaign, {
+        accessToken,
+        campaignId: firstCampaignId,
+        data: { status: "active" },
+      });
+      console.log("[debugActivate] campaign started successfully");
+
+      // Create state
+      await ctx.runMutation(internal.videoRotation.createState, {
+        ruleId: args.ruleId,
+        accountId,
+        currentIndex: 0,
+        currentCampaignId: campaignOrder[0],
+        slotStartedAt: Date.now(),
+        dailyBudgetRemaining: dailyBudget,
+        budgetDayStart: todayStr(),
+        cycleNumber: 1,
+        status: "running" as const,
+      });
+      console.log("[debugActivate] state created");
+
+      return { success: true, startedCampaign: firstCampaignId };
+    } catch (e: any) {
+      console.error("[debugActivate] ERROR:", e);
+      return { error: e.message, stack: e.stack };
+    }
   },
 });
