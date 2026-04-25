@@ -121,6 +121,17 @@ export function ClientReportTab() {
         if (communityResult.partialErrors.length > 0) {
           updated.partialErrors = [...updated.partialErrors, ...communityResult.partialErrors];
         }
+        // Recalculate totals for community fields
+        let totalMsgStarts = 0;
+        let totalPhones = 0;
+        let totalSenler = 0;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const r of updated.rows as any[]) {
+          totalMsgStarts += r.message_starts ?? 0;
+          totalPhones += r.phones_count ?? 0;
+          totalSenler += r.senler_subs ?? 0;
+        }
+        updated.totals = { ...updated.totals, message_starts: totalMsgStarts, phones_count: totalPhones, senler_subs: totalSenler };
         return updated;
       });
     } catch (err) {

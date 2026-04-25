@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import { messagesGetConversations, messagesGetHistory, usersGet } from "./vkCommunityApi";
 import { extractPhones, normalizePhone } from "./phoneExtractor";
 import { fetchLeadDetails } from "./vkApi";
@@ -686,6 +687,29 @@ function computeTotalsByType(
 
 // ─── Backfill: populate campaignType for existing metricsDaily ───
 
+/** Read metricsDaily rows missing campaignType for one account, filtered by date range */
+export const _getMetricsWithoutType = internalQuery({
+  args: {
+    accountId: v.id("adAccounts"),
+    dateFrom: v.string(),
+    dateTo: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const all = await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_accountId_date", (q) =>
+        q.eq("accountId", args.accountId)
+          .gte("date", args.dateFrom)
+          .lte("date", args.dateTo)
+      )
+      .collect();
+
+    return all
+      .filter((m) => !m.campaignType && m.campaignId)
+      .map((m) => ({ id: m._id as string, campaignId: m.campaignId! }));
+  },
+});
+
 /** Batch-patch metricsDaily rows with campaignType */
 export const _backfillBatch = internalMutation({
   args: {
@@ -703,20 +727,23 @@ export const _backfillBatch = internalMutation({
 });
 
 /** One-time backfill: populate campaignType for all metricsDaily records missing it */
+/** Backfill one account at a time (accepts accountId to avoid timeout) */
 export const backfillCampaignTypes = internalAction({
-  args: {},
-  handler: async (ctx) => {
-    // Get all active accounts
-    const accounts = await ctx.runQuery(internal.syncMetrics.listActiveAccounts);
+  args: { accountId: v.optional(v.id("adAccounts")) },
+  handler: async (ctx, args) => {
+    const allAccounts = await ctx.runQuery(internal.syncMetrics.listActiveAccounts);
+    const accounts = args.accountId
+      ? allAccounts.filter((a) => a._id === args.accountId)
+      : allAccounts;
+
     let totalUpdated = 0;
 
     for (const account of accounts) {
-      if (!account.accessToken) {
-        console.log(`[backfill] Skipping ${account.name} — no token`);
+      if (!account || !account.accessToken) {
+        console.log(`[backfill] Skipping — no token`);
         continue;
       }
 
-      // Get campaignType map for this account
       let typeMap: Array<{ adGroupId: string; adPlanId: number; type: string }>;
       try {
         typeMap = await ctx.runAction(internal.vkApi.getCampaignTypeMap, {
@@ -737,33 +764,41 @@ export const backfillCampaignTypes = internalAction({
         continue;
       }
 
-      // Read all metricsDaily for this account (no date filter — backfill everything)
-      const allMetrics = await ctx.runQuery(internal.clientReport._getMetricsForReport, {
-        accountId: account._id,
-        dateFrom: "2020-01-01",
-        dateTo: "2099-12-31",
-      });
+      // Read week by week to stay under Convex return size limits
+      let accountUpdated = 0;
+      const start = new Date("2025-01-01");
+      const end = new Date();
+      const d = new Date(start);
+      while (d <= end) {
+        const from = d.toISOString().slice(0, 10);
+        d.setDate(d.getDate() + 6);
+        const to = d > end ? end.toISOString().slice(0, 10) : d.toISOString().slice(0, 10);
+        d.setDate(d.getDate() + 1);
 
-      // Find rows missing campaignType
-      const updates: Array<{ id: typeof allMetrics[0]["_id"]; campaignType: string }> = [];
-      for (const m of allMetrics) {
-        if (m.campaignType) continue; // already set
-        if (!m.campaignId) continue;
-        const type = campaignTypeMap.get(m.campaignId);
-        if (type) {
-          updates.push({ id: m._id, campaignType: type });
+        const rows = await ctx.runQuery(internal.clientReport._getMetricsWithoutType, {
+          accountId: account._id,
+          dateFrom: from,
+          dateTo: to,
+        });
+        if (rows.length === 0) continue;
+
+        const updates: Array<{ id: Id<"metricsDaily">; campaignType: string }> = [];
+        for (const m of rows) {
+          const type = campaignTypeMap.get(m.campaignId);
+          if (type) updates.push({ id: m.id as Id<"metricsDaily">, campaignType: type });
         }
+
+        const BATCH = 250;
+        for (let i = 0; i < updates.length; i += BATCH) {
+          await ctx.runMutation(internal.clientReport._backfillBatch, {
+            updates: updates.slice(i, i + BATCH),
+          });
+        }
+        accountUpdated += updates.length;
       }
 
-      // Batch update (250 at a time to stay within Convex limits)
-      const BATCH = 250;
-      for (let i = 0; i < updates.length; i += BATCH) {
-        const batch = updates.slice(i, i + BATCH);
-        await ctx.runMutation(internal.clientReport._backfillBatch, { updates: batch });
-      }
-
-      totalUpdated += updates.length;
-      console.log(`[backfill] ${account.name}: ${updates.length} rows updated (${allMetrics.length} total)`);
+      totalUpdated += accountUpdated;
+      console.log(`[backfill] ${account.name}: ${accountUpdated} rows updated`);
     }
 
     console.log(`[backfill] Done. Total updated: ${totalUpdated}`);
