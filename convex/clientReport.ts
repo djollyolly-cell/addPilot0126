@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalQuery } from "./_generated/server";
+import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { messagesGetConversations, messagesGetHistory, usersGet } from "./vkCommunityApi";
 import { extractPhones, normalizePhone } from "./phoneExtractor";
@@ -683,3 +683,91 @@ function computeTotalsByType(
 
   return result;
 }
+
+// ─── Backfill: populate campaignType for existing metricsDaily ───
+
+/** Batch-patch metricsDaily rows with campaignType */
+export const _backfillBatch = internalMutation({
+  args: {
+    updates: v.array(v.object({
+      id: v.id("metricsDaily"),
+      campaignType: v.string(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    for (const u of args.updates) {
+      await ctx.db.patch(u.id, { campaignType: u.campaignType });
+    }
+    return args.updates.length;
+  },
+});
+
+/** One-time backfill: populate campaignType for all metricsDaily records missing it */
+export const backfillCampaignTypes = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Get all active accounts
+    const accounts = await ctx.runQuery(internal.syncMetrics.listActiveAccounts);
+    let totalUpdated = 0;
+
+    for (const account of accounts) {
+      if (!account.accessToken) {
+        console.log(`[backfill] Skipping ${account.name} — no token`);
+        continue;
+      }
+
+      // Get campaignType map for this account
+      let typeMap: Array<{ adGroupId: string; adPlanId: number; type: string }>;
+      try {
+        typeMap = await ctx.runAction(internal.vkApi.getCampaignTypeMap, {
+          accessToken: account.accessToken,
+        });
+      } catch (err) {
+        console.error(`[backfill] getCampaignTypeMap failed for ${account.name}: ${err}`);
+        continue;
+      }
+
+      const campaignTypeMap = new Map<string, string>();
+      for (const entry of typeMap) {
+        campaignTypeMap.set(entry.adGroupId, entry.type);
+      }
+
+      if (campaignTypeMap.size === 0) {
+        console.log(`[backfill] ${account.name} — no campaign types found`);
+        continue;
+      }
+
+      // Read all metricsDaily for this account (no date filter — backfill everything)
+      const allMetrics = await ctx.runQuery(internal.clientReport._getMetricsForReport, {
+        accountId: account._id,
+        dateFrom: "2020-01-01",
+        dateTo: "2099-12-31",
+      });
+
+      // Find rows missing campaignType
+      const updates: Array<{ id: typeof allMetrics[0]["_id"]; campaignType: string }> = [];
+      for (const m of allMetrics) {
+        if (m.campaignType) continue; // already set
+        if (!m.campaignId) continue;
+        const type = campaignTypeMap.get(m.campaignId);
+        if (type) {
+          updates.push({ id: m._id, campaignType: type });
+        }
+      }
+
+      // Batch update (250 at a time to stay within Convex limits)
+      const BATCH = 250;
+      for (let i = 0; i < updates.length; i += BATCH) {
+        const batch = updates.slice(i, i + BATCH);
+        await ctx.runMutation(internal.clientReport._backfillBatch, { updates: batch });
+      }
+
+      totalUpdated += updates.length;
+      console.log(`[backfill] ${account.name}: ${updates.length} rows updated (${allMetrics.length} total)`);
+    }
+
+    console.log(`[backfill] Done. Total updated: ${totalUpdated}`);
+    return { totalUpdated };
+  },
+});
+
