@@ -310,50 +310,59 @@ export const buildReport = action({
       accountIds: args.accountIds,
     });
 
-    for (const acc of accounts) {
-      if (!acc.accessToken) continue;
-      try {
-        // Fetch banners, ad groups, ad plans, packages in parallel
-        const [banners, adGroups, adPlans, packagesData] = await Promise.all([
-          fetchAllBanners(acc.accessToken),
-          fetchAdGroups(acc.accessToken),
-          fetchAdPlans(acc.accessToken),
-          callMtApi<{ items: Array<{ id: number; name: string }> }>(
-            "packages.json", acc.accessToken, { fields: "id,name", limit: "50" }
-          ).catch(() => ({ items: [] as Array<{ id: number; name: string }> })),
-        ]);
-        const bannerIds = banners.map((b) => String(b.id));
+    // Process all accounts in parallel
+    const accountResults = await Promise.all(
+      accounts.filter((acc: { accessToken?: string | null }) => acc.accessToken).map(async (acc: { accessToken?: string | null; name?: string; [k: string]: unknown }) => {
+        try {
+          // Fetch banners, ad groups, ad plans, packages in parallel
+          const [banners, adGroups, adPlans, packagesData] = await Promise.all([
+            fetchAllBanners(acc.accessToken!),
+            fetchAdGroups(acc.accessToken!),
+            fetchAdPlans(acc.accessToken!),
+            callMtApi<{ items: Array<{ id: number; name: string }> }>(
+              "packages.json", acc.accessToken!, { fields: "id,name", limit: "50" }
+            ).catch(() => ({ items: [] as Array<{ id: number; name: string }> })),
+          ]);
+          const bannerIds = banners.map((b) => String(b.id));
 
-        // Build lookup maps
-        const packageMap = new Map<number, string>();
-        for (const pkg of packagesData.items || []) packageMap.set(pkg.id, pkg.name);
+          const packageMap = new Map<number, string>();
+          for (const pkg of packagesData.items || []) packageMap.set(pkg.id, pkg.name);
 
-        const adPlanObjectiveMap = new Map<number, string>();
-        for (const p of adPlans) adPlanObjectiveMap.set(p.id, p.objective);
+          const adPlanObjectiveMap = new Map<number, string>();
+          for (const p of adPlans) adPlanObjectiveMap.set(p.id, p.objective);
 
-        // banner → group, group → ad_plan, group → category (via package slug + objective)
-        const bannerToGroupId = new Map<number, number>();
-        for (const b of banners) bannerToGroupId.set(b.id, b.campaign_id);
+          const bannerToGroupId = new Map<number, number>();
+          for (const b of banners) bannerToGroupId.set(b.id, b.campaign_id);
 
-        const groupToAdPlanId = new Map<number, number>();
-        const groupToCategory = new Map<number, ResultCategory>();
-        for (const g of adGroups) {
-          groupToAdPlanId.set(g.id, g.ad_plan_id);
-          const pkgSlug = g.package_id !== undefined ? packageMap.get(g.package_id) : undefined;
-          const objective = adPlanObjectiveMap.get(g.ad_plan_id);
-          groupToCategory.set(g.id, resolveCategory(pkgSlug, objective));
+          const groupToAdPlanId = new Map<number, number>();
+          const groupToCategory = new Map<number, ResultCategory>();
+          for (const g of adGroups) {
+            groupToAdPlanId.set(g.id, g.ad_plan_id);
+            const pkgSlug = g.package_id !== undefined ? packageMap.get(g.package_id) : undefined;
+            const objective = adPlanObjectiveMap.get(g.ad_plan_id);
+            groupToCategory.set(g.id, resolveCategory(pkgSlug, objective));
+          }
+
+          const [statsItems, leadCounts] = await Promise.all([
+            fetchStatsBatched(
+              "statistics/banners/day.json", acc.accessToken!,
+              bannerIds, args.dateFrom, args.dateTo
+            ),
+            fetchLeadCounts(acc.accessToken!, args.dateFrom, args.dateTo),
+          ]);
+
+          return { acc, bannerToGroupId, groupToAdPlanId, groupToCategory, statsItems, leadCounts, error: null as string | null };
+        } catch (err) {
+          return { acc, bannerToGroupId: new Map(), groupToAdPlanId: new Map(), groupToCategory: new Map(), statsItems: [] as MtStatItem[], leadCounts: {} as Record<string, number>, error: `Кабинет ${acc.name} (статистика): ${err instanceof Error ? err.message : String(err)}` };
         }
+      })
+    );
 
-        // Fetch stats and lead counts in parallel
-        const [statsItems, leadCounts] = await Promise.all([
-          fetchStatsBatched(
-            "statistics/banners/day.json", acc.accessToken,
-            bannerIds, args.dateFrom, args.dateTo
-          ),
-          fetchLeadCounts(acc.accessToken, args.dateFrom, args.dateTo),
-        ]);
+    for (const result of accountResults) {
+      if (result.error) { partialErrors.push(result.error); continue; }
+      const { bannerToGroupId, groupToAdPlanId, groupToCategory, statsItems, leadCounts } = result;
 
-        for (const item of statsItems) {
+      for (const item of statsItems) {
           const bannerId = String(item.id);
           const groupId = bannerToGroupId.get(item.id);
           const campaignId = groupId !== undefined ? groupToAdPlanId.get(groupId) : undefined;
@@ -367,9 +376,6 @@ export const buildReport = action({
 
           for (const row of item.rows) {
             const { vkResult, formEvents } = extractResultMetrics(row);
-            if (vkResult > 0) {
-              console.log(`[clientReport] banner ${bannerId} date=${row.date}: vkResult=${vkResult}, category=${category}, raw vk=${JSON.stringify(row.base.vk)}`);
-            }
             const rowSpent = parseFloat(row.base.spent || "0") || 0;
 
             const key = buildKey(args.granularity, { date: row.date, campaignId: campaignIdStr, groupId: groupIdStr, adId: bannerId });
@@ -400,11 +406,6 @@ export const buildReport = action({
             rowMap.set(key, existing);
           }
         }
-      } catch (err) {
-        partialErrors.push(
-          `Кабинет ${acc.name} (статистика): ${err instanceof Error ? err.message : String(err)}`
-        );
-      }
     }
 
     // 2. Community dialogs (message_starts, phones_count, phones_detail)
@@ -445,7 +446,7 @@ export const buildReport = action({
             }
             if (allOlder) break;
             offset += 200;
-            await new Promise((r) => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 100));
           }
 
           // Batch fetch user info
@@ -458,66 +459,69 @@ export const buildReport = action({
             for (const u of users) {
               peerInfo.set(u.id, { firstName: u.first_name, lastName: u.last_name });
             }
-            await new Promise((r) => setTimeout(r, 200));
+            await new Promise((r) => setTimeout(r, 100));
           }
 
-          // For each dialog: check true start date + extract phones
+          // For each dialog: check true start date + extract phones (batched, 3 at a time)
           const dialogStartsByDate = new Map<string, number>();
           const needMessageStarts = args.fields.includes("message_starts");
           const needPhones = args.fields.some((f) => ["phones_count", "phones_detail"].includes(f));
           const groupIdAbs = Math.abs(profile.vkGroupId);
+          const BATCH_SIZE = 3;
 
-          for (const d of activeDialogs) {
-            try {
-              // Parallel: first message (for dialog start) + recent messages (for phones)
-              const requests: Promise<{ items: Array<{ date: number; from_id: number; text: string }> }>[] = [];
-              if (needMessageStarts) {
-                requests.push(messagesGetHistory(profile.vkCommunityToken, d.peerId, 1, 0));
-              }
-              if (needPhones) {
-                requests.push(messagesGetHistory(profile.vkCommunityToken, d.peerId, 50, 1));
-              }
-              const results = await Promise.all(requests);
-              let idx = 0;
-
-              // Dialog start detection
-              if (needMessageStarts) {
-                const firstMsg = results[idx].items[0];
-                if (firstMsg && firstMsg.date >= fromTs && firstMsg.date <= toTs) {
-                  const dateStr = new Date(firstMsg.date * 1000).toISOString().slice(0, 10);
-                  dialogStartsByDate.set(dateStr, (dialogStartsByDate.get(dateStr) ?? 0) + 1);
+          for (let i = 0; i < activeDialogs.length; i += BATCH_SIZE) {
+            const batch = activeDialogs.slice(i, i + BATCH_SIZE);
+            await Promise.all(batch.map(async (d) => {
+              try {
+                const requests: Promise<{ items: Array<{ date: number; from_id: number; text: string }> }>[] = [];
+                if (needMessageStarts) {
+                  requests.push(messagesGetHistory(profile.vkCommunityToken, d.peerId, 1, 0));
                 }
-                idx++;
-              }
+                if (needPhones) {
+                  requests.push(messagesGetHistory(profile.vkCommunityToken, d.peerId, 50, 1));
+                }
+                const results = await Promise.all(requests);
+                let idx = 0;
 
-              // Phone extraction from recent messages
-              if (needPhones && results[idx]) {
-                const inbound = results[idx].items.filter(
-                  (m) => m.from_id !== -groupIdAbs && m.from_id > 0
-                );
-                for (const msg of inbound) {
-                  if (msg.date < fromTs || msg.date > toTs) continue;
-                  const phones = extractPhones(msg.text);
-                  for (const p of phones) {
-                    const info = peerInfo.get(d.peerId) ?? { firstName: "", lastName: "" };
-                    const leftAtMs = msg.date * 1000;
-                    phonesDetail.push({
-                      date: new Date(leftAtMs).toISOString().slice(0, 10),
-                      leftAt: leftAtMs,
-                      phone: p.phone,
-                      firstName: info.firstName,
-                      lastName: info.lastName,
-                      dialogUrl: `https://vk.me/gim${Math.abs(profile.vkGroupId)}?sel=${d.peerId}`,
-                      source: "vk_dialog",
-                    });
+                if (needMessageStarts) {
+                  const firstMsg = results[idx].items[0];
+                  if (firstMsg && firstMsg.date >= fromTs && firstMsg.date <= toTs) {
+                    const dateStr = new Date(firstMsg.date * 1000).toISOString().slice(0, 10);
+                    dialogStartsByDate.set(dateStr, (dialogStartsByDate.get(dateStr) ?? 0) + 1);
+                  }
+                  idx++;
+                }
+
+                if (needPhones && results[idx]) {
+                  const inbound = results[idx].items.filter(
+                    (m) => m.from_id !== -groupIdAbs && m.from_id > 0
+                  );
+                  for (const msg of inbound) {
+                    if (msg.date < fromTs || msg.date > toTs) continue;
+                    const phones = extractPhones(msg.text);
+                    for (const p of phones) {
+                      const info = peerInfo.get(d.peerId) ?? { firstName: "", lastName: "" };
+                      const leftAtMs = msg.date * 1000;
+                      phonesDetail.push({
+                        date: new Date(leftAtMs).toISOString().slice(0, 10),
+                        leftAt: leftAtMs,
+                        phone: p.phone,
+                        firstName: info.firstName,
+                        lastName: info.lastName,
+                        dialogUrl: `https://vk.me/gim${Math.abs(profile.vkGroupId)}?sel=${d.peerId}`,
+                        source: "vk_dialog",
+                      });
+                    }
                   }
                 }
+              } catch (err) {
+                partialErrors.push(
+                  `Сообщество ${profile.vkGroupName}, peer ${d.peerId}: ${err instanceof Error ? err.message : String(err)}`
+                );
               }
-              await new Promise((r) => setTimeout(r, 200));
-            } catch (err) {
-              partialErrors.push(
-                `Сообщество ${profile.vkGroupName}, peer ${d.peerId}: ${err instanceof Error ? err.message : String(err)}`
-              );
+            }));
+            if (i + BATCH_SIZE < activeDialogs.length) {
+              await new Promise((r) => setTimeout(r, 100));
             }
           }
 
