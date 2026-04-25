@@ -14,6 +14,14 @@ import { exportReportToExcel } from "./lib/exportToExcel";
 
 type Granularity = "day" | "day_campaign" | "day_group" | "day_banner";
 
+const TYPE_LABELS: Record<string, string> = {
+  subscription: "Подписки",
+  message: "Сообщения",
+  lead: "Лиды",
+  awareness: "Охват",
+  other: "Другое",
+};
+
 function todayStr(): string { return new Date().toISOString().slice(0, 10); }
 function weekAgoStr(): string {
   const d = new Date(); d.setDate(d.getDate() - 6);
@@ -358,11 +366,11 @@ export function ClientReportTab() {
                 </tbody>
                 <tfoot>
                   {report.totalsByType && Object.keys(report.totalsByType).length > 1 && (
-                    Object.entries(report.totalsByType).map(([typeName, typeRow]: [string, Record<string, unknown>]) => (
-                      <tr key={typeName} className="text-sm text-muted-foreground border-t border-border">
+                    Object.entries(report.totalsByType).map(([typeKey, typeRow]: [string, Record<string, unknown>]) => (
+                      <tr key={typeKey} className="text-sm text-muted-foreground border-t border-border">
                         {fields.filter((f) => f !== "phones_detail").map((f, i) => (
                           <td key={f} className="py-1 px-3">
-                            {i === 0 ? typeName : String(typeRow[f] ?? "")}
+                            {i === 0 ? (TYPE_LABELS[typeKey] ?? typeKey) : String(typeRow[f] ?? "")}
                           </td>
                         ))}
                       </tr>

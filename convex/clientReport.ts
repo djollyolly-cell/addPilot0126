@@ -657,14 +657,6 @@ function computeTotalsByType(
     byType[type].results += result;
   }
 
-  const TYPE_LABELS: Record<string, string> = {
-    subscription: "Подписки",
-    message: "Сообщения",
-    lead: "Лиды",
-    awareness: "Охват",
-    other: "Другое",
-  };
-
   const result: CampaignTypeTotals = {};
   for (const [type, data] of Object.entries(byType)) {
     const row: Partial<ReportRow> = {};
@@ -685,7 +677,8 @@ function computeTotalsByType(
       default: row.result_other = data.results; break;
     }
 
-    result[TYPE_LABELS[type] ?? type] = row;
+    // Use ASCII keys — Convex doesn't allow non-ASCII in field names
+    result[type] = row;
   }
 
   return result;
