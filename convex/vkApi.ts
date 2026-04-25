@@ -1289,6 +1289,50 @@ export const getCampaignTypeMap = internalAction({
   },
 });
 
+/** Classify specific ad_groups by their IDs — fetches only requested groups via _id__in filter */
+export const classifyAdGroupsByIds = internalAction({
+  args: {
+    accessToken: v.string(),
+    adGroupIds: v.array(v.string()),
+  },
+  handler: async (_, args): Promise<AdGroupMapping[]> => {
+    if (args.adGroupIds.length === 0) return [];
+    try {
+      // packages.json: package_id → name (VK returns all in one call, limit max 50)
+      const packagesRes = await callMtApi<{ items: { id: number; name: string }[] }>(
+        "packages.json", args.accessToken,
+        { fields: "id,name", limit: "50" }
+      );
+      const packageNameMap = new Map<number, string>();
+      for (const pkg of packagesRes.items || []) {
+        packageNameMap.set(pkg.id, pkg.name);
+      }
+
+      // Batch-fetch ad_groups by specific IDs (50 per request)
+      const result: AdGroupMapping[] = [];
+      const BATCH = 50;
+      for (let i = 0; i < args.adGroupIds.length; i += BATCH) {
+        const batch = args.adGroupIds.slice(i, i + BATCH);
+        const groupsRes = await callMtApi<{ items: { id: number; ad_plan_id: number; package_id: number }[] }>(
+          "ad_groups.json", args.accessToken,
+          { fields: "id,ad_plan_id,package_id", _id__in: batch.join(",") }
+        );
+        for (const g of groupsRes.items || []) {
+          const packageName = packageNameMap.get(g.package_id) || "";
+          result.push({
+            adGroupId: String(g.id),
+            adPlanId: g.ad_plan_id,
+            type: classifyCampaignPackage(packageName),
+          });
+        }
+      }
+      return result;
+    } catch {
+      return [];
+    }
+  },
+});
+
 /** Fetch ad_plans (VK Ads Campaigns): id → name */
 export const getAdPlanNames = internalAction({
   args: {

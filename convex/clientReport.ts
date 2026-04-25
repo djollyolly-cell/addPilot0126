@@ -1,10 +1,10 @@
 import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { messagesGetConversations, messagesGetHistory, usersGet } from "./vkCommunityApi";
 import { extractPhones, normalizePhone } from "./phoneExtractor";
-import { fetchLeadDetails } from "./vkApi";
+import { callMtApi, fetchLeadDetails } from "./vkApi";
 import { getSubscribersByDateRange } from "./senlerApi";
 
 // ─── Types ─────────────────────────────────────────────────
@@ -188,13 +188,8 @@ export const buildReport = action({
     const partialErrors: string[] = [];
     const rowMap = new Map<string, ReportRow>();
 
-    // 1. Read metrics from DB + campaign type map from VK API (like digest)
-    const [metrics, campaignNames, adNames, accounts] = await Promise.all([
-      ctx.runQuery(internal.clientReport._getMetricsForReport, {
-        accountId: args.accountId,
-        dateFrom: args.dateFrom,
-        dateTo: args.dateTo,
-      }),
+    // 1. Get account token + names for display
+    const [campaignNames, adNames, accounts] = await Promise.all([
       ctx.runQuery(internal.clientReport._getCampaignNames, {
         accountId: args.accountId,
       }),
@@ -206,21 +201,63 @@ export const buildReport = action({
       }),
     ]);
 
-    // 2. Classify ad_groups via paginated getCampaignTypeMap (same as digest)
-    //    _id__in filter silently drops old/archived groups; paginated fetch returns all
     const account = accounts[0];
-    const typeMap = new Map<string, string>(); // ad_group_id → type
-    if (account?.accessToken) {
-      try {
-        const mapping = await ctx.runAction(internal.vkApi.getCampaignTypeMap, {
-          accessToken: account.accessToken,
-        });
-        for (const entry of mapping) {
-          typeMap.set(entry.adGroupId, entry.type);
+    if (!account?.accessToken) {
+      return { dateFrom: args.dateFrom, dateTo: args.dateTo, rows: [], totals: {}, totalsByType: {}, phonesDetail: [], partialErrors: ["Нет токена доступа"] };
+    }
+
+    // 2. Fetch fresh statistics from VK API (not from metricsDaily cache)
+    //    This ensures numbers match the VK cabinet exactly
+    const stats = await ctx.runAction(api.vkApi.getMtStatistics, {
+      accessToken: account.accessToken,
+      dateFrom: args.dateFrom,
+      dateTo: args.dateTo,
+      accountId: args.accountId,
+    });
+
+    // 3. Build banner → ad_group mapping from VK API banners
+    const bannerGroupMap = new Map<number, number>(); // banner_id → ad_group_id
+    {
+      let offset = 0;
+      while (true) {
+        const bannersData = await callMtApi<{ items: { id: number; campaign_id: number }[]; count: number }>(
+          "banners.json", account.accessToken,
+          { fields: "id,campaign_id", limit: "250", offset: String(offset) }
+        );
+        for (const b of bannersData.items || []) {
+          bannerGroupMap.set(b.id, b.campaign_id);
         }
-      } catch (err) {
-        partialErrors.push(`Не удалось получить типы кампаний: ${err instanceof Error ? err.message : String(err)}`);
+        if ((bannersData.items || []).length === 0 || bannerGroupMap.size >= bannersData.count) break;
+        offset += (bannersData.items || []).length;
       }
+    }
+
+    // 4. Classify ad_groups via getCampaignTypeMap (same as digest)
+    const typeMap = new Map<string, string>(); // ad_group_id → type
+    const adGroupPlanMap = new Map<string, number>(); // ad_group_id → ad_plan_id
+    try {
+      const mapping = await ctx.runAction(internal.vkApi.getCampaignTypeMap, {
+        accessToken: account.accessToken,
+      });
+      for (const entry of mapping) {
+        typeMap.set(entry.adGroupId, entry.type);
+        adGroupPlanMap.set(entry.adGroupId, entry.adPlanId);
+      }
+    } catch (err) {
+      partialErrors.push(`Не удалось получить типы кампаний: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // 5. Get ad_plan names for display
+    const planNameMap = new Map<number, string>();
+    try {
+      const adPlanNames = await ctx.runAction(internal.vkApi.getAdPlanNames, {
+        accessToken: account.accessToken,
+      });
+      for (const plan of adPlanNames) {
+        planNameMap.set(plan.id, plan.name);
+      }
+    } catch {
+      // Non-critical — we'll use IDs as names
     }
 
     function typeToCategory(adGroupId: string): ResultCategory {
@@ -233,7 +270,6 @@ export const buildReport = action({
       }
     }
 
-    // Cast query results to proper types (Convex serialization loses type info)
     const campaignNameMap = campaignNames as Record<string, { name: string; status: string; adPlanId?: string }>;
     const adNameMap = adNames as Record<string, { name: string; campaignId: string }>;
 
@@ -246,40 +282,55 @@ export const buildReport = action({
         )
       : null;
 
-    // Convert groupIds (numbers) to string Set for comparison with campaignId (string)
     const groupIdFilter = args.groupIds?.length
       ? new Set(args.groupIds.map(String))
       : null;
 
-    for (const m of metrics) {
-      if (!m.campaignId) continue;
+    // 6. Aggregate fresh VK API statistics
+    // Each stat item = one banner, rows = per-day data
+    interface FlatMetric {
+      date: string;
+      adId: string;
+      groupId: string;
+      impressions: number;
+      clicks: number;
+      spent: number;
+      vkResult: number;
+    }
+    const flatMetrics: FlatMetric[] = [];
 
-      const groupId = m.campaignId; // ad_group_id (string)
-      const adInfo = adNameMap[m.adId];
-      const campaignId = adInfo?.campaignId ?? ""; // ad_plan vkCampaignId
+    for (const item of stats) {
+      const bannerId = item.id;
+      const groupId = bannerGroupMap.get(bannerId);
+      if (!groupId) continue;
+      const groupIdStr = String(groupId);
 
-      // Apply campaign (ad_plan) filter
+      for (const row of item.rows) {
+        flatMetrics.push({
+          date: row.date,
+          adId: String(bannerId),
+          groupId: groupIdStr,
+          impressions: row.base.shows,
+          clicks: row.base.clicks,
+          spent: parseFloat(row.base.spent) || 0,
+          vkResult: row.base.vk?.result ?? 0,
+        });
+      }
+    }
+
+    for (const m of flatMetrics) {
+      const groupId = m.groupId;
+      const adPlanId = adGroupPlanMap.get(groupId);
+      const campaignId = adPlanId ? String(adPlanId) : "";
+
+      // Apply filters
       if (args.campaignIds?.length && campaignId && !args.campaignIds.includes(campaignId)) continue;
-
-      // Apply ad_group filter
       if (groupIdFilter && !groupIdFilter.has(groupId)) continue;
-
-      // Apply campaignStatus filter (ad_group status from campaigns table)
       if (activeGroupIds && !activeGroupIds.has(groupId)) continue;
 
       const category = typeToCategory(groupId);
-
-      // Result metric depends on campaign type:
-      // - subscription/message/lead: leads field (Math.max of 5 sources, matches VK "Результат")
-      // - awareness: always 0 (VK shows 0 results for awareness campaigns)
-      // - other: vkResult only (leads overcounts with pixel/goal data irrelevant to campaign objective)
-      const vkResult = ((m as Record<string, unknown>).vkResult as number) ?? 0;
-      let results: number;
-      if (category === "subscribes" || category === "messages" || category === "lead_forms") {
-        results = Math.max(m.leads ?? 0, vkResult);
-      } else {
-        results = vkResult;
-      }
+      // Use vk.result — matches VK cabinet "Результат" exactly
+      const results = m.vkResult;
 
       const key = buildKey(args.granularity, {
         date: m.date,
@@ -297,12 +348,8 @@ export const buildReport = action({
 
       // Fill names
       if (args.granularity === "day_campaign" || args.granularity === "day_group" || args.granularity === "day_banner") {
-        if (!existing.campaignName && campaignId) {
-          // campaignNames is keyed by vkCampaignId — but for ad_groups, groupId is the key
-          // adPlanId in campaignNames entry points to ad_plan
-          // campaignId here IS the ad_plan vkCampaignId — not in campaignNames (those are ad_groups)
-          // We need ad_plan name, not ad_group name for "campaign" display
-          existing.campaignName = campaignId;
+        if (!existing.campaignName && adPlanId) {
+          existing.campaignName = planNameMap.get(adPlanId) ?? campaignId;
         }
       }
       if (args.granularity === "day_group" || args.granularity === "day_banner") {
@@ -312,7 +359,7 @@ export const buildReport = action({
       }
       if (args.granularity === "day_banner") {
         if (!existing.adName) {
-          existing.adName = adInfo?.name ?? m.adId;
+          existing.adName = adNameMap[m.adId]?.name ?? m.adId;
         }
       }
 
@@ -320,7 +367,6 @@ export const buildReport = action({
       existing.clicks = (existing.clicks ?? 0) + m.clicks;
       existing.spent = Math.round(((existing.spent ?? 0) + m.spent) * 100) / 100;
 
-      // Route results by campaignType
       switch (category) {
         case "subscribes":
           existing.result_subscribes = (existing.result_subscribes ?? 0) + results;
@@ -367,7 +413,7 @@ export const buildReport = action({
     rows.sort((a, b) => a.date.localeCompare(b.date));
 
     const totals = computeTotals(rows, args.fields);
-    const totalsByType = computeTotalsByType(metrics, args.fields, args.campaignIds, groupIdFilter, adNameMap, typeMap);
+    const totalsByType = computeTotalsByTypeFresh(flatMetrics, args.fields, args.campaignIds, groupIdFilter, activeGroupIds, adGroupPlanMap, typeMap, typeToCategory);
 
     return {
       dateFrom: args.dateFrom,
@@ -704,6 +750,59 @@ function computeTotalsByType(
     }
 
     // Use ASCII keys — Convex doesn't allow non-ASCII in field names
+    result[type] = row;
+  }
+
+  return result;
+}
+
+function computeTotalsByTypeFresh(
+  metrics: Array<{ date: string; adId: string; groupId: string; impressions: number; clicks: number; spent: number; vkResult: number }>,
+  fields: string[],
+  campaignFilter: string[] | undefined,
+  groupFilter: Set<string> | null,
+  activeGroupIds: Set<string> | null,
+  adGroupPlanMap: Map<string, number>,
+  typeMap: Map<string, string>,
+  typeToCategory: (groupId: string) => ResultCategory,
+): CampaignTypeTotals {
+  const byType: Record<string, { impressions: number; clicks: number; spent: number; results: number }> = {};
+
+  for (const m of metrics) {
+    const adPlanId = adGroupPlanMap.get(m.groupId);
+    const campaignId = adPlanId ? String(adPlanId) : "";
+
+    if (campaignFilter?.length && campaignId && !campaignFilter.includes(campaignId)) continue;
+    if (groupFilter && !groupFilter.has(m.groupId)) continue;
+    if (activeGroupIds && !activeGroupIds.has(m.groupId)) continue;
+
+    const type = typeMap.get(m.groupId) ?? "other";
+    if (!byType[type]) byType[type] = { impressions: 0, clicks: 0, spent: 0, results: 0 };
+    byType[type].impressions += m.impressions;
+    byType[type].clicks += m.clicks;
+    byType[type].spent += m.spent;
+    byType[type].results += m.vkResult;
+  }
+
+  const result: CampaignTypeTotals = {};
+  for (const [type, data] of Object.entries(byType)) {
+    const row: Partial<ReportRow> = {};
+    if (fields.includes("impressions")) row.impressions = data.impressions;
+    if (fields.includes("clicks")) row.clicks = data.clicks;
+    if (fields.includes("spent")) row.spent = Math.round(data.spent * 100) / 100;
+    if (fields.includes("spent_with_vat")) row.spent_with_vat = Math.round(data.spent * 1.2 * 100) / 100;
+    if (fields.includes("cpc") && data.clicks) row.cpc = Math.round((data.spent / data.clicks) * 100) / 100;
+    if (fields.includes("ctr") && data.impressions) row.ctr = Math.round((data.clicks / data.impressions) * 10000) / 100;
+    if (fields.includes("cpm") && data.impressions) row.cpm = Math.round((data.spent / data.impressions) * 1000 * 100) / 100;
+    if (fields.includes("cpl") && data.results > 0) row.cpl = Math.round((data.spent / data.results) * 100) / 100;
+
+    switch (type) {
+      case "subscription": row.result_subscribes = data.results; break;
+      case "message": row.result_messages = data.results; break;
+      case "lead": row.result_lead_forms = data.results; break;
+      default: row.result_other = data.results; break;
+    }
+
     result[type] = row;
   }
 

@@ -29,6 +29,8 @@ import type * as bannerStyles from "../bannerStyles.js";
 import type * as billing from "../billing.js";
 import type * as budgetHealthCheck from "../budgetHealthCheck.js";
 import type * as businessDirections from "../businessDirections.js";
+import type * as clientReport from "../clientReport.js";
+import type * as communityProfiles from "../communityProfiles.js";
 import type * as creativeAnalytics from "../creativeAnalytics.js";
 import type * as creatives from "../creatives.js";
 import type * as credentialHistory from "../credentialHistory.js";
@@ -44,11 +46,15 @@ import type * as metrics from "../metrics.js";
 import type * as migrations from "../migrations.js";
 import type * as orgAuth from "../orgAuth.js";
 import type * as organizations from "../organizations.js";
+import type * as phoneExtractor from "../phoneExtractor.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as referrals from "../referrals.js";
+import type * as reportFieldCatalog from "../reportFieldCatalog.js";
+import type * as reportTemplates from "../reportTemplates.js";
 import type * as reports from "../reports.js";
 import type * as ruleEngine from "../ruleEngine.js";
 import type * as rules from "../rules.js";
+import type * as senlerApi from "../senlerApi.js";
 import type * as shared_ruleConstants from "../shared/ruleConstants.js";
 import type * as syncMetrics from "../syncMetrics.js";
 import type * as systemLogger from "../systemLogger.js";
@@ -63,6 +69,7 @@ import type * as uzBudgetHelpers from "../uzBudgetHelpers.js";
 import type * as videos from "../videos.js";
 import type * as vkApi from "../vkApi.js";
 import type * as vkApiLimits from "../vkApiLimits.js";
+import type * as vkCommunityApi from "../vkCommunityApi.js";
 
 import type {
   ApiFromModules,
@@ -92,6 +99,8 @@ declare const fullApi: ApiFromModules<{
   billing: typeof billing;
   budgetHealthCheck: typeof budgetHealthCheck;
   businessDirections: typeof businessDirections;
+  clientReport: typeof clientReport;
+  communityProfiles: typeof communityProfiles;
   creativeAnalytics: typeof creativeAnalytics;
   creatives: typeof creatives;
   credentialHistory: typeof credentialHistory;
@@ -107,11 +116,15 @@ declare const fullApi: ApiFromModules<{
   migrations: typeof migrations;
   orgAuth: typeof orgAuth;
   organizations: typeof organizations;
+  phoneExtractor: typeof phoneExtractor;
   rateLimit: typeof rateLimit;
   referrals: typeof referrals;
+  reportFieldCatalog: typeof reportFieldCatalog;
+  reportTemplates: typeof reportTemplates;
   reports: typeof reports;
   ruleEngine: typeof ruleEngine;
   rules: typeof rules;
+  senlerApi: typeof senlerApi;
   "shared/ruleConstants": typeof shared_ruleConstants;
   syncMetrics: typeof syncMetrics;
   systemLogger: typeof systemLogger;
@@ -126,6 +139,7 @@ declare const fullApi: ApiFromModules<{
   videos: typeof videos;
   vkApi: typeof vkApi;
   vkApiLimits: typeof vkApiLimits;
+  vkCommunityApi: typeof vkCommunityApi;
 }>;
 
 /**
