@@ -10,6 +10,7 @@ export type VkApiError = { error_code: number; error_msg: string };
 
 const VK_MAX_RETRIES = 3;
 const VK_RETRY_DELAY_MS = 400;
+const VK_FLOOD_RETRY_DELAY_MS = 1500;
 
 async function callVkApi<T>(
   method: string,
@@ -33,6 +34,11 @@ async function callVkApi<T>(
       // Code 6 = Too many requests per second — retry with backoff
       if (json.error.error_code === 6 && attempt < VK_MAX_RETRIES - 1) {
         await new Promise((r) => setTimeout(r, VK_RETRY_DELAY_MS * (attempt + 1)));
+        continue;
+      }
+      // Code 9 = Flood control — retry with longer backoff
+      if (json.error.error_code === 9 && attempt < VK_MAX_RETRIES - 1) {
+        await new Promise((r) => setTimeout(r, VK_FLOOD_RETRY_DELAY_MS * (attempt + 1)));
         continue;
       }
       throw new Error(`VK API error ${json.error.error_code}: ${json.error.error_msg}`);
