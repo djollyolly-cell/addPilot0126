@@ -15,6 +15,8 @@ interface ExportParams {
   fields: string[];
   rows: ReportRow[];
   totals: Record<string, unknown>;
+  totalsByType?: Record<string, Record<string, unknown>>;
+  typeLabels?: Record<string, string>;
   phonesDetail?: Array<{
     date: string; leftAt: number; phone: string;
     firstName: string; lastName: string;
@@ -41,8 +43,18 @@ export function exportReportToExcel(p: ExportParams): void {
   const fieldDefs = visibleFields.map((f) => FIELD_CATALOG.find((c) => c.id === f)).filter(Boolean);
   const headers = fieldDefs.map((f) => f!.label);
   const dataRows = p.rows.map((r) => visibleFields.map((f) => r[f] ?? ""));
+
+  // Per-type subtotal rows (before grand total)
+  const typeRows: unknown[][] = [];
+  if (p.totalsByType && Object.keys(p.totalsByType).length > 1) {
+    for (const [typeKey, typeRow] of Object.entries(p.totalsByType)) {
+      const label = p.typeLabels?.[typeKey] ?? typeKey;
+      typeRows.push([label, ...visibleFields.slice(1).map((f) => typeRow[f] ?? "")]);
+    }
+  }
+
   const totalsRow = ["Итого", ...visibleFields.slice(1).map((f) => p.totals[f] ?? "")];
-  const reportSheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows, totalsRow]);
+  const reportSheet = XLSX.utils.aoa_to_sheet([headers, ...dataRows, ...typeRows, totalsRow]);
   XLSX.utils.book_append_sheet(wb, reportSheet, "Отчёт");
 
   // Sheet 3: Phones (if any)

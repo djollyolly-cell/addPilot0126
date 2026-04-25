@@ -183,6 +183,8 @@ export function ClientReportTab() {
       dateFrom, dateTo, accountNames: [accountName], granularity,
       userEmail: user?.email ?? "",
       fields, rows: report.rows, totals: report.totals,
+      totalsByType: report.totalsByType,
+      typeLabels: TYPE_LABELS,
       phonesDetail: fields.includes("phones_detail") ? report.phonesDetail : undefined,
     });
   }
