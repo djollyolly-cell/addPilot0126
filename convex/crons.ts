@@ -95,6 +95,13 @@ crons.interval(
   internal.uzBudgetCron.resetBudgets
 );
 
+// Video rotation tick — every 5 minutes, processes all active rotations
+crons.interval(
+  "video-rotation-tick",
+  { minutes: 5 },
+  internal.videoRotation.tick
+);
+
 // Agency token health check — every 6 hours, test tokens and notify on failure
 crons.interval(
   "agency-token-health",
