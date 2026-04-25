@@ -30,8 +30,10 @@ export interface ReportRow {
   cpc?: number;
   ctr?: number;
   cpm?: number;
-  vk_result?: number;
-  lead_forms?: number;
+  result_subscribes?: number;
+  result_messages?: number;
+  result_lead_forms?: number;
+  result_other?: number;
   cpl?: number;
   message_starts?: number;
   phones_count?: number;
@@ -96,7 +98,20 @@ interface MtBannerRaw {
 
 interface MtAdGroupRaw {
   id: number;
-  ad_plan_id: number; // myTarget: this is the actual campaign (Кампания)
+  ad_plan_id: number;
+  package_id?: number;
+}
+
+type ResultCategory = "subscribes" | "messages" | "lead_forms" | "other";
+
+/** Determine result category from package name (most specific label from VK API) */
+function packageNameToCategory(packageName: string | undefined): ResultCategory {
+  if (!packageName) return "other";
+  const lower = packageName.toLowerCase();
+  if (lower.includes("подписк") || lower.includes("subscri") || lower.includes("сообществ")) return "subscribes";
+  if (lower.includes("сообщен") || lower.includes("messag") || lower.includes("переписк")) return "messages";
+  if (lower.includes("заявк") || lower.includes("лид") || lower.includes("lead") || lower.includes("форм")) return "lead_forms";
+  return "other";
 }
 
 // ─── VK API helpers ─────────────────────────────────────────
@@ -145,7 +160,7 @@ async function fetchAdGroups(accessToken: string): Promise<MtAdGroupRaw[]> {
   while (true) {
     const data = await callMtApi<{ items: MtAdGroupRaw[]; count: number }>(
       "campaigns.json", accessToken,
-      { fields: "id,ad_plan_id", limit: "250", offset: String(offset) }
+      { fields: "id,ad_plan_id,package_id", limit: "250", offset: String(offset) }
     );
     const items = data.items || [];
     groups = groups.concat(items);
@@ -265,20 +280,31 @@ export const buildReport = action({
     for (const acc of accounts) {
       if (!acc.accessToken) continue;
       try {
-        // Fetch banners + ad groups in parallel
-        const [banners, adGroups] = await Promise.all([
+        // Fetch banners, ad groups, packages in parallel
+        const [banners, adGroups, packagesData] = await Promise.all([
           fetchAllBanners(acc.accessToken),
           fetchAdGroups(acc.accessToken),
+          callMtApi<{ items: Array<{ id: number; name: string }> }>(
+            "packages.json", acc.accessToken, { fields: "id,name", limit: "50" }
+          ).catch(() => ({ items: [] as Array<{ id: number; name: string }> })),
         ]);
         const bannerIds = banners.map((b) => String(b.id));
 
-        // banner.campaign_id = ad_group.id (Группа)
-        // ad_group.ad_plan_id = actual campaign (Кампания)
+        // Build lookup maps
+        const packageMap = new Map<number, string>();
+        for (const pkg of packagesData.items || []) packageMap.set(pkg.id, pkg.name);
+
+        // banner → group, group → ad_plan, group → package → category
         const bannerToGroupId = new Map<number, number>();
         for (const b of banners) bannerToGroupId.set(b.id, b.campaign_id);
 
         const groupToAdPlanId = new Map<number, number>();
-        for (const g of adGroups) groupToAdPlanId.set(g.id, g.ad_plan_id);
+        const groupToCategory = new Map<number, ResultCategory>();
+        for (const g of adGroups) {
+          groupToAdPlanId.set(g.id, g.ad_plan_id);
+          const pkgName = g.package_id !== undefined ? packageMap.get(g.package_id) : undefined;
+          groupToCategory.set(g.id, packageNameToCategory(pkgName));
+        }
 
         // Fetch stats and lead counts in parallel
         const [statsItems, leadCounts] = await Promise.all([
@@ -295,6 +321,7 @@ export const buildReport = action({
           const campaignId = groupId !== undefined ? groupToAdPlanId.get(groupId) : undefined;
           const campaignIdStr = campaignId !== undefined ? String(campaignId) : "";
           const groupIdStr = groupId !== undefined ? String(groupId) : "";
+          const category = groupId !== undefined ? (groupToCategory.get(groupId) ?? "other") : "other";
 
           if (args.campaignIds?.length && campaignIdStr && !args.campaignIds.includes(campaignIdStr)) continue;
 
@@ -309,8 +336,26 @@ export const buildReport = action({
             existing.impressions = (existing.impressions ?? 0) + (row.base.shows || 0);
             existing.clicks = (existing.clicks ?? 0) + (row.base.clicks || 0);
             existing.spent = Math.round(((existing.spent ?? 0) + rowSpent) * 100) / 100;
-            existing.vk_result = (existing.vk_result ?? 0) + vkResult;
-            existing.lead_forms = (existing.lead_forms ?? 0) + Math.max(formEvents, leadAdsCount);
+
+            // Route vk.result to the correct column based on campaign objective (package)
+            // For lead_forms category: take max(vkResult, formEvents, leadAdsCount) to avoid double-counting
+            const formTotal = Math.max(formEvents, leadAdsCount);
+            switch (category) {
+              case "subscribes":
+                existing.result_subscribes = (existing.result_subscribes ?? 0) + vkResult;
+                if (formTotal > 0) existing.result_lead_forms = (existing.result_lead_forms ?? 0) + formTotal;
+                break;
+              case "messages":
+                existing.result_messages = (existing.result_messages ?? 0) + vkResult;
+                if (formTotal > 0) existing.result_lead_forms = (existing.result_lead_forms ?? 0) + formTotal;
+                break;
+              case "lead_forms":
+                existing.result_lead_forms = (existing.result_lead_forms ?? 0) + Math.max(vkResult, formTotal);
+                break;
+              default:
+                if (vkResult > 0) existing.result_other = (existing.result_other ?? 0) + vkResult;
+                if (formTotal > 0) existing.result_lead_forms = (existing.result_lead_forms ?? 0) + formTotal;
+            }
             rowMap.set(key, existing);
           }
         }
@@ -556,8 +601,8 @@ export const buildReport = action({
       if (args.fields.includes("cpm") && r.impressions && r.spent) {
         r.cpm = Math.round((r.spent / r.impressions) * 1000 * 100) / 100;
       }
-      if (args.fields.includes("cpl") && r.vk_result && r.spent) {
-        r.cpl = Math.round((r.spent / r.vk_result) * 100) / 100;
+      if (args.fields.includes("cpl") && r.result_lead_forms && r.spent) {
+        r.cpl = Math.round((r.spent / r.result_lead_forms) * 100) / 100;
       }
       if (args.fields.includes("weekday") && !r.weekday) {
         r.weekday = weekday(r.date);
@@ -621,14 +666,16 @@ function initRow(
 function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> {
   const totals: Partial<ReportRow> = {};
   let impressions = 0, clicks = 0, spent = 0;
-  let vkResult = 0, leadForms = 0;
+  let resultSubscribes = 0, resultMessages = 0, resultLeadForms = 0, resultOther = 0;
   let messageStarts = 0, phonesCount = 0, senlerSubs = 0;
   for (const r of rows) {
     impressions += r.impressions ?? 0;
     clicks += r.clicks ?? 0;
     spent += r.spent ?? 0;
-    vkResult += r.vk_result ?? 0;
-    leadForms += r.lead_forms ?? 0;
+    resultSubscribes += r.result_subscribes ?? 0;
+    resultMessages += r.result_messages ?? 0;
+    resultLeadForms += r.result_lead_forms ?? 0;
+    resultOther += r.result_other ?? 0;
     messageStarts += r.message_starts ?? 0;
     phonesCount += r.phones_count ?? 0;
     senlerSubs += r.senler_subs ?? 0;
@@ -637,12 +684,14 @@ function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> 
   if (fields.includes("clicks")) totals.clicks = clicks;
   if (fields.includes("spent")) totals.spent = Math.round(spent * 100) / 100;
   if (fields.includes("spent_with_vat")) totals.spent_with_vat = Math.round(spent * 1.2 * 100) / 100;
-  if (fields.includes("vk_result")) totals.vk_result = vkResult;
-  if (fields.includes("lead_forms")) totals.lead_forms = leadForms;
+  if (fields.includes("result_subscribes")) totals.result_subscribes = resultSubscribes;
+  if (fields.includes("result_messages")) totals.result_messages = resultMessages;
+  if (fields.includes("result_lead_forms")) totals.result_lead_forms = resultLeadForms;
+  if (fields.includes("result_other")) totals.result_other = resultOther;
   if (fields.includes("cpc") && clicks) totals.cpc = Math.round((spent / clicks) * 100) / 100;
   if (fields.includes("ctr") && impressions) totals.ctr = Math.round((clicks / impressions) * 10000) / 100;
   if (fields.includes("cpm") && impressions) totals.cpm = Math.round((spent / impressions) * 1000 * 100) / 100;
-  if (fields.includes("cpl") && vkResult) totals.cpl = Math.round((spent / vkResult) * 100) / 100;
+  if (fields.includes("cpl") && resultLeadForms) totals.cpl = Math.round((spent / resultLeadForms) * 100) / 100;
   if (fields.includes("message_starts")) totals.message_starts = messageStarts;
   if (fields.includes("phones_count")) totals.phones_count = phonesCount;
   if (fields.includes("senler_subs")) totals.senler_subs = senlerSubs;
