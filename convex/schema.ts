@@ -318,6 +318,8 @@ export default defineSchema({
     spent: v.number(),
     leads: v.number(),
     vkResult: v.optional(v.number()),
+    campaignType: v.optional(v.string()), // "lead" | "message" | "subscription" | "awareness"
+    formEvents: v.optional(v.number()),  // events.sending_form count (for lead_forms max logic)
     reach: v.optional(v.number()),
     cpl: v.optional(v.number()),
     ctr: v.optional(v.number()),
