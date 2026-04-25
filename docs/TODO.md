@@ -10,10 +10,11 @@
   - [ ] GetUNIQ: перевести на серверные env vars (GETUNIQ_CLIENT_ID/SECRET), убрать поля ввода из модалки
   - [ ] Очистка agencyCredentials при отключении кабинета
 
-- [ ] **Fan-out кронов** — параллельная обработка аккаунтов вместо sequential
+- [ ] **Масштабирование кронов: параллельная обработка аккаунтов**
   - Спек: `docs/superpowers/specs/2026-04-25-fan-out-crons-design.md`
-  - syncAll, checkUzBudgetRules, proactiveTokenRefresh → dispatcher + worker pattern
-  - Health check пороги, алерты в dispatcher, Convex concurrency config
+  - Проблема: syncAll, checkUzBudgetRules, proactiveTokenRefresh обрабатывают аккаунты последовательно — при 262 аккаунтах полный цикл 33 мин, при росте станет критично
+  - Решение: dispatcher + worker паттерн — каждый аккаунт в отдельном изолированном action, Convex управляет очередью и concurrency
+  - Включает: исправление порогов health check (116 false positives), алерты при сбоях каждые 5 мин вместо 6ч, настройку concurrency сервера
 
 ## Ожидают
 
