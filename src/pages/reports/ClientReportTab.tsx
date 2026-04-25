@@ -32,31 +32,100 @@ export function ClientReportTab() {
 
   const [dateFrom, setDateFrom] = useState(weekAgoStr());
   const [dateTo, setDateTo] = useState(todayStr());
-  const [selectedAccountIds, setSelectedAccountIds] = useState<Id<"adAccounts">[]>([]);
+  const [selectedAccountId, setSelectedAccountId] = useState<Id<"adAccounts"> | null>(null);
   const [selectedCommunityIds, setSelectedCommunityIds] = useState<number[]>([]);
   const [campaignStatus, setCampaignStatus] = useState("all");
   const [granularity, setGranularity] = useState<Granularity>("day");
   const [fields, setFields] = useState<string[]>(DEFAULT_TEMPLATE_FIELDS);
   const [building, setBuilding] = useState(false);
+  const [communityLoading, setCommunityLoading] = useState(false);
+  const [communityError, setCommunityError] = useState<string | null>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [report, setReport] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [showPhones, setShowPhones] = useState(false);
 
-  const buildReport = useAction(api.clientReport.buildReport);
+  const buildReportAction = useAction(api.clientReport.buildReport);
+  const buildCommunityReportAction = useAction(api.clientReport.buildCommunityReport);
 
   function handleTemplateLoad(t: Doc<"reportTemplates">) {
-    setSelectedAccountIds(t.filters.accountIds);
+    if (t.filters.accountIds.length > 1) {
+      console.warn(`Template "${t.name}" has ${t.filters.accountIds.length} accounts — using first one`);
+    }
+    setSelectedAccountId(t.filters.accountIds[0] ?? null);
     setSelectedCommunityIds(t.filters.communityIds ?? []);
     setCampaignStatus(t.filters.campaignStatus ?? "all");
     setGranularity(t.granularity);
     setFields(t.fields);
   }
 
+  async function loadCommunityData(accountId: Id<"adAccounts">) {
+    const needsCommunity = fields.some((f) =>
+      ["message_starts", "phones_count", "phones_detail", "senler_subs"].includes(f)
+    );
+    if (!needsCommunity || selectedCommunityIds.length === 0) return;
+
+    setCommunityLoading(true);
+    setCommunityError(null);
+    try {
+      const communityResult = await buildCommunityReportAction({
+        userId: userId!,
+        accountId,
+        communityIds: selectedCommunityIds,
+        fields,
+        dateFrom,
+        dateTo,
+      });
+      // Merge community data into report
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      setReport((prev: any) => {
+        if (!prev) return prev;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const updated = { ...prev, rows: prev.rows.map((r: any) => ({ ...r })) };
+
+        // Community data merges into first row with matching date
+        for (const [date, count] of Object.entries(communityResult.messageStartsByDate)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const row = updated.rows.find((r: any) => r.date === date);
+          if (row) row.message_starts = (row.message_starts ?? 0) + (count as number);
+        }
+        for (const [date, count] of Object.entries(communityResult.senlerSubsByDate)) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const row = updated.rows.find((r: any) => r.date === date);
+          if (row) row.senler_subs = (row.senler_subs ?? 0) + (count as number);
+        }
+        // Merge phones
+        updated.phonesDetail = [
+          ...(updated.phonesDetail ?? []),
+          ...communityResult.phonesDetail,
+        ];
+        // Update phones_count per date
+        const phonesCountByDate = new Map<string, number>();
+        for (const p of communityResult.phonesDetail) {
+          phonesCountByDate.set(p.date, (phonesCountByDate.get(p.date) ?? 0) + 1);
+        }
+        for (const [date, count] of phonesCountByDate) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const row = updated.rows.find((r: any) => r.date === date);
+          if (row) row.phones_count = (row.phones_count ?? 0) + count;
+        }
+        // Merge partial errors
+        if (communityResult.partialErrors.length > 0) {
+          updated.partialErrors = [...updated.partialErrors, ...communityResult.partialErrors];
+        }
+        return updated;
+      });
+    } catch (err) {
+      setCommunityError(err instanceof Error ? err.message : "Ошибка сообщества");
+    } finally {
+      setCommunityLoading(false);
+    }
+  }
+
   async function handleApply() {
     if (!userId) return;
-    if (selectedAccountIds.length === 0) {
-      setError("Выберите хотя бы один кабинет");
+    if (!selectedAccountId) {
+      setError("Выберите кабинет");
       return;
     }
     if (dateFrom > dateTo) {
@@ -64,12 +133,13 @@ export function ClientReportTab() {
       return;
     }
     setError(null);
+    setCommunityError(null);
     setBuilding(true);
+
     try {
-      const result = await buildReport({
+      const result = await buildReportAction({
         userId,
-        accountIds: selectedAccountIds,
-        communityIds: selectedCommunityIds.length ? selectedCommunityIds : undefined,
+        accountId: selectedAccountId,
         campaignStatus: campaignStatus !== "all" ? campaignStatus : undefined,
         granularity,
         fields,
@@ -82,15 +152,16 @@ export function ClientReportTab() {
     } finally {
       setBuilding(false);
     }
+
+    // Call 2: community data (async, non-blocking)
+    await loadCommunityData(selectedAccountId);
   }
 
   function handleExport() {
     if (!report) return;
-    const accountNames = (accounts ?? [])
-      .filter((a) => selectedAccountIds.includes(a._id))
-      .map((a) => a.name);
+    const accountName = accounts?.find((a) => a._id === selectedAccountId)?.name ?? "";
     exportReportToExcel({
-      dateFrom, dateTo, accountNames, granularity,
+      dateFrom, dateTo, accountNames: [accountName], granularity,
       userEmail: user?.email ?? "",
       fields, rows: report.rows, totals: report.totals,
       phonesDetail: fields.includes("phones_detail") ? report.phonesDetail : undefined,
@@ -98,7 +169,7 @@ export function ClientReportTab() {
   }
 
   const currentFilters = {
-    accountIds: selectedAccountIds,
+    accountIds: selectedAccountId ? [selectedAccountId] : [],
     communityIds: selectedCommunityIds.length ? selectedCommunityIds : undefined,
     campaignStatus: campaignStatus !== "all" ? campaignStatus : undefined,
   };
@@ -143,16 +214,13 @@ export function ClientReportTab() {
           </div>
 
           <div>
-            <label className="text-sm font-medium">Кабинеты</label>
+            <label className="text-sm font-medium">Кабинет</label>
             <div className="mt-1 space-y-1 max-h-40 overflow-y-auto border border-border rounded-md p-2">
               {accounts?.map((a) => (
                 <label key={a._id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox"
-                    checked={selectedAccountIds.includes(a._id)}
-                    onChange={(e) => {
-                      if (e.target.checked) setSelectedAccountIds([...selectedAccountIds, a._id]);
-                      else setSelectedAccountIds(selectedAccountIds.filter((x) => x !== a._id));
-                    }} />
+                  <input type="radio" name="account"
+                    checked={selectedAccountId === a._id}
+                    onChange={() => setSelectedAccountId(a._id)} />
                   {a.name}
                 </label>
               ))}
@@ -249,6 +317,25 @@ export function ClientReportTab() {
               </div>
             )}
 
+            {communityLoading && (
+              <div className="mb-4 p-3 rounded-lg bg-primary/10 text-primary text-sm flex items-center gap-2">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Загрузка данных сообщества...
+              </div>
+            )}
+
+            {communityError && (
+              <div className="mb-4 p-3 rounded-lg bg-destructive/10 text-destructive text-sm flex items-center gap-2">
+                <AlertCircle className="h-4 w-4" />
+                <span>{communityError}</span>
+                <Button variant="ghost" size="sm" onClick={() => {
+                  if (selectedAccountId) loadCommunityData(selectedAccountId);
+                }}>
+                  Повторить
+                </Button>
+              </div>
+            )}
+
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -270,6 +357,17 @@ export function ClientReportTab() {
                   ))}
                 </tbody>
                 <tfoot>
+                  {report.totalsByType && Object.keys(report.totalsByType).length > 1 && (
+                    Object.entries(report.totalsByType).map(([typeName, typeRow]: [string, Record<string, unknown>]) => (
+                      <tr key={typeName} className="text-sm text-muted-foreground border-t border-border">
+                        {fields.filter((f) => f !== "phones_detail").map((f, i) => (
+                          <td key={f} className="py-1 px-3">
+                            {i === 0 ? typeName : String(typeRow[f] ?? "")}
+                          </td>
+                        ))}
+                      </tr>
+                    ))
+                  )}
                   <tr className="font-bold border-t-2 border-border">
                     {fields.filter((f) => f !== "phones_detail").map((f, i) => (
                       <td key={f} className="py-2 px-3">
