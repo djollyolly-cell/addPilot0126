@@ -43,6 +43,8 @@ export const saveDaily = internalMutation({
     spent: v.number(),
     leads: v.number(),
     vkResult: v.optional(v.number()),
+    campaignType: v.optional(v.string()),
+    formEvents: v.optional(v.number()),
     reach: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
@@ -68,6 +70,8 @@ export const saveDaily = internalMutation({
         leads: args.leads,
       };
       if (args.vkResult !== undefined) patch.vkResult = args.vkResult;
+      if (args.campaignType !== undefined) patch.campaignType = args.campaignType;
+      if (args.formEvents !== undefined) patch.formEvents = args.formEvents;
       if (args.campaignId !== undefined) patch.campaignId = args.campaignId;
       if (args.reach !== undefined) patch.reach = args.reach;
       if (cpl !== undefined) patch.cpl = cpl;
@@ -87,6 +91,8 @@ export const saveDaily = internalMutation({
       spent: args.spent,
       leads: args.leads,
       vkResult: args.vkResult,
+      campaignType: args.campaignType,
+      formEvents: args.formEvents,
       reach: args.reach,
       cpl,
       ctr,
