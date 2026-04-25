@@ -37,6 +37,7 @@ export default defineSchema({
     // VK Ads cabinet ID discovered via ads.getAccounts at login
     vkAdsCabinetId: v.optional(v.string()),
     isAdmin: v.optional(v.boolean()),
+    videoRotationEnabled: v.optional(v.boolean()),
     updatedAt: v.optional(v.number()),
     // Grandfathered pricing: old prices locked until this timestamp
     lockedPrices: v.optional(v.object({
@@ -180,7 +181,8 @@ export default defineSchema({
       v.literal("new_lead"),
       v.literal("uz_budget_manage"),
       v.literal("custom"),                 // L2 generic constructor (conditions = array)
-      v.literal("custom_l3")              // L3 per-agency handler (dispatch via customRuleTypeCode)
+      v.literal("custom_l3"),             // L3 per-agency handler (dispatch via customRuleTypeCode)
+      v.literal("video_rotation")         // Campaign rotation module
     ),
     conditions: v.union(
       // Existing: single condition (L1 standard types + L3 custom_*)
@@ -205,6 +207,13 @@ export default defineSchema({
         resetDaily: v.optional(v.boolean()),
         // cpc_limit fields
         minSpent: v.optional(v.number()),
+        // video_rotation fields
+        slotDurationHours: v.optional(v.number()),
+        dailyBudget: v.optional(v.number()),
+        quietHoursEnabled: v.optional(v.boolean()),
+        quietHoursStart: v.optional(v.string()),
+        quietHoursEnd: v.optional(v.string()),
+        campaignOrder: v.optional(v.array(v.string())),
       }),
       // New: array of conditions for L2 constructor (AND)
       v.array(v.object({
@@ -263,18 +272,16 @@ export default defineSchema({
       v.literal("stopped_and_notified"),
       v.literal("budget_increased"),
       v.literal("budget_reset"),
-      v.literal("zero_spend_alert")
+      v.literal("zero_spend_alert"),
+      v.literal("rotation_switch"),
+      v.literal("rotation_paused"),
+      v.literal("rotation_resumed"),
+      v.literal("rotation_cycle_complete"),
+      v.literal("rotation_started"),
+      v.literal("rotation_stopped")
     ),
     reason: v.string(),
-    metricsSnapshot: v.object({
-      cpl: v.optional(v.number()),
-      ctr: v.optional(v.number()),
-      spent: v.number(),
-      leads: v.number(),
-      impressions: v.optional(v.number()),
-      clicks: v.optional(v.number()),
-      newBudget: v.optional(v.number()),
-    }),
+    metricsSnapshot: v.any(),
     savedAmount: v.number(),
     status: v.union(
       v.literal("success"),
@@ -294,6 +301,29 @@ export default defineSchema({
     .index("by_accountId", ["accountId"])
     .index("by_orgId_date", ["orgId", "createdAt"])
     .index("by_createdAt", ["createdAt"]),
+
+  rotationState: defineTable({
+    ruleId: v.id("rules"),
+    accountId: v.id("adAccounts"),
+    currentIndex: v.number(),
+    currentCampaignId: v.string(),
+    slotStartedAt: v.number(),
+    dailyBudgetRemaining: v.number(),
+    budgetDayStart: v.string(),
+    cycleNumber: v.number(),
+    status: v.union(
+      v.literal("running"),
+      v.literal("paused_quiet_hours"),
+      v.literal("paused_intervention"),
+      v.literal("stopped")
+    ),
+    pausedAt: v.optional(v.number()),
+    pausedElapsed: v.optional(v.number()),
+    consecutiveErrors: v.optional(v.number()),
+    lastError: v.optional(v.string()),
+  })
+    .index("by_ruleId", ["ruleId"])
+    .index("by_accountId", ["accountId"]),
 
   systemLogs: defineTable({
     userId: v.optional(v.id("users")),
