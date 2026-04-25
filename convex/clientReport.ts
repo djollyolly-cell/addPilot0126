@@ -188,8 +188,8 @@ export const buildReport = action({
     const partialErrors: string[] = [];
     const rowMap = new Map<string, ReportRow>();
 
-    // 1. Read metrics from DB (instant)
-    const [metrics, campaignNames, adNames] = await Promise.all([
+    // 1. Read metrics from DB + campaign type map from VK API (like digest)
+    const [metrics, campaignNames, adNames, accounts] = await Promise.all([
       ctx.runQuery(internal.clientReport._getMetricsForReport, {
         accountId: args.accountId,
         dateFrom: args.dateFrom,
@@ -201,11 +201,30 @@ export const buildReport = action({
       ctx.runQuery(internal.clientReport._getAdNames, {
         accountId: args.accountId,
       }),
+      ctx.runQuery(internal.clientReport._readAccounts, {
+        accountIds: [args.accountId],
+      }),
     ]);
 
-    // Map campaignType from metricsDaily to result category
-    function typeToCategory(campaignType: string | undefined): ResultCategory {
-      switch (campaignType) {
+    // 2. Get campaign type map from VK API on-the-fly (same approach as digest)
+    const account = accounts[0];
+    const typeMap = new Map<string, string>(); // ad_group_id → type
+    if (account?.accessToken) {
+      try {
+        const mapping = await ctx.runAction(internal.vkApi.getCampaignTypeMap, {
+          accessToken: account.accessToken,
+        });
+        for (const entry of mapping) {
+          typeMap.set(entry.adGroupId, entry.type);
+        }
+      } catch (err) {
+        partialErrors.push(`Не удалось получить типы кампаний: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    function typeToCategory(adGroupId: string): ResultCategory {
+      const type = typeMap.get(adGroupId);
+      switch (type) {
         case "subscription": return "subscribes";
         case "message": return "messages";
         case "lead": return "lead_forms";
@@ -247,7 +266,7 @@ export const buildReport = action({
       // Apply campaignStatus filter (ad_group status from campaigns table)
       if (activeGroupIds && !activeGroupIds.has(groupId)) continue;
 
-      const category = typeToCategory(m.campaignType);
+      const category = typeToCategory(groupId);
 
       // lead_forms: take max(vkResult, formEvents) to preserve max-logic
       let vkResult = m.vkResult ?? 0;
@@ -341,7 +360,7 @@ export const buildReport = action({
     rows.sort((a, b) => a.date.localeCompare(b.date));
 
     const totals = computeTotals(rows, args.fields);
-    const totalsByType = computeTotalsByType(metrics, args.fields, args.campaignIds, groupIdFilter, adNameMap);
+    const totalsByType = computeTotalsByType(metrics, args.fields, args.campaignIds, groupIdFilter, adNameMap, typeMap);
 
     return {
       dateFrom: args.dateFrom,
@@ -624,7 +643,6 @@ function computeTotalsByType(
   metrics: Array<{
     adId: string;
     campaignId?: string;
-    campaignType?: string;
     impressions: number;
     clicks: number;
     spent: number;
@@ -635,6 +653,7 @@ function computeTotalsByType(
   campaignFilter: string[] | undefined,
   groupFilter: Set<string> | null,
   adNames: Record<string, { campaignId: string }>,
+  typeMap: Map<string, string>,
 ): CampaignTypeTotals {
   const byType: Record<string, { impressions: number; clicks: number; spent: number; results: number }> = {};
 
@@ -645,7 +664,7 @@ function computeTotalsByType(
     if (campaignFilter?.length && campaignId && !campaignFilter.includes(campaignId)) continue;
     if (groupFilter && !groupFilter.has(m.campaignId)) continue;
 
-    const type = m.campaignType ?? "other";
+    const type = typeMap.get(m.campaignId) ?? "other";
     if (!byType[type]) byType[type] = { impressions: 0, clicks: 0, spent: 0, results: 0 };
     byType[type].impressions += m.impressions;
     byType[type].clicks += m.clicks;

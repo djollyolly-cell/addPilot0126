@@ -178,7 +178,7 @@ export function classifyCampaignPackage(packageName: string): CampaignType {
   const lower = packageName.toLowerCase();
   // branding/awareness FIRST — before video_and_live which also appears in branding packages
   if (["branding", "reach", "video_view"].some(kw => lower.includes(kw))) return "awareness";
-  if (["join", "subscri", "подписк", "engage", "socialengagement"].some(kw => lower.includes(kw))) return "subscription";
+  if (["join", "subscri", "подписк", "pricedGoals_engage"].some(kw => lower.includes(kw))) return "subscription";
   if (["contact", "clip", "video_and_live", "socialvideo", "сообщени"].some(kw => lower.includes(kw))) return "message";
   return "lead";
 }
