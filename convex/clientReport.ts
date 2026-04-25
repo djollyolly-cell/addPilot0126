@@ -141,7 +141,7 @@ export const _getCampaignNames = internalQuery({
   },
 });
 
-/** Read ad names: vkAdId -> { name, campaignId (vkCampaignId) } with batch campaign lookup */
+/** Read ad names as array to avoid Convex 1024-field object limit */
 export const _getAdNames = internalQuery({
   args: { accountId: v.id("adAccounts") },
   handler: async (ctx, args) => {
@@ -158,11 +158,11 @@ export const _getAdNames = internalQuery({
       if (campaign) campaignMap.set(cId as string, campaign.vkCampaignId);
     }
 
-    const result: Record<string, { name: string; campaignId: string }> = {};
-    for (const a of ads) {
-      result[a.vkAdId] = { name: a.name, campaignId: campaignMap.get(a.campaignId as string) ?? "" };
-    }
-    return result;
+    return ads.map((a) => ({
+      vkAdId: a.vkAdId,
+      name: a.name,
+      campaignId: campaignMap.get(a.campaignId as string) ?? "",
+    }));
   },
 });
 
@@ -272,7 +272,10 @@ export const buildReport = action({
     }
 
     const campaignNameMap = campaignNames as Record<string, { name: string; status: string; adPlanId?: string }>;
-    const adNameMap = adNames as Record<string, { name: string; campaignId: string }>;
+    const adNameMap: Record<string, { name: string; campaignId: string }> = {};
+    for (const a of adNames as Array<{ vkAdId: string; name: string; campaignId: string }>) {
+      adNameMap[a.vkAdId] = { name: a.name, campaignId: a.campaignId };
+    }
 
     // Build ad_group status set for campaignStatus filter
     const activeGroupIds = args.campaignStatus
