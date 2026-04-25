@@ -34,6 +34,7 @@ export interface MetricsSnapshot {
   ctr?: number;
   cpc?: number;        // computed: spent/clicks (L2 constructor metric)
   reach?: number;      // raw from metricsDaily (L2 constructor metric)
+  campaignType?: string; // "lead" | "message" | "subscription" | "awareness"
 }
 
 export interface RuleCondition {
@@ -230,6 +231,9 @@ export function evaluateCondition(
     }
 
     case "new_lead": {
+      // Skip subscription/awareness campaigns — vk.result for these is community joins, not leads
+      if (metrics.campaignType === "subscription" || metrics.campaignType === "awareness")
+        return false;
       // Triggers when leads > 0 (new lead detected).
       // The condition.value is ignored — any lead count > 0 triggers.
       // Dedup ensures this fires only once per ad per day.
@@ -388,6 +392,9 @@ export function evaluateConditionTrace(
     }
 
     case "new_lead": {
+      if (metrics.campaignType === "subscription" || metrics.campaignType === "awareness") {
+        return { triggered: false, stoppedAt: "step6_campaign_type_excluded", reason: `Тип кампании "${metrics.campaignType}" — не лид` };
+      }
       if (metrics.leads > 0)
         return { triggered: true, stoppedAt: "triggered", reason: `Новый лид: ${metrics.leads} лид(ов)` };
       return { triggered: false, stoppedAt: "step6_condition_not_met", reason: "Лидов: 0" };
@@ -1651,7 +1658,7 @@ export const checkRulesForAccount = internalAction({
       let adIdsToCheck: string[];
       const todayMetricsByAd = new Map<
         string,
-        { spent: number; leads: number; impressions: number; clicks: number; cpl?: number; ctr?: number; cpc?: number; reach?: number }
+        { spent: number; leads: number; impressions: number; clicks: number; cpl?: number; ctr?: number; cpc?: number; reach?: number; campaignType?: string }
       >();
 
       const dailyMetrics = await ctx.runQuery(
@@ -1776,6 +1783,7 @@ export const checkRulesForAccount = internalAction({
             impressions: delta.impressions,
             clicks: delta.clicks,
             cpc: delta.clicks > 0 ? delta.spent / delta.clicks : undefined,
+            campaignType: todayMetric?.campaignType,
             // reach not available in realtime snapshots
           };
         } else if (needsAllAds) {
@@ -1796,6 +1804,7 @@ export const checkRulesForAccount = internalAction({
             clicks: aggregated.clicks,
             cpc: aggregated.clicks > 0 ? aggregated.spent / aggregated.clicks : undefined,
             reach: aggregated.reach,
+            campaignType: todayMetric?.campaignType,
           };
         } else if (todayMetric) {
           metricsSnapshot = {
@@ -1807,6 +1816,7 @@ export const checkRulesForAccount = internalAction({
             ctr: todayMetric.ctr ?? undefined,
             cpc: todayMetric.clicks > 0 ? todayMetric.spent / todayMetric.clicks : undefined,
             reach: todayMetric.reach ?? undefined,
+            campaignType: todayMetric.campaignType,
           };
         } else {
           continue;
