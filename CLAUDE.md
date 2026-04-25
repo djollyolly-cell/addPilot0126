@@ -72,6 +72,7 @@ Detailed rules are in `.claude/rules/`:
 - **Floating point:** Round `spent` after each summation with `Math.round(... * 100) / 100` to avoid values like `3399.9999999999995`.
 - **Never offer UI options the backend can't fulfill** (e.g. `day_group` granularity when the data source has no `groupId` field).
 - **NEVER write rules/docs about code without reading the actual current code first.** Verify every function name, every argument, every mechanic against the real file.
+- **Never claim data is available without verifying the source.** Don't say "дайджест уже считает подписки" or "эти данные уже есть" without finding the exact function/query that produces them. Trace the full chain: API call → parser → storage → query → UI. If you can't point to the line of code — don't claim it exists.
 
 ## Debugging & Fix Discipline
 
