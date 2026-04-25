@@ -88,7 +88,7 @@ describe("communityProfiles", () => {
         senlerApiKey: "new_senler",
       });
       const list = await t.query(api.communityProfiles.list, { userId });
-      expect(list[0].senlerApiKey).toBe("new_senler");
+      expect(list[0].hasSenlerKey).toBe(true);
     });
 
     test("rejects update from non-owner", async () => {
