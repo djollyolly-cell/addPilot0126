@@ -39,7 +39,7 @@ const RULE_TYPE_LABELS: Record<RuleType, string> = {
   uz_budget_manage: 'Работа с УЗ',
   custom: 'Конструктор (AND)',
   custom_l3: 'Кастомное правило',
-  video_rotation: 'Ротаци�� кампаний',
+  video_rotation: 'Ротация кампаний',
 };
 
 const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
@@ -468,6 +468,12 @@ export function RulesPage() {
                       ...(data.maxDailyBudget !== undefined ? { maxDailyBudget: data.maxDailyBudget } : {}),
                       ...(data.resetDaily !== undefined ? { resetDaily: data.resetDaily } : {}),
                       ...(data.minSpent !== undefined ? { minSpent: data.minSpent } : {}),
+                      ...(data.slotDurationHours !== undefined ? { slotDurationHours: data.slotDurationHours } : {}),
+                      ...(data.rotationDailyBudget !== undefined ? { rotationDailyBudget: data.rotationDailyBudget } : {}),
+                      ...(data.campaignOrder ? { campaignOrder: data.campaignOrder } : {}),
+                      ...(data.rotationQuietHoursEnabled !== undefined ? { rotationQuietHoursEnabled: data.rotationQuietHoursEnabled } : {}),
+                      ...(data.rotationQuietHoursStart ? { rotationQuietHoursStart: data.rotationQuietHoursStart } : {}),
+                      ...(data.rotationQuietHoursEnd ? { rotationQuietHoursEnd: data.rotationQuietHoursEnd } : {}),
                     });
                     // For UZ rules: immediately set budgets to initialBudget
                     if (data.type === 'uz_budget_manage' && newRuleId) {
@@ -562,6 +568,13 @@ interface RuleFormSubmitData {
   minSpent?: number;
   // L2 constructor
   conditionsArray?: { metric: string; operator: string; value: number }[];
+  // video_rotation
+  slotDurationHours?: number;
+  rotationDailyBudget?: number;
+  campaignOrder?: string[];
+  rotationQuietHoursEnabled?: boolean;
+  rotationQuietHoursStart?: string;
+  rotationQuietHoursEnd?: string;
 }
 
 interface RuleFormProps {
