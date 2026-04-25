@@ -6,7 +6,7 @@
 const VK_API_BASE = "https://api.vk.com/method";
 const VK_API_VERSION = "5.199";
 
-export type VkApiError = { code: number; message: string };
+export type VkApiError = { error_code: number; error_msg: string };
 
 const VK_MAX_RETRIES = 3;
 const VK_RETRY_DELAY_MS = 400;
@@ -31,11 +31,11 @@ async function callVkApi<T>(
     const json = (await res.json()) as { response?: T; error?: VkApiError };
     if (json.error) {
       // Code 6 = Too many requests per second — retry with backoff
-      if (json.error.code === 6 && attempt < VK_MAX_RETRIES - 1) {
+      if (json.error.error_code === 6 && attempt < VK_MAX_RETRIES - 1) {
         await new Promise((r) => setTimeout(r, VK_RETRY_DELAY_MS * (attempt + 1)));
         continue;
       }
-      throw new Error(`VK API error ${json.error.code}: ${json.error.message}`);
+      throw new Error(`VK API error ${json.error.error_code}: ${json.error.error_msg}`);
     }
     return json.response as T;
   }
