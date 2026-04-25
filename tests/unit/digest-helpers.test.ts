@@ -43,10 +43,15 @@ describe("classifyCampaignPackage", () => {
     expect(classifyCampaignPackage("or_tt_community_vk_promopost_cpm_branding_general")).toBe("awareness");
   });
 
-  test("lead by default", () => {
-    expect(classifyCampaignPackage("or_tt_crossdevice_community_vk_post_cpc_socialengagement_site_conversions")).toBe("lead");
-    expect(classifyCampaignPackage("Трафик")).toBe("lead");
-    expect(classifyCampaignPackage("")).toBe("lead");
+  test("leadads → lead", () => {
+    expect(classifyCampaignPackage("or_tt_crossdevice_video_vk_cpm_leadads")).toBe("lead");
+    expect(classifyCampaignPackage("or_tt_crossdevice_video_vk_cpс_leadads_card")).toBe("lead");
+  });
+
+  test("other by default", () => {
+    expect(classifyCampaignPackage("or_tt_crossdevice_community_vk_post_cpc_socialengagement_site_conversions")).toBe("other");
+    expect(classifyCampaignPackage("Трафик")).toBe("other");
+    expect(classifyCampaignPackage("")).toBe("other");
   });
 
   test("video_and_live without branding = message", () => {

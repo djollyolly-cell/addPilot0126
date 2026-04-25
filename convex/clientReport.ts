@@ -206,7 +206,8 @@ export const buildReport = action({
       }),
     ]);
 
-    // 2. Get campaign type map from VK API on-the-fly (same approach as digest)
+    // 2. Classify ad_groups via paginated getCampaignTypeMap (same as digest)
+    //    _id__in filter silently drops old/archived groups; paginated fetch returns all
     const account = accounts[0];
     const typeMap = new Map<string, string>(); // ad_group_id → type
     if (account?.accessToken) {
@@ -268,11 +269,8 @@ export const buildReport = action({
 
       const category = typeToCategory(groupId);
 
-      // lead_forms: take max(vkResult, formEvents) to preserve max-logic
-      let vkResult = m.vkResult ?? 0;
-      if (category === "lead_forms" && m.formEvents !== undefined) {
-        vkResult = Math.max(vkResult, m.formEvents);
-      }
+      // Use leads (has data for all rows) with vkResult fallback
+      const results = Math.max(m.leads ?? 0, (m as Record<string, unknown>).vkResult as number ?? 0);
 
       const key = buildKey(args.granularity, {
         date: m.date,
@@ -313,19 +311,19 @@ export const buildReport = action({
       existing.clicks = (existing.clicks ?? 0) + m.clicks;
       existing.spent = Math.round(((existing.spent ?? 0) + m.spent) * 100) / 100;
 
-      // Route vkResult by campaignType
+      // Route results by campaignType
       switch (category) {
         case "subscribes":
-          existing.result_subscribes = (existing.result_subscribes ?? 0) + vkResult;
+          existing.result_subscribes = (existing.result_subscribes ?? 0) + results;
           break;
         case "messages":
-          existing.result_messages = (existing.result_messages ?? 0) + vkResult;
+          existing.result_messages = (existing.result_messages ?? 0) + results;
           break;
         case "lead_forms":
-          existing.result_lead_forms = (existing.result_lead_forms ?? 0) + vkResult;
+          existing.result_lead_forms = (existing.result_lead_forms ?? 0) + results;
           break;
         default:
-          if (vkResult > 0) existing.result_other = (existing.result_other ?? 0) + vkResult;
+          if (results > 0) existing.result_other = (existing.result_other ?? 0) + results;
       }
 
       rowMap.set(key, existing);
@@ -646,8 +644,7 @@ function computeTotalsByType(
     impressions: number;
     clicks: number;
     spent: number;
-    vkResult?: number;
-    formEvents?: number;
+    leads?: number;
   }>,
   fields: string[],
   campaignFilter: string[] | undefined,
@@ -669,11 +666,7 @@ function computeTotalsByType(
     byType[type].impressions += m.impressions;
     byType[type].clicks += m.clicks;
     byType[type].spent += m.spent;
-    // lead_forms: max(vkResult, formEvents) — same logic as in buildReport
-    let result = m.vkResult ?? 0;
-    if (type === "lead" && m.formEvents !== undefined) {
-      result = Math.max(result, m.formEvents);
-    }
+    const result = Math.max(m.leads ?? 0, ((m as Record<string, unknown>).vkResult as number) ?? 0);
     byType[type].results += result;
   }
 

@@ -172,15 +172,16 @@ export function isSubscriptionPackage(packageName: string): boolean {
   return classifyCampaignPackage(packageName) === "subscription";
 }
 
-export type CampaignType = "lead" | "message" | "subscription" | "awareness";
+export type CampaignType = "lead" | "message" | "subscription" | "awareness" | "other";
 
 export function classifyCampaignPackage(packageName: string): CampaignType {
   const lower = packageName.toLowerCase();
   // branding/awareness FIRST — before video_and_live which also appears in branding packages
   if (["branding", "reach", "video_view"].some(kw => lower.includes(kw))) return "awareness";
-  if (["join", "subscri", "подписк", "pricedGoals_engage"].some(kw => lower.includes(kw))) return "subscription";
+  if (["join", "subscri", "подписк"].some(kw => lower.includes(kw))) return "subscription";
   if (["contact", "clip", "video_and_live", "socialvideo", "сообщени"].some(kw => lower.includes(kw))) return "message";
-  return "lead";
+  if (lower.includes("leadads")) return "lead";
+  return "other";
 }
 
 export function formatDelta(current: number, previous: number): string {
@@ -243,8 +244,8 @@ export function formatDigestMessage(
     if (account.campaigns && account.campaigns.length > 0) {
       lines.push("");
       for (const camp of account.campaigns) {
-        const icon = { lead: "🎯", message: "💬", subscription: "👥", awareness: "👁" }[camp.type];
-        const label = { lead: "лиды", message: "сообщения", subscription: "подписки", awareness: "просмотры" }[camp.type];
+        const icon = { lead: "🎯", message: "💬", subscription: "👥", awareness: "👁", other: "📌" }[camp.type] ?? "📌";
+        const label = { lead: "лиды", message: "сообщения", subscription: "подписки", awareness: "просмотры", other: "результаты" }[camp.type] ?? "результаты";
         const costStr = camp.results > 0 ? ` | стоимость: ${camp.costPerResult}₽` : "";
         lines.push(`${icon} ${camp.adPlanName} — ${label}: ${camp.results}${costStr}`);
       }
@@ -1778,7 +1779,7 @@ export const collectDigestData = internalAction({
           planNameMap.set(plan.id, plan.name);
         }
       } catch {
-        // Token expired or no access — all campaigns default to "lead"
+        // Token expired or no access — all campaigns default to "other"
       }
 
       // Aggregate metrics by ad_plan (VK campaign), not by ad_group
@@ -1797,7 +1798,7 @@ export const collectDigestData = internalAction({
 
         const mapping = groupMap.get(c.campaignId);
         const planId = mapping?.adPlanId || 0;
-        const type = mapping?.type || "lead";
+        const type = mapping?.type || "other";
         const planName = planNameMap.get(planId) || "Неизвестная";
 
         if (!byPlan.has(planId)) {
@@ -1865,14 +1866,15 @@ export const collectDigestData = internalAction({
       if (prevAccountMetrics) {
         const prevAcc = prevAccountMetrics.find((a: { accountId: string }) => a.accountId === accMetrics.accountId);
         if (prevAcc) {
-          const prevByType = { lead: { sp: 0, r: 0 }, message: { sp: 0, r: 0 }, subscription: { sp: 0, r: 0 }, awareness: { sp: 0, r: 0 } };
+          const prevByType: Record<string, { sp: number; r: number }> = { lead: { sp: 0, r: 0 }, message: { sp: 0, r: 0 }, subscription: { sp: 0, r: 0 }, awareness: { sp: 0, r: 0 }, other: { sp: 0, r: 0 } };
           let prevImp = 0, prevCl = 0, prevSp = 0;
 
           for (const c of prevAcc.campaigns) {
             prevImp += c.impressions;
             prevCl += c.clicks;
             prevSp += c.spent;
-            const type = groupMap.get(c.campaignId)?.type || "lead";
+            const type = groupMap.get(c.campaignId)?.type || "other";
+            if (!prevByType[type]) prevByType[type] = { sp: 0, r: 0 };
             prevByType[type].sp += c.spent;
             prevByType[type].r += c.leads;
           }
