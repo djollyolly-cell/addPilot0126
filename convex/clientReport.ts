@@ -269,8 +269,17 @@ export const buildReport = action({
 
       const category = typeToCategory(groupId);
 
-      // Use leads (has data for all rows) with vkResult fallback
-      const results = Math.max(m.leads ?? 0, (m as Record<string, unknown>).vkResult as number ?? 0);
+      // Result metric depends on campaign type:
+      // - subscription/message/lead: leads field (Math.max of 5 sources, matches VK "Результат")
+      // - awareness: always 0 (VK shows 0 results for awareness campaigns)
+      // - other: vkResult only (leads overcounts with pixel/goal data irrelevant to campaign objective)
+      const vkResult = ((m as Record<string, unknown>).vkResult as number) ?? 0;
+      let results: number;
+      if (category === "subscribes" || category === "messages" || category === "lead_forms") {
+        results = Math.max(m.leads ?? 0, vkResult);
+      } else {
+        results = vkResult;
+      }
 
       const key = buildKey(args.granularity, {
         date: m.date,
@@ -666,7 +675,11 @@ function computeTotalsByType(
     byType[type].impressions += m.impressions;
     byType[type].clicks += m.clicks;
     byType[type].spent += m.spent;
-    const result = Math.max(m.leads ?? 0, ((m as Record<string, unknown>).vkResult as number) ?? 0);
+    // Same logic as buildReport: leads for subscription/message/lead, vkResult for other/awareness
+    const vkR = ((m as Record<string, unknown>).vkResult as number) ?? 0;
+    const result = (type === "subscription" || type === "message" || type === "lead")
+      ? Math.max(m.leads ?? 0, vkR)
+      : vkR;
     byType[type].results += result;
   }
 
