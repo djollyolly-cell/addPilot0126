@@ -1638,8 +1638,20 @@ export const checkRulesForAccount = internalAction({
     const targetAccountId = args.accountId;
     let totalTriggered = 0;
 
+    // Get campaigns in active rotations — skip them in rule evaluation
+    let rotatingCampaignIds: Set<string>;
+    try {
+      const rotIds = await ctx.runQuery(internal.videoRotation.getRotatingCampaignIds, { accountId: args.accountId });
+      rotatingCampaignIds = new Set(rotIds);
+    } catch {
+      rotatingCampaignIds = new Set();
+    }
+
     // 4. Per-rule, per-ad evaluation
     for (const rule of rules) {
+      // Skip video_rotation rules — handled by its own cron
+      if (rule.type === "video_rotation") continue;
+
       // L2 (custom) and L3 (custom_l3) use array conditions — no timeWindow/needsAllAds
       const isL2 = rule.type === "custom" && Array.isArray(rule.conditions);
       const isL3 = rule.type === "custom_l3";
@@ -1684,6 +1696,19 @@ export const checkRulesForAccount = internalAction({
       const adCampaignCache = new Map<string, { adGroupId: string | null; adPlanId: string | null }>();
 
       for (const adId of adIdsToCheck) {
+        // Skip banners whose campaign is in an active rotation
+        if (rotatingCampaignIds.size > 0) {
+          let bannerCampaignId: string | null = null;
+          if (useMapLookup) {
+            bannerCampaignId = campaignLookup.get(adId)?.adGroupId ?? null;
+          } else if (adCampaignCache.has(adId)) {
+            bannerCampaignId = adCampaignCache.get(adId)!.adGroupId;
+          }
+          if (bannerCampaignId && rotatingCampaignIds.has(bannerCampaignId)) {
+            continue;
+          }
+        }
+
         // Filter by targeted ads if specified
         if (rule.targetAdIds && rule.targetAdIds.length > 0) {
           if (!rule.targetAdIds.includes(adId)) continue;
