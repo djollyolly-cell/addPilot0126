@@ -687,8 +687,8 @@ function computeTotalsByType(
 
 // ─── Backfill: populate campaignType for existing metricsDaily ───
 
-/** Read metricsDaily rows missing campaignType for one account, filtered by date range */
-export const _getMetricsWithoutType = internalQuery({
+/** Read metricsDaily rows for one account + date range, returning id + campaignId */
+export const _getMetricsForBackfill = internalQuery({
   args: {
     accountId: v.id("adAccounts"),
     dateFrom: v.string(),
@@ -705,8 +705,8 @@ export const _getMetricsWithoutType = internalQuery({
       .collect();
 
     return all
-      .filter((m) => !m.campaignType && m.campaignId)
-      .map((m) => ({ id: m._id as string, campaignId: m.campaignId! }));
+      .filter((m) => m.campaignId)
+      .map((m) => ({ id: m._id as string, campaignId: m.campaignId!, currentType: m.campaignType }));
   },
 });
 
@@ -764,18 +764,17 @@ export const backfillCampaignTypes = internalAction({
         continue;
       }
 
-      // Read week by week to stay under Convex return size limits
+      // Read day by day to stay under Convex return size limits
       let accountUpdated = 0;
       const start = new Date("2025-01-01");
       const end = new Date();
       const d = new Date(start);
       while (d <= end) {
         const from = d.toISOString().slice(0, 10);
-        d.setDate(d.getDate() + 6);
-        const to = d > end ? end.toISOString().slice(0, 10) : d.toISOString().slice(0, 10);
+        const to = from;
         d.setDate(d.getDate() + 1);
 
-        const rows = await ctx.runQuery(internal.clientReport._getMetricsWithoutType, {
+        const rows = await ctx.runQuery(internal.clientReport._getMetricsForBackfill, {
           accountId: account._id,
           dateFrom: from,
           dateTo: to,
@@ -785,7 +784,9 @@ export const backfillCampaignTypes = internalAction({
         const updates: Array<{ id: Id<"metricsDaily">; campaignType: string }> = [];
         for (const m of rows) {
           const type = campaignTypeMap.get(m.campaignId);
-          if (type) updates.push({ id: m.id as Id<"metricsDaily">, campaignType: type });
+          if (type && type !== m.currentType) {
+            updates.push({ id: m.id as Id<"metricsDaily">, campaignType: type });
+          }
         }
 
         const BATCH = 250;
