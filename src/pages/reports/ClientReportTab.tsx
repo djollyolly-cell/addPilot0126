@@ -222,12 +222,12 @@ export function ClientReportTab() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="text-sm font-medium">Период с</label>
-              <input type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)}
+              <input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); e.target.blur(); }}
                 className="w-full mt-1 px-3 py-2 border border-border rounded-md bg-background text-sm" />
             </div>
             <div>
               <label className="text-sm font-medium">по</label>
-              <input type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)}
+              <input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); e.target.blur(); }}
                 className="w-full mt-1 px-3 py-2 border border-border rounded-md bg-background text-sm" />
             </div>
           </div>
