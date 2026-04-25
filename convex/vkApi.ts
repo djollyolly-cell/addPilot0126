@@ -1703,6 +1703,92 @@ async function postCampaignWithFallback(
 }
 
 /**
+ * Update ad_plan status directly (for video rotation module).
+ * targetCampaignIds in rules may contain ad_plan IDs, not ad_group IDs.
+ * This function calls ad_plans/{id}.json endpoint directly.
+ */
+export const updateAdPlanStatus = internalAction({
+  args: {
+    accessToken: v.string(),
+    adPlanId: v.number(),
+    status: v.string(),
+  },
+  handler: async (_, args) => {
+    const url = `${MT_API_BASE}/api/v2/ad_plans/${args.adPlanId}.json`;
+    const resp = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${args.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ status: args.status }),
+    });
+    if (resp.status === 401) throw new Error("TOKEN_EXPIRED");
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`VK Ads API Error ${resp.status} (ad_plan ${args.adPlanId}): ${text}`);
+    }
+    const text = await resp.text();
+    return text.trim() ? JSON.parse(text) : { id: args.adPlanId };
+  },
+});
+
+/**
+ * Set daily budget on ad_plan (for video rotation module).
+ */
+export const setAdPlanBudget = internalAction({
+  args: {
+    accessToken: v.string(),
+    adPlanId: v.number(),
+    newLimitRubles: v.number(),
+  },
+  handler: async (_, args) => {
+    const url = `${MT_API_BASE}/api/v2/ad_plans/${args.adPlanId}.json`;
+    const resp = await fetchWithTimeout(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${args.accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ budget_limit_day: String(Math.round(args.newLimitRubles)) }),
+    });
+    if (resp.status === 401) throw new Error("TOKEN_EXPIRED");
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`VK Ads API Error ${resp.status} (ad_plan budget ${args.adPlanId}): ${text}`);
+    }
+    const text = await resp.text();
+    return text.trim() ? JSON.parse(text) : { id: args.adPlanId };
+  },
+});
+
+/**
+ * Get ad_plans for an account with their statuses (for rotation).
+ */
+export const getAdPlansForAccount = internalAction({
+  args: {
+    accessToken: v.string(),
+  },
+  handler: async (_, args): Promise<Array<{ id: number; name: string; status: string }>> => {
+    const all: Array<{ id: number; name: string; status: string }> = [];
+    let offset = 0;
+    const LIMIT = 250;
+    while (true) {
+      const data = await callMtApi<{ items: Array<{ id: number; name: string; status: string }>; count: number }>(
+        "ad_plans.json",
+        args.accessToken,
+        { fields: "id,name,status", limit: String(LIMIT), offset: String(offset) }
+      );
+      const items = data.items || [];
+      all.push(...items);
+      if (items.length < LIMIT) break;
+      offset += LIMIT;
+    }
+    return all;
+  },
+});
+
+/**
  * Set daily budget on a campaign (group).
  * Supports both legacy myTarget accounts (campaigns endpoint)
  * and new VK Ads accounts (ad_plans endpoint via fallback).

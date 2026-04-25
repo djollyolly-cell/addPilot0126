@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, query, internalAction, internalMutation, internalQuery } from "./_generated/server";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
 // ---- Helper: today's date string in UTC ----
@@ -211,33 +211,33 @@ export const activate = internalAction({
       { accountId }
     );
 
-    // Stop all target campaigns
-    const campaigns = await ctx.runAction(
-      internal.vkApi.getCampaignsForAccount,
+    // Stop all target ad_plans (targetCampaignIds = ad_plan IDs)
+    const adPlans = await ctx.runAction(
+      internal.vkApi.getAdPlansForAccount,
       { accessToken }
     ) as VkCampaign[];
 
     const targetSet = new Set(rule.targetCampaignIds ?? []);
-    for (const c of campaigns) {
+    for (const c of adPlans) {
       if (targetSet.has(String(c.id)) && c.status === "active") {
-        await ctx.runAction(api.vkApi.updateMtCampaign, {
+        await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
           accessToken,
-          campaignId: c.id,
-          data: { status: "blocked" },
+          adPlanId: c.id,
+          status: "blocked",
         });
       }
     }
 
-    // Start the first campaign
+    // Start the first ad_plan
     const firstCampaignId = Number(campaignOrder[0]);
-    await ctx.runAction(api.vkApi.updateMtCampaign, {
+    await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
       accessToken,
-      campaignId: firstCampaignId,
-      data: { status: "active" },
+      adPlanId: firstCampaignId,
+      status: "active",
     });
-    await ctx.runAction(internal.vkApi.setCampaignBudget, {
+    await ctx.runAction(internal.vkApi.setAdPlanBudget, {
       accessToken,
-      campaignId: firstCampaignId,
+      adPlanId: firstCampaignId,
       newLimitRubles: dailyBudget,
     });
 
@@ -255,7 +255,7 @@ export const activate = internalAction({
     });
 
     // Find campaign name for notification
-    const firstCampaign = campaigns.find((c) => String(c.id) === campaignOrder[0]);
+    const firstCampaign = adPlans.find((c) => String(c.id) === campaignOrder[0]);
     const firstName = firstCampaign?.name ?? campaignOrder[0];
 
     // Log
@@ -302,13 +302,13 @@ export const deactivate = internalAction({
           internal.auth.getValidTokenForAccount,
           { accountId }
         );
-        await ctx.runAction(api.vkApi.updateMtCampaign, {
+        await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
           accessToken,
-          campaignId: Number(state.currentCampaignId),
-          data: { status: "blocked" },
+          adPlanId: Number(state.currentCampaignId),
+          status: "blocked",
         });
       } catch (err) {
-        console.error(`[videoRotation.deactivate] Failed to stop campaign ${state.currentCampaignId}:`, err);
+        console.error(`[videoRotation.deactivate] Failed to stop ad_plan ${state.currentCampaignId}:`, err);
       }
     }
 
@@ -409,10 +409,10 @@ async function processRotation(ctx: ActionCtx, state: RotationStateRow) {
     if (!inQH) {
       // Resume
       try {
-        await ctx.runAction(api.vkApi.updateMtCampaign, {
+        await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
           accessToken,
-          campaignId: Number(state.currentCampaignId),
-          data: { status: "active" },
+          adPlanId: Number(state.currentCampaignId),
+          status: "active",
         });
       } catch {
         await handleApiError(ctx, state, rule, `Не удалось возобновить кампанию ${state.currentCampaignId}`);
@@ -450,12 +450,12 @@ async function processRotation(ctx: ActionCtx, state: RotationStateRow) {
   // ---- Status: running ----
 
   // 1. Check external intervention
-  const campaigns = await ctx.runAction(
-    internal.vkApi.getCampaignsForAccount,
+  const adPlans = await ctx.runAction(
+    internal.vkApi.getAdPlansForAccount,
     { accessToken }
   ) as VkCampaign[];
 
-  const currentCampaign = campaigns.find((c) => String(c.id) === state.currentCampaignId);
+  const currentCampaign = adPlans.find((c) => String(c.id) === state.currentCampaignId);
   if (currentCampaign && currentCampaign.status !== "active") {
     // External intervention detected
     await ctx.runMutation(internal.videoRotation.updateState, {
@@ -494,10 +494,10 @@ async function processRotation(ctx: ActionCtx, state: RotationStateRow) {
   if (qhEnabled && isInQuietHours(now, conditions.quietHoursStart ?? "23:00", conditions.quietHoursEnd ?? "07:00")) {
     // Enter quiet hours
     try {
-      await ctx.runAction(api.vkApi.updateMtCampaign, {
+      await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
         accessToken,
-        campaignId: Number(state.currentCampaignId),
-        data: { status: "blocked" },
+        adPlanId: Number(state.currentCampaignId),
+        status: "blocked",
       });
     } catch {
       await handleApiError(ctx, state, rule, "Не удалось остановить кампанию для тихих часов");
@@ -532,7 +532,7 @@ async function processRotation(ctx: ActionCtx, state: RotationStateRow) {
   const slotDurationMs = conditions.slotDurationHours * 3600 * 1000;
 
   if (elapsed >= slotDurationMs) {
-    await switchToNext(ctx, state, rule, conditions, campaigns, accessToken);
+    await switchToNext(ctx, state, rule, conditions, adPlans, accessToken);
   }
   // Else: slot still active, nothing to do
 }
@@ -549,12 +549,12 @@ async function switchToNext(
   const today = todayStr();
   const { campaignOrder, dailyBudget } = conditions;
 
-  // 1. Stop current campaign
+  // 1. Stop current ad_plan
   try {
-    await ctx.runAction(api.vkApi.updateMtCampaign, {
+    await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
       accessToken,
-      campaignId: Number(state.currentCampaignId),
-      data: { status: "blocked" },
+      adPlanId: Number(state.currentCampaignId),
+      status: "blocked",
     });
   } catch {
     await handleApiError(ctx, state, rule, `Не удалось остановить кампанию ${state.currentCampaignId}`);
@@ -604,16 +604,16 @@ async function switchToNext(
     }
   }
 
-  // 6. Start next campaign
+  // 6. Start next ad_plan
   try {
-    await ctx.runAction(api.vkApi.updateMtCampaign, {
+    await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
       accessToken,
-      campaignId: Number(nextCampaignId),
-      data: { status: "active" },
+      adPlanId: Number(nextCampaignId),
+      status: "active",
     });
-    await ctx.runAction(internal.vkApi.setCampaignBudget, {
+    await ctx.runAction(internal.vkApi.setAdPlanBudget, {
       accessToken,
-      campaignId: Number(nextCampaignId),
+      adPlanId: Number(nextCampaignId),
       newLimitRubles: remaining > 0 ? remaining : dailyBudget,
     });
   } catch (err) {
@@ -786,26 +786,26 @@ export const debugActivate = action({
       );
       console.log("[debugActivate] got token, length:", accessToken?.length);
 
-      const campaigns = await ctx.runAction(
-        internal.vkApi.getCampaignsForAccount,
+      const adPlans = await ctx.runAction(
+        internal.vkApi.getAdPlansForAccount,
         { accessToken }
       ) as VkCampaign[];
-      console.log("[debugActivate] campaigns from VK:", campaigns.length);
+      console.log("[debugActivate] ad_plans from VK:", adPlans.length);
 
       const targetSet = new Set(rule.targetCampaignIds ?? []);
-      const matched = campaigns.filter(c => targetSet.has(String(c.id)));
-      console.log("[debugActivate] matched target campaigns:", matched.map(c => ({ id: c.id, name: c.name, status: c.status })));
+      const matched = adPlans.filter(c => targetSet.has(String(c.id)));
+      console.log("[debugActivate] matched target ad_plans:", matched.map(c => ({ id: c.id, name: c.name, status: c.status })));
 
-      // Try to start first campaign
+      // Try to start first ad_plan
       const firstCampaignId = Number(campaignOrder[0]);
-      console.log("[debugActivate] starting campaign:", firstCampaignId);
+      console.log("[debugActivate] starting ad_plan:", firstCampaignId);
 
-      await ctx.runAction(api.vkApi.updateMtCampaign, {
+      await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
         accessToken,
-        campaignId: firstCampaignId,
-        data: { status: "active" },
+        adPlanId: firstCampaignId,
+        status: "active",
       });
-      console.log("[debugActivate] campaign started successfully");
+      console.log("[debugActivate] ad_plan started successfully");
 
       // Create state
       await ctx.runMutation(internal.videoRotation.createState, {
