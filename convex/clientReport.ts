@@ -30,9 +30,8 @@ export interface ReportRow {
   cpc?: number;
   ctr?: number;
   cpm?: number;
-  ad_subscribes?: number;
-  ad_lead_forms?: number;
-  ad_messages?: number;
+  vk_result?: number;
+  lead_forms?: number;
   cpl?: number;
   message_starts?: number;
   phones_count?: number;
@@ -193,28 +192,20 @@ async function fetchLeadCounts(
   return result;
 }
 
-/** Extract event-type metrics from a VK stat row */
-function extractEventMetrics(row: MtStatRow): {
-  subscribes: number;
-  sendingForm: number;
-  writingCommunity: number;
-} {
-  let subscribes = 0, sendingForm = 0, writingCommunity = 0;
+/** Extract vk.result and form events from a VK stat row */
+function extractResultMetrics(row: MtStatRow): { vkResult: number; formEvents: number } {
+  const vk = row.base.vk;
+  const vkResult = vk ? (Number(vk.result) || 0) : 0;
+  let formEvents = 0;
   if (row.events && typeof row.events === "object") {
-    const events = row.events as Record<string, unknown>;
-    subscribes = extractEventCount(events.subscribing);
-    sendingForm = extractEventCount(events.sending_form);
-    writingCommunity = extractEventCount(events.writing_community);
+    const sendingForm = (row.events as Record<string, unknown>).sending_form;
+    if (typeof sendingForm === "number") {
+      formEvents = sendingForm;
+    } else if (sendingForm && typeof sendingForm === "object") {
+      formEvents = Number((sendingForm as { count?: number | string }).count) || 0;
+    }
   }
-  return { subscribes, sendingForm, writingCommunity };
-}
-
-function extractEventCount(ev: unknown): number {
-  if (typeof ev === "number") return ev;
-  if (ev && typeof ev === "object") {
-    return Number((ev as { count?: number | string }).count) || 0;
-  }
-  return 0;
+  return { vkResult, formEvents };
 }
 
 // ─── Internal queries ───────────────────────────────────────
@@ -310,7 +301,7 @@ export const buildReport = action({
           const leadAdsCount = leadCounts[bannerId] || 0;
 
           for (const row of item.rows) {
-            const ev = extractEventMetrics(row);
+            const { vkResult, formEvents } = extractResultMetrics(row);
             const rowSpent = parseFloat(row.base.spent || "0") || 0;
 
             const key = buildKey(args.granularity, { date: row.date, campaignId: campaignIdStr, groupId: groupIdStr, adId: bannerId });
@@ -318,9 +309,8 @@ export const buildReport = action({
             existing.impressions = (existing.impressions ?? 0) + (row.base.shows || 0);
             existing.clicks = (existing.clicks ?? 0) + (row.base.clicks || 0);
             existing.spent = Math.round(((existing.spent ?? 0) + rowSpent) * 100) / 100;
-            existing.ad_subscribes = (existing.ad_subscribes ?? 0) + ev.subscribes;
-            existing.ad_lead_forms = (existing.ad_lead_forms ?? 0) + Math.max(ev.sendingForm, leadAdsCount);
-            existing.ad_messages = (existing.ad_messages ?? 0) + ev.writingCommunity;
+            existing.vk_result = (existing.vk_result ?? 0) + vkResult;
+            existing.lead_forms = (existing.lead_forms ?? 0) + Math.max(formEvents, leadAdsCount);
             rowMap.set(key, existing);
           }
         }
@@ -566,8 +556,8 @@ export const buildReport = action({
       if (args.fields.includes("cpm") && r.impressions && r.spent) {
         r.cpm = Math.round((r.spent / r.impressions) * 1000 * 100) / 100;
       }
-      if (args.fields.includes("cpl") && r.ad_lead_forms && r.spent) {
-        r.cpl = Math.round((r.spent / r.ad_lead_forms) * 100) / 100;
+      if (args.fields.includes("cpl") && r.vk_result && r.spent) {
+        r.cpl = Math.round((r.spent / r.vk_result) * 100) / 100;
       }
       if (args.fields.includes("weekday") && !r.weekday) {
         r.weekday = weekday(r.date);
@@ -631,15 +621,14 @@ function initRow(
 function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> {
   const totals: Partial<ReportRow> = {};
   let impressions = 0, clicks = 0, spent = 0;
-  let adSubscribes = 0, adLeadForms = 0, adMessages = 0;
+  let vkResult = 0, leadForms = 0;
   let messageStarts = 0, phonesCount = 0, senlerSubs = 0;
   for (const r of rows) {
     impressions += r.impressions ?? 0;
     clicks += r.clicks ?? 0;
     spent += r.spent ?? 0;
-    adSubscribes += r.ad_subscribes ?? 0;
-    adLeadForms += r.ad_lead_forms ?? 0;
-    adMessages += r.ad_messages ?? 0;
+    vkResult += r.vk_result ?? 0;
+    leadForms += r.lead_forms ?? 0;
     messageStarts += r.message_starts ?? 0;
     phonesCount += r.phones_count ?? 0;
     senlerSubs += r.senler_subs ?? 0;
@@ -648,13 +637,12 @@ function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> 
   if (fields.includes("clicks")) totals.clicks = clicks;
   if (fields.includes("spent")) totals.spent = Math.round(spent * 100) / 100;
   if (fields.includes("spent_with_vat")) totals.spent_with_vat = Math.round(spent * 1.2 * 100) / 100;
-  if (fields.includes("ad_subscribes")) totals.ad_subscribes = adSubscribes;
-  if (fields.includes("ad_lead_forms")) totals.ad_lead_forms = adLeadForms;
-  if (fields.includes("ad_messages")) totals.ad_messages = adMessages;
+  if (fields.includes("vk_result")) totals.vk_result = vkResult;
+  if (fields.includes("lead_forms")) totals.lead_forms = leadForms;
   if (fields.includes("cpc") && clicks) totals.cpc = Math.round((spent / clicks) * 100) / 100;
   if (fields.includes("ctr") && impressions) totals.ctr = Math.round((clicks / impressions) * 10000) / 100;
   if (fields.includes("cpm") && impressions) totals.cpm = Math.round((spent / impressions) * 1000 * 100) / 100;
-  if (fields.includes("cpl") && adLeadForms) totals.cpl = Math.round((spent / adLeadForms) * 100) / 100;
+  if (fields.includes("cpl") && vkResult) totals.cpl = Math.round((spent / vkResult) * 100) / 100;
   if (fields.includes("message_starts")) totals.message_starts = messageStarts;
   if (fields.includes("phones_count")) totals.phones_count = phonesCount;
   if (fields.includes("senler_subs")) totals.senler_subs = senlerSubs;

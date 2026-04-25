@@ -24,10 +24,9 @@ export const FIELD_CATALOG: FieldDefinition[] = [
   { id: "cpc", label: "CPC", category: "ads", dependencies: ["clicks", "spent"] },
   { id: "ctr", label: "CTR", category: "ads", dependencies: ["clicks", "impressions"] },
   { id: "cpm", label: "CPM", category: "ads", dependencies: ["impressions", "spent"] },
-  { id: "ad_subscribes", label: "Подписки (реклама)", category: "ads" },
-  { id: "ad_lead_forms", label: "Заявки (формы)", category: "ads" },
-  { id: "ad_messages", label: "Написали (реклама)", category: "ads" },
-  { id: "cpl", label: "CPL", category: "ads", dependencies: ["ad_lead_forms", "spent"] },
+  { id: "vk_result", label: "Результат", category: "ads" },
+  { id: "lead_forms", label: "Заявки (формы)", category: "ads" },
+  { id: "cpl", label: "CPL", category: "ads", dependencies: ["vk_result", "spent"] },
 
   // Community
   { id: "message_starts", label: "Старты сообщений", category: "community", requiresCommunityProfile: true },
