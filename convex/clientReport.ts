@@ -359,7 +359,7 @@ export const buildReport = action({
             }
             if (allOlder) break;
             offset += 200;
-            await new Promise((r) => setTimeout(r, 400));
+            await new Promise((r) => setTimeout(r, 200));
           }
 
           // Batch fetch user info
@@ -372,56 +372,62 @@ export const buildReport = action({
             for (const u of users) {
               peerInfo.set(u.id, { firstName: u.first_name, lastName: u.last_name });
             }
-            await new Promise((r) => setTimeout(r, 400));
+            await new Promise((r) => setTimeout(r, 200));
           }
 
           // For each dialog: check true start date + extract phones
           const dialogStartsByDate = new Map<string, number>();
+          const needMessageStarts = args.fields.includes("message_starts");
+          const needPhones = args.fields.some((f) => ["phones_count", "phones_detail"].includes(f));
+          const groupIdAbs = Math.abs(profile.vkGroupId);
 
           for (const d of activeDialogs) {
             try {
-              // Get first message (rev=0 = oldest first, count=1)
-              // to determine if dialog truly STARTED in the selected range
-              if (args.fields.includes("message_starts")) {
-                const firstHist = await messagesGetHistory(
-                  profile.vkCommunityToken, d.peerId, 1, 0
-                );
-                const firstMsg = firstHist.items[0];
+              // Parallel: first message (for dialog start) + recent messages (for phones)
+              const requests: Promise<{ items: Array<{ date: number; from_id: number; text: string }> }>[] = [];
+              if (needMessageStarts) {
+                requests.push(messagesGetHistory(profile.vkCommunityToken, d.peerId, 1, 0));
+              }
+              if (needPhones) {
+                requests.push(messagesGetHistory(profile.vkCommunityToken, d.peerId, 50, 1));
+              }
+              const results = await Promise.all(requests);
+              let idx = 0;
+
+              // Dialog start detection
+              if (needMessageStarts) {
+                const firstMsg = results[idx].items[0];
                 if (firstMsg && firstMsg.date >= fromTs && firstMsg.date <= toTs) {
                   const dateStr = new Date(firstMsg.date * 1000).toISOString().slice(0, 10);
                   dialogStartsByDate.set(dateStr, (dialogStartsByDate.get(dateStr) ?? 0) + 1);
                 }
-                await new Promise((r) => setTimeout(r, 400));
+                idx++;
               }
 
-              // Get recent messages for phone extraction (rev=1 = newest first)
-              const hist = await messagesGetHistory(
-                profile.vkCommunityToken, d.peerId, 50, 1
-              );
-              const groupIdAbs = Math.abs(profile.vkGroupId);
-              const inbound = hist.items.filter(
-                (m) => m.from_id !== -groupIdAbs && m.from_id > 0
-              );
-              for (const msg of inbound) {
-                // Filter messages to selected date range only
-                if (msg.date < fromTs || msg.date > toTs) continue;
-
-                const phones = extractPhones(msg.text);
-                for (const p of phones) {
-                  const info = peerInfo.get(d.peerId) ?? { firstName: "", lastName: "" };
-                  const leftAtMs = msg.date * 1000;
-                  phonesDetail.push({
-                    date: new Date(leftAtMs).toISOString().slice(0, 10),
-                    leftAt: leftAtMs,
-                    phone: p.phone,
-                    firstName: info.firstName,
-                    lastName: info.lastName,
-                    dialogUrl: `https://vk.me/gim${Math.abs(profile.vkGroupId)}?sel=${d.peerId}`,
-                    source: "vk_dialog",
-                  });
+              // Phone extraction from recent messages
+              if (needPhones && results[idx]) {
+                const inbound = results[idx].items.filter(
+                  (m) => m.from_id !== -groupIdAbs && m.from_id > 0
+                );
+                for (const msg of inbound) {
+                  if (msg.date < fromTs || msg.date > toTs) continue;
+                  const phones = extractPhones(msg.text);
+                  for (const p of phones) {
+                    const info = peerInfo.get(d.peerId) ?? { firstName: "", lastName: "" };
+                    const leftAtMs = msg.date * 1000;
+                    phonesDetail.push({
+                      date: new Date(leftAtMs).toISOString().slice(0, 10),
+                      leftAt: leftAtMs,
+                      phone: p.phone,
+                      firstName: info.firstName,
+                      lastName: info.lastName,
+                      dialogUrl: `https://vk.me/gim${Math.abs(profile.vkGroupId)}?sel=${d.peerId}`,
+                      source: "vk_dialog",
+                    });
+                  }
                 }
               }
-              await new Promise((r) => setTimeout(r, 400));
+              await new Promise((r) => setTimeout(r, 200));
             } catch (err) {
               partialErrors.push(
                 `Сообщество ${profile.vkGroupName}, peer ${d.peerId}: ${err instanceof Error ? err.message : String(err)}`
@@ -475,9 +481,11 @@ export const buildReport = action({
             }
           }
         } catch (err) {
-          partialErrors.push(
-            `Кабинет ${acc.name} (Lead Ads): ${err instanceof Error ? err.message : String(err)}`
-          );
+          // Lead Ads 404 is expected for accounts without lead forms — skip silently
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!msg.includes("404")) {
+            partialErrors.push(`Кабинет ${acc.name} (Lead Ads): ${msg}`);
+          }
         }
       }
     }
