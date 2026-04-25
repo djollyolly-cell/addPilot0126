@@ -34,6 +34,7 @@ export interface ReportRow {
   result_lead_forms?: number;
   result_other?: number;
   cpl?: number;
+  cpl_with_vat?: number;
   message_starts?: number;
   phones_count?: number;
   senler_subs?: number;
@@ -399,10 +400,11 @@ export const buildReport = action({
       if (args.fields.includes("cpm") && r.impressions && r.spent) {
         r.cpm = Math.round((r.spent / r.impressions) * 1000 * 100) / 100;
       }
-      if (args.fields.includes("cpl") && r.spent) {
+      if ((args.fields.includes("cpl") || args.fields.includes("cpl_with_vat")) && r.spent) {
         const totalResults = (r.result_subscribes ?? 0) + (r.result_messages ?? 0) + (r.result_lead_forms ?? 0) + (r.result_other ?? 0);
         if (totalResults > 0) {
           r.cpl = Math.round((r.spent / totalResults) * 100) / 100;
+          r.cpl_with_vat = Math.round((r.spent * 1.2 / totalResults) * 100) / 100;
         }
       }
       if (args.fields.includes("weekday") && !r.weekday) {
@@ -413,7 +415,7 @@ export const buildReport = action({
     rows.sort((a, b) => a.date.localeCompare(b.date));
 
     const totals = computeTotals(rows, args.fields);
-    const totalsByType = computeTotalsByTypeFresh(flatMetrics, args.fields, args.campaignIds, groupIdFilter, activeGroupIds, adGroupPlanMap, typeMap, typeToCategory);
+    const totalsByType = computeTotalsByTypeFresh(flatMetrics, args.fields, args.campaignIds, groupIdFilter, activeGroupIds, adGroupPlanMap, typeMap);
 
     return {
       dateFrom: args.dateFrom,
@@ -682,78 +684,17 @@ function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> 
   if (fields.includes("cpc") && clicks) totals.cpc = Math.round((spent / clicks) * 100) / 100;
   if (fields.includes("ctr") && impressions) totals.ctr = Math.round((clicks / impressions) * 10000) / 100;
   if (fields.includes("cpm") && impressions) totals.cpm = Math.round((spent / impressions) * 1000 * 100) / 100;
-  if (fields.includes("cpl")) {
+  if (fields.includes("cpl") || fields.includes("cpl_with_vat")) {
     const totalResults = resultSubscribes + resultMessages + resultLeadForms + resultOther;
-    if (totalResults > 0) totals.cpl = Math.round((spent / totalResults) * 100) / 100;
+    if (totalResults > 0) {
+      totals.cpl = Math.round((spent / totalResults) * 100) / 100;
+      totals.cpl_with_vat = Math.round((spent * 1.2 / totalResults) * 100) / 100;
+    }
   }
   if (fields.includes("message_starts")) totals.message_starts = messageStarts;
   if (fields.includes("phones_count")) totals.phones_count = phonesCount;
   if (fields.includes("senler_subs")) totals.senler_subs = senlerSubs;
   return totals;
-}
-
-function computeTotalsByType(
-  metrics: Array<{
-    adId: string;
-    campaignId?: string;
-    impressions: number;
-    clicks: number;
-    spent: number;
-    leads?: number;
-  }>,
-  fields: string[],
-  campaignFilter: string[] | undefined,
-  groupFilter: Set<string> | null,
-  adNames: Record<string, { campaignId: string }>,
-  typeMap: Map<string, string>,
-): CampaignTypeTotals {
-  const byType: Record<string, { impressions: number; clicks: number; spent: number; results: number }> = {};
-
-  for (const m of metrics) {
-    if (!m.campaignId) continue;
-    const adInfo = adNames[m.adId];
-    const campaignId = adInfo?.campaignId ?? "";
-    if (campaignFilter?.length && campaignId && !campaignFilter.includes(campaignId)) continue;
-    if (groupFilter && !groupFilter.has(m.campaignId)) continue;
-
-    const type = typeMap.get(m.campaignId) ?? "other";
-    if (!byType[type]) byType[type] = { impressions: 0, clicks: 0, spent: 0, results: 0 };
-    byType[type].impressions += m.impressions;
-    byType[type].clicks += m.clicks;
-    byType[type].spent += m.spent;
-    // Same logic as buildReport: leads for subscription/message/lead, vkResult for other/awareness
-    const vkR = ((m as Record<string, unknown>).vkResult as number) ?? 0;
-    const result = (type === "subscription" || type === "message" || type === "lead")
-      ? Math.max(m.leads ?? 0, vkR)
-      : vkR;
-    byType[type].results += result;
-  }
-
-  const result: CampaignTypeTotals = {};
-  for (const [type, data] of Object.entries(byType)) {
-    const row: Partial<ReportRow> = {};
-    if (fields.includes("impressions")) row.impressions = data.impressions;
-    if (fields.includes("clicks")) row.clicks = data.clicks;
-    if (fields.includes("spent")) row.spent = Math.round(data.spent * 100) / 100;
-    if (fields.includes("spent_with_vat")) row.spent_with_vat = Math.round(data.spent * 1.2 * 100) / 100;
-    if (fields.includes("cpc") && data.clicks) row.cpc = Math.round((data.spent / data.clicks) * 100) / 100;
-    if (fields.includes("ctr") && data.impressions) row.ctr = Math.round((data.clicks / data.impressions) * 10000) / 100;
-    if (fields.includes("cpm") && data.impressions) row.cpm = Math.round((data.spent / data.impressions) * 1000 * 100) / 100;
-    if (fields.includes("cpl") && data.results > 0) row.cpl = Math.round((data.spent / data.results) * 100) / 100;
-
-    // Route results to the correct column
-    switch (type) {
-      case "subscription": row.result_subscribes = data.results; break;
-      case "message": row.result_messages = data.results; break;
-      case "lead": row.result_lead_forms = data.results; break;
-      default: row.result_other = data.results; break;
-    }
-
-    // Use ASCII keys — Convex doesn't allow non-ASCII in field names
-    result[type] = row;
-  }
-
-  return result;
 }
 
 function computeTotalsByTypeFresh(
@@ -764,7 +705,6 @@ function computeTotalsByTypeFresh(
   activeGroupIds: Set<string> | null,
   adGroupPlanMap: Map<string, number>,
   typeMap: Map<string, string>,
-  typeToCategory: (groupId: string) => ResultCategory,
 ): CampaignTypeTotals {
   const byType: Record<string, { impressions: number; clicks: number; spent: number; results: number }> = {};
 
@@ -794,7 +734,10 @@ function computeTotalsByTypeFresh(
     if (fields.includes("cpc") && data.clicks) row.cpc = Math.round((data.spent / data.clicks) * 100) / 100;
     if (fields.includes("ctr") && data.impressions) row.ctr = Math.round((data.clicks / data.impressions) * 10000) / 100;
     if (fields.includes("cpm") && data.impressions) row.cpm = Math.round((data.spent / data.impressions) * 1000 * 100) / 100;
-    if (fields.includes("cpl") && data.results > 0) row.cpl = Math.round((data.spent / data.results) * 100) / 100;
+    if ((fields.includes("cpl") || fields.includes("cpl_with_vat")) && data.results > 0) {
+      row.cpl = Math.round((data.spent / data.results) * 100) / 100;
+      row.cpl_with_vat = Math.round((data.spent * 1.2 / data.results) * 100) / 100;
+    }
 
     switch (type) {
       case "subscription": row.result_subscribes = data.results; break;

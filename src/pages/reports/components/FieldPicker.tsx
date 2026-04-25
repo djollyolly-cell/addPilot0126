@@ -27,7 +27,8 @@ export function FieldPicker({
         next.add(dep);
       }
     }
-    onChange(Array.from(next));
+    // Maintain catalog order so columns appear in a logical sequence
+    onChange(FIELD_CATALOG.filter((f) => next.has(f.id)).map((f) => f.id));
   }
 
   const grouped: Record<FieldCategory, typeof FIELD_CATALOG> = {
