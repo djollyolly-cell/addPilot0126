@@ -642,8 +642,11 @@ export const buildReport = action({
       if (args.fields.includes("cpm") && r.impressions && r.spent) {
         r.cpm = Math.round((r.spent / r.impressions) * 1000 * 100) / 100;
       }
-      if (args.fields.includes("cpl") && r.result_lead_forms && r.spent) {
-        r.cpl = Math.round((r.spent / r.result_lead_forms) * 100) / 100;
+      if (args.fields.includes("cpl") && r.spent) {
+        const totalResults = (r.result_subscribes ?? 0) + (r.result_messages ?? 0) + (r.result_lead_forms ?? 0) + (r.result_other ?? 0);
+        if (totalResults > 0) {
+          r.cpl = Math.round((r.spent / totalResults) * 100) / 100;
+        }
       }
       if (args.fields.includes("weekday") && !r.weekday) {
         r.weekday = weekday(r.date);
@@ -732,7 +735,10 @@ function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> 
   if (fields.includes("cpc") && clicks) totals.cpc = Math.round((spent / clicks) * 100) / 100;
   if (fields.includes("ctr") && impressions) totals.ctr = Math.round((clicks / impressions) * 10000) / 100;
   if (fields.includes("cpm") && impressions) totals.cpm = Math.round((spent / impressions) * 1000 * 100) / 100;
-  if (fields.includes("cpl") && resultLeadForms) totals.cpl = Math.round((spent / resultLeadForms) * 100) / 100;
+  if (fields.includes("cpl")) {
+    const totalResults = resultSubscribes + resultMessages + resultLeadForms + resultOther;
+    if (totalResults > 0) totals.cpl = Math.round((spent / totalResults) * 100) / 100;
+  }
   if (fields.includes("message_starts")) totals.message_starts = messageStarts;
   if (fields.includes("phones_count")) totals.phones_count = phonesCount;
   if (fields.includes("senler_subs")) totals.senler_subs = senlerSubs;
