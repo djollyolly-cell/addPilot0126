@@ -439,3 +439,52 @@ export const migratePermanentTokenExpiry = mutation({
     return { migrated, details };
   },
 });
+
+// ---- Module toggles ----
+
+/** Toggle video rotation module for a user */
+export const toggleVideoRotation = mutation({
+  args: {
+    sessionToken: v.string(),
+    targetUserId: v.id("users"),
+    enabled: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+
+    const user = await ctx.db.get(args.targetUserId);
+    if (!user) throw new Error("Пользователь не найден");
+
+    await ctx.db.patch(args.targetUserId, {
+      videoRotationEnabled: args.enabled,
+      updatedAt: Date.now(),
+    });
+
+    return { success: true };
+  },
+});
+
+/** List all users with their module flags (for admin Modules tab) */
+export const listUsersModules = query({
+  args: { sessionToken: v.string() },
+  handler: async (ctx, args) => {
+    const session = await ctx.db
+      .query("sessions")
+      .withIndex("by_token", (q) => q.eq("token", args.sessionToken))
+      .first();
+    if (!session) throw new Error("Не авторизован");
+    const user = await ctx.db.get(session.userId);
+    if (!user) throw new Error("Не авторизован");
+    if (!user.isAdmin && !ADMIN_EMAILS.includes(user.email)) {
+      throw new Error("Нет доступа");
+    }
+
+    const users = await ctx.db.query("users").collect();
+    return users.map((u) => ({
+      _id: u._id,
+      name: u.name ?? u.email,
+      email: u.email,
+      videoRotationEnabled: u.videoRotationEnabled ?? false,
+    }));
+  },
+});
