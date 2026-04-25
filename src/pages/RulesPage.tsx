@@ -15,7 +15,7 @@ import { UpgradeModal } from '../components/UpgradeModal';
 import { RuleConstructorForm, type ConditionRow } from '../components/RuleConstructorForm';
 import { usePermissions } from '../lib/usePermissions';
 
-type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'cpc_limit' | 'new_lead' | 'uz_budget_manage' | 'custom' | 'custom_l3';
+type RuleType = 'cpl_limit' | 'min_ctr' | 'fast_spend' | 'spend_no_leads' | 'budget_limit' | 'low_impressions' | 'clicks_no_leads' | 'cpc_limit' | 'new_lead' | 'uz_budget_manage' | 'custom' | 'custom_l3' | 'video_rotation';
 type TimeWindow = 'daily' | 'since_launch' | '24h' | '1h' | '6h';
 
 const TIME_WINDOW_OPTIONS: { value: TimeWindow; label: string; description: string }[] = [
@@ -39,6 +39,7 @@ const RULE_TYPE_LABELS: Record<RuleType, string> = {
   uz_budget_manage: 'Работа с УЗ',
   custom: 'Конструктор (AND)',
   custom_l3: 'Кастомное правило',
+  video_rotation: 'Ротаци�� кампаний',
 };
 
 const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
@@ -54,6 +55,7 @@ const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
   uz_budget_manage: 'Работает на уровне группы. Управление дневным бюджетом: автоматическое увеличение при приостановке и сброс в начале суток',
   custom: 'Несколько условий, все должны выполниться одновременно',
   custom_l3: 'Правило с кастомной логикой (настраивается администратором)',
+  video_rotation: 'Последовательный запуск выбранных кампаний по расписанию. Каждая кампания работает фиксированное время, затем автоматически переключается на следующую.',
 };
 
 const RULE_TYPE_UNITS: Record<RuleType, string> = {
@@ -69,7 +71,42 @@ const RULE_TYPE_UNITS: Record<RuleType, string> = {
   uz_budget_manage: '',
   custom: '',
   custom_l3: '',
+  video_rotation: '',
 };
+
+function RotationStatusBadge({ ruleId }: { ruleId: Id<"rules"> }) {
+  const status = useQuery(api.videoRotation.getRotationStatus, { ruleId });
+  if (!status) return null;
+
+  const statusLabels: Record<string, string> = {
+    running: 'Активна',
+    paused_quiet_hours: 'Пауза (тихие часы)',
+    paused_intervention: 'Приостановлена',
+    stopped: 'Остановлена',
+  };
+  const statusColors: Record<string, string> = {
+    running: 'text-green-600',
+    paused_quiet_hours: 'text-yellow-600',
+    paused_intervention: 'text-red-600',
+    stopped: 'text-muted-foreground',
+  };
+
+  return (
+    <div className="text-xs mt-1">
+      <span className={statusColors[status.status] ?? 'text-muted-foreground'}>
+        {statusLabels[status.status] ?? status.status}
+      </span>
+      {status.status === 'running' && (
+        <span className="text-muted-foreground ml-1">
+          — {status.currentCampaignName} ({status.currentIndex + 1}/{status.totalCampaigns}, цикл #{status.cycleNumber})
+        </span>
+      )}
+      {status.lastError && status.status === 'paused_intervention' && (
+        <span className="text-destructive ml-1">— {status.lastError}</span>
+      )}
+    </div>
+  );
+}
 
 /** Convert action flags to ActionMode */
 function flagsToActionMode(actions: { stopAd: boolean; notify: boolean }): ActionMode {
@@ -299,6 +336,8 @@ export function RulesPage() {
                                 ? ` · ${rule.conditions.initialBudget ?? 0}₽ +${rule.conditions.budgetStep ?? 0}₽`
                                 : rule.type === 'cpc_limit'
                                 ? ` · от ${rule.conditions.minSpent ?? 0}₽ · CPC > ${rule.conditions.value}₽`
+                                : rule.type === 'video_rotation'
+                                ? ` · слот ${rule.conditions.slotDurationHours ?? 0}ч · ${rule.conditions.dailyBudget ?? 0}₽/сутки`
                                 : ` · ${rule.conditions.operator} ${rule.conditions.value}${RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}`
                             )}
                             {!Array.isArray(rule.conditions) && (rule.type === 'clicks_no_leads' || rule.type === 'low_impressions') && (
@@ -310,6 +349,9 @@ export function RulesPage() {
                               <Monitor className="w-3 h-3 shrink-0" />
                               {rule.targetAccountIds.map((id) => accountNameMap.get(id) || 'Кабинет').join(', ')}
                             </p>
+                          )}
+                          {rule.type === 'video_rotation' && (
+                            <RotationStatusBadge ruleId={rule._id} />
                           )}
                         </div>
 
@@ -566,6 +608,12 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
   const [notifyOnKeyEvents, setNotifyOnKeyEvents] = useState(existingRule?.actions.notifyOnKeyEvents ?? true);
   // cpc_limit state
   const [minSpent, setMinSpent] = useState(existingRule?.minSpent ? String(existingRule.minSpent) : '100');
+  // video_rotation state
+  const [slotDurationHours, setSlotDurationHours] = useState('4');
+  const [rotationDailyBudget, setRotationDailyBudget] = useState('');
+  const [rotationQuietHoursEnabled, setRotationQuietHoursEnabled] = useState(false);
+  const [rotationQuietHoursStart, setRotationQuietHoursStart] = useState('23:00');
+  const [rotationQuietHoursEnd, setRotationQuietHoursEnd] = useState('07:00');
 
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -610,6 +658,25 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
       const ms = Number(minSpent);
       if (!ms || ms <= 0) { setFormError('Минимальный расход должен быть больше 0'); return; }
       if (!value || numericValue <= 0) { setFormError('Лимит CPC должен быть больше 0'); return; }
+    } else if (type === 'video_rotation') {
+      const slot = Number(slotDurationHours);
+      const budget = Number(rotationDailyBudget);
+      if (!slot || slot < 1 || slot > 24 || !Number.isInteger(slot)) {
+        setFormError('Время слота: от 1 до 24 часов (целое число)');
+        return;
+      }
+      if (!budget || budget <= 0) {
+        setFormError('Бюджет на сутки должен быть больше 0');
+        return;
+      }
+      if (targets.campaignIds.length < 2) {
+        setFormError('Выберите минимум 2 кампании для ротации');
+        return;
+      }
+      if (targets.campaignIds.length > 50) {
+        setFormError('Максимум 50 кампаний');
+        return;
+      }
     } else if (type !== 'new_lead' && (!value || numericValue <= 0)) {
       setFormError('Значение должно быть больше 0');
       return;
@@ -627,7 +694,22 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
 
     setSubmitting(true);
     try {
-      if (ruleMode === 'constructor') {
+      if (type === 'video_rotation') {
+        await onSubmit({
+          name: name.trim(),
+          type: 'video_rotation',
+          value: 0,
+          actions: { stopAd: false, notify: true },
+          targetAccountIds: targets.accountIds as Id<"adAccounts">[],
+          targetCampaignIds: targets.campaignIds,
+          slotDurationHours: Number(slotDurationHours),
+          rotationDailyBudget: Number(rotationDailyBudget),
+          campaignOrder: targets.campaignIds,
+          rotationQuietHoursEnabled: rotationQuietHoursEnabled,
+          rotationQuietHoursStart: rotationQuietHoursEnabled ? rotationQuietHoursStart : undefined,
+          rotationQuietHoursEnd: rotationQuietHoursEnabled ? rotationQuietHoursEnd : undefined,
+        });
+      } else if (ruleMode === 'constructor') {
         await onSubmit({
           name: name.trim(),
           type: 'custom',
@@ -893,8 +975,69 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
             </div>
           )}
 
-          {/* Value (hidden for new_lead and uz_budget_manage — no threshold needed) */}
-          {type !== 'new_lead' && type !== 'uz_budget_manage' && (
+          {/* Video rotation fields */}
+          {type === 'video_rotation' && (
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Время слота (часов)</label>
+                <select
+                  value={slotDurationHours}
+                  onChange={(e) => setSlotDurationHours(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                >
+                  {Array.from({ length: 24 }, (_, i) => i + 1).map((h) => (
+                    <option key={h} value={h}>{h} ч</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium mb-1">Бюджет на сутки, руб.</label>
+                <input
+                  type="number"
+                  min="1"
+                  value={rotationDailyBudget}
+                  onChange={(e) => setRotationDailyBudget(e.target.value)}
+                  placeholder="6000"
+                  className="w-full px-3 py-2 rounded-lg border border-border bg-background text-foreground text-sm focus:outline-none focus:ring-2 focus:ring-primary"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="rotation-quiet-hours"
+                  checked={rotationQuietHoursEnabled}
+                  onChange={(e) => setRotationQuietHoursEnabled(e.target.checked)}
+                  className="rounded"
+                />
+                <label htmlFor="rotation-quiet-hours" className="text-sm">Тихие часы</label>
+              </div>
+              {rotationQuietHoursEnabled && (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-muted-foreground">с</span>
+                  <input
+                    type="time"
+                    value={rotationQuietHoursStart}
+                    onChange={(e) => setRotationQuietHoursStart(e.target.value)}
+                    className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+                  />
+                  <span className="text-sm text-muted-foreground">до</span>
+                  <input
+                    type="time"
+                    value={rotationQuietHoursEnd}
+                    onChange={(e) => setRotationQuietHoursEnd(e.target.value)}
+                    className="rounded-md border border-border bg-background px-2 py-1 text-sm"
+                  />
+                  <span className="text-xs text-muted-foreground">(UTC)</span>
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Кампании будут откручиваться последовательно. Порядок определяется порядком выбора в дереве кампаний.
+              </p>
+            </div>
+          )}
+
+          {/* Value (hidden for new_lead, uz_budget_manage, and video_rotation — no threshold needed) */}
+          {type !== 'new_lead' && type !== 'uz_budget_manage' && type !== 'video_rotation' && (
             <div>
               <label className="block text-sm font-medium mb-1">
                 Порог ({RULE_TYPE_UNITS[type]})
@@ -973,8 +1116,8 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
           )}
         </div>
 
-        {/* Action radio (hidden for uz_budget_manage — it manages budgets, not stops ads) */}
-        {type !== 'uz_budget_manage' && (
+        {/* Action radio (hidden for uz_budget_manage and video_rotation) */}
+        {type !== 'uz_budget_manage' && type !== 'video_rotation' && (
           <div className="space-y-2">
             <label className="block text-sm font-medium">Действие при срабатывании</label>
             <ActionRadio
