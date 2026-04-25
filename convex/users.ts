@@ -607,12 +607,20 @@ export const deleteUser = mutation({
       await ctx.db.delete(session._id);
     }
 
-    // Delete rules
+    // Delete rules and their rotation states
     const rules = await ctx.db
       .query("rules")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .collect();
     for (const rule of rules) {
+      // Clean up rotationState if this is a rotation rule
+      const rotState = await ctx.db
+        .query("rotationState")
+        .withIndex("by_ruleId", (q) => q.eq("ruleId", rule._id))
+        .first();
+      if (rotState) {
+        await ctx.db.delete(rotState._id);
+      }
       await ctx.db.delete(rule._id);
     }
 
