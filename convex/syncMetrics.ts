@@ -168,6 +168,21 @@ export const syncAll = internalAction({
           });
         }
 
+        // Build campaignType map: adGroupId → CampaignType
+        // Uses existing getCampaignTypeMap (packages.json + ad_groups.json)
+        const campaignTypeMap = new Map<string, string>();
+        try {
+          const typeMapArray = await ctx.runAction(
+            internal.vkApi.getCampaignTypeMap,
+            { accessToken }
+          );
+          for (const entry of typeMapArray) {
+            campaignTypeMap.set(entry.adGroupId, entry.type);
+          }
+        } catch (err) {
+          console.warn(`[syncAll] getCampaignTypeMap failed for «${account.name}»: ${err}`);
+        }
+
         // Fetch ad_plan budgets for cascade fallback (group budget → plan budget)
         const adPlanBudgets = new Map<string, number>();
         let fetchedAdPlans: { id: number; name: string; status: string; budget_limit_day: number | null; budget_limit: number | null }[] = [];
@@ -385,16 +400,19 @@ export const syncAll = internalAction({
             });
 
             // Save / update daily aggregate
+            const adGroupId = bannerCampaignMap.get(adId);
             await ctx.runMutation(internal.metrics.saveDaily, {
               accountId: account._id,
               adId,
-              campaignId: bannerCampaignMap.get(adId),
+              campaignId: adGroupId,
               date: row.date,
               impressions,
               clicks,
               spent,
               leads,
               vkResult: vkResult > 0 ? vkResult : undefined,
+              campaignType: adGroupId ? campaignTypeMap.get(adGroupId) : undefined,
+              formEvents: eventsGoals > 0 ? eventsGoals : undefined,
               reach: base.reach,
             });
           }
