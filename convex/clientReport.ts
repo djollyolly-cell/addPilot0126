@@ -1,10 +1,8 @@
 import { v } from "convex/values";
 import { action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { callMtApi } from "./vkApi";
 import { messagesGetConversations, messagesGetHistory, usersGet } from "./vkCommunityApi";
-import { extractPhones } from "./phoneExtractor";
-import { normalizePhone } from "./phoneExtractor";
+import { extractPhones, normalizePhone } from "./phoneExtractor";
 import { fetchLeadDetails } from "./vkApi";
 import { getSubscribersByDateRange } from "./senlerApi";
 
@@ -53,207 +51,32 @@ export interface PhoneEntry {
   adId?: string;
 }
 
+export type CampaignTypeTotals = Record<string, Partial<ReportRow>>;
+
 export interface ReportResult {
   dateFrom: string;
   dateTo: string;
   rows: ReportRow[];
   totals: Partial<ReportRow>;
+  totalsByType: CampaignTypeTotals;
   phonesDetail: PhoneEntry[];
   partialErrors: string[];
 }
+
+export interface CommunityReportResult {
+  messageStartsByDate: Record<string, number>;
+  phonesDetail: PhoneEntry[];
+  senlerSubsByDate: Record<string, number>;
+  partialErrors: string[];
+}
+
+type ResultCategory = "subscribes" | "messages" | "lead_forms" | "other";
 
 const WEEKDAYS = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
 
 function weekday(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00Z");
   return WEEKDAYS[d.getUTCDay()];
-}
-
-// ─── VK API types (same as reports.ts) ──────────────────────
-
-interface MtStatBase {
-  shows: number;
-  clicks: number;
-  spent: string;
-  goals: number;
-  vk?: { result?: number | string; goals?: number | string };
-}
-
-interface MtStatRow {
-  date: string;
-  base: MtStatBase;
-  events?: Record<string, { count?: number | string } | number>;
-}
-
-interface MtStatItem {
-  id: number;
-  rows: MtStatRow[];
-}
-
-interface MtBannerRaw {
-  id: number;
-  campaign_id: number; // myTarget: this is ad_group.id (Группа), NOT ad_plan.id (Кампания)
-  status: string;
-}
-
-interface MtAdGroupRaw {
-  id: number;
-  ad_plan_id: number;
-  package_id?: number;
-}
-
-interface MtAdPlanRaw {
-  id: number;
-  objective: string;
-}
-
-type ResultCategory = "subscribes" | "messages" | "lead_forms" | "other";
-
-/**
- * Determine result category from package slug + ad_plan objective.
- * Package slugs are technical strings like "or_tt_crossdevice_community_vk_ocpm_socialengagement_pricedGoals_join".
- * Objective is a clean string like "socialengagement", "messages", "leadads".
- */
-function resolveCategory(packageSlug: string | undefined, objective: string | undefined): ResultCategory {
-  // 1. Package slug (most specific): parse pricedGoals target
-  if (packageSlug) {
-    if (packageSlug.includes("pricedGoals_join")) return "subscribes";
-    if (packageSlug.includes("pricedGoals_contact")) return "messages";
-    if (packageSlug.includes("pricedGoals_engage")) return "subscribes";
-    if (packageSlug.includes("leadads")) return "lead_forms";
-  }
-  // 2. Objective fallback
-  if (objective) {
-    if (objective === "socialengagement") return "subscribes";
-    if (objective === "messages") return "messages";
-    if (objective === "leadads" || objective === "lead_generation") return "lead_forms";
-  }
-  return "other";
-}
-
-// ─── VK API helpers ─────────────────────────────────────────
-
-const CHUNK_SIZE = 200;
-
-async function fetchStatsBatched(
-  endpoint: string,
-  accessToken: string,
-  ids: string[],
-  dateFrom: string,
-  dateTo: string
-): Promise<MtStatItem[]> {
-  if (ids.length === 0) return [];
-  const allItems: MtStatItem[] = [];
-  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
-    const chunk = ids.slice(i, i + CHUNK_SIZE).join(",");
-    const data = await callMtApi<{ items: MtStatItem[] }>(
-      endpoint, accessToken,
-      { id: chunk, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
-    );
-    if (data.items) allItems.push(...data.items);
-  }
-  return allItems;
-}
-
-async function fetchAllBanners(accessToken: string): Promise<MtBannerRaw[]> {
-  let banners: MtBannerRaw[] = [];
-  let offset = 0;
-  while (true) {
-    const data = await callMtApi<{ items: MtBannerRaw[]; count: number }>(
-      "banners.json", accessToken,
-      { fields: "id,campaign_id,status", limit: "250", offset: String(offset), _status__in: "active,blocked" }
-    );
-    const items = data.items || [];
-    banners = banners.concat(items);
-    if (banners.length >= data.count || items.length === 0) break;
-    offset += items.length;
-  }
-  return banners;
-}
-
-async function fetchAdGroups(accessToken: string): Promise<MtAdGroupRaw[]> {
-  let groups: MtAdGroupRaw[] = [];
-  let offset = 0;
-  while (true) {
-    const data = await callMtApi<{ items: MtAdGroupRaw[]; count: number }>(
-      "campaigns.json", accessToken,
-      { fields: "id,ad_plan_id,package_id", limit: "250", offset: String(offset) }
-    );
-    const items = data.items || [];
-    groups = groups.concat(items);
-    if (groups.length >= data.count || items.length === 0) break;
-    offset += items.length;
-  }
-  return groups;
-}
-
-async function fetchAdPlans(accessToken: string): Promise<MtAdPlanRaw[]> {
-  let plans: MtAdPlanRaw[] = [];
-  let offset = 0;
-  while (true) {
-    const data = await callMtApi<{ items: MtAdPlanRaw[]; count: number }>(
-      "ad_plans.json", accessToken,
-      { fields: "id,objective", limit: "250", offset: String(offset) }
-    );
-    const items = data.items || [];
-    plans = plans.concat(items);
-    if (plans.length >= data.count || items.length === 0) break;
-    offset += items.length;
-  }
-  return plans;
-}
-
-async function fetchLeadCounts(
-  accessToken: string,
-  dateFrom: string,
-  dateTo: string
-): Promise<Record<string, number>> {
-  const result: Record<string, number> = {};
-  try {
-    const subs = await callMtApi<{
-      items: Array<{ id: number; banner_id: number }>;
-    }>("lead_ads/vkontakte/subscriptions.json", accessToken, {});
-    if (!subs.items || subs.items.length === 0) return result;
-
-    const formToBanner = new Map<number, number>();
-    for (const sub of subs.items) formToBanner.set(sub.id, sub.banner_id);
-
-    const formIds = subs.items.map((s) => s.id).join(",");
-    const leads = await callMtApi<{
-      items: Array<{ form_id: number; leads: Array<{ id: number; created: string }> }>;
-    }>("lead_ads/vkontakte/leads.json", accessToken, {
-      form_id: formIds, date_from: dateFrom, date_to: dateTo,
-    });
-
-    if (leads.items) {
-      for (const item of leads.items) {
-        const bannerId = formToBanner.get(item.form_id);
-        if (bannerId) {
-          const key = String(bannerId);
-          result[key] = (result[key] || 0) + (item.leads?.length || 0);
-        }
-      }
-    }
-  } catch {
-    // Lead Ads 404 is expected for accounts without lead forms
-  }
-  return result;
-}
-
-/** Extract vk.result and form events from a VK stat row */
-function extractResultMetrics(row: MtStatRow): { vkResult: number; formEvents: number } {
-  const vk = row.base.vk;
-  const vkResult = vk ? (Number(vk.result) || 0) : 0;
-  let formEvents = 0;
-  if (row.events && typeof row.events === "object") {
-    const sendingForm = (row.events as Record<string, unknown>).sending_form;
-    if (typeof sendingForm === "number") {
-      formEvents = sendingForm;
-    } else if (sendingForm && typeof sendingForm === "object") {
-      formEvents = Number((sendingForm as { count?: number | string }).count) || 0;
-    }
-  }
-  return { vkResult, formEvents };
 }
 
 // ─── Internal queries ───────────────────────────────────────
@@ -281,15 +104,74 @@ export const _readAccounts = internalQuery({
   },
 });
 
-// ─── Public action: buildReport ────────────────────────────
+/** Read metricsDaily for account + date range */
+export const _getMetricsForReport = internalQuery({
+  args: {
+    accountId: v.id("adAccounts"),
+    dateFrom: v.string(),
+    dateTo: v.string(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_accountId_date", (q) =>
+        q.eq("accountId", args.accountId)
+          .gte("date", args.dateFrom)
+          .lte("date", args.dateTo)
+      )
+      .collect();
+  },
+});
+
+/** Read campaign names + status: vkCampaignId -> { name, status, adPlanId } */
+export const _getCampaignNames = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const campaigns = await ctx.db
+      .query("campaigns")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .collect();
+    const result: Record<string, { name: string; status: string; adPlanId?: string }> = {};
+    for (const c of campaigns) {
+      result[c.vkCampaignId] = { name: c.name, status: c.status, adPlanId: c.adPlanId };
+    }
+    return result;
+  },
+});
+
+/** Read ad names: vkAdId -> { name, campaignId (vkCampaignId) } with batch campaign lookup */
+export const _getAdNames = internalQuery({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const ads = await ctx.db
+      .query("ads")
+      .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", args.accountId))
+      .collect();
+
+    // Batch: collect unique campaignIds (Convex doc IDs), fetch all at once
+    const uniqueCampaignIds = [...new Set(ads.map((a) => a.campaignId))];
+    const campaignMap = new Map<string, string>();
+    for (const cId of uniqueCampaignIds) {
+      const campaign = await ctx.db.get(cId);
+      if (campaign) campaignMap.set(cId as string, campaign.vkCampaignId);
+    }
+
+    const result: Record<string, { name: string; campaignId: string }> = {};
+    for (const a of ads) {
+      result[a.vkAdId] = { name: a.name, campaignId: campaignMap.get(a.campaignId as string) ?? "" };
+    }
+    return result;
+  },
+});
+
+// ─── Public action: buildReport (DB-only, single account) ──
 
 export const buildReport = action({
   args: {
     userId: v.id("users"),
-    accountIds: v.array(v.id("adAccounts")),
+    accountId: v.id("adAccounts"),
     campaignIds: v.optional(v.array(v.string())),
     groupIds: v.optional(v.array(v.number())),
-    communityIds: v.optional(v.array(v.number())),
     campaignStatus: v.optional(v.string()),
     granularity: v.union(
       v.literal("day"),
@@ -305,118 +187,198 @@ export const buildReport = action({
     const partialErrors: string[] = [];
     const rowMap = new Map<string, ReportRow>();
 
-    // 1. Ad metrics — direct VK API calls
-    const accounts = await ctx.runQuery(internal.clientReport._readAccounts, {
-      accountIds: args.accountIds,
-    });
+    // 1. Read metrics from DB (instant)
+    const [metrics, campaignNames, adNames] = await Promise.all([
+      ctx.runQuery(internal.clientReport._getMetricsForReport, {
+        accountId: args.accountId,
+        dateFrom: args.dateFrom,
+        dateTo: args.dateTo,
+      }),
+      ctx.runQuery(internal.clientReport._getCampaignNames, {
+        accountId: args.accountId,
+      }),
+      ctx.runQuery(internal.clientReport._getAdNames, {
+        accountId: args.accountId,
+      }),
+    ]);
 
-    // Process all accounts in parallel
-    const accountResults = await Promise.all(
-      accounts.filter((acc: { accessToken?: string | null }) => acc.accessToken).map(async (acc: { accessToken?: string | null; name?: string; [k: string]: unknown }) => {
-        try {
-          // Fetch banners, ad groups, ad plans, packages in parallel
-          const [banners, adGroups, adPlans, packagesData] = await Promise.all([
-            fetchAllBanners(acc.accessToken!),
-            fetchAdGroups(acc.accessToken!),
-            fetchAdPlans(acc.accessToken!),
-            callMtApi<{ items: Array<{ id: number; name: string }> }>(
-              "packages.json", acc.accessToken!, { fields: "id,name", limit: "50" }
-            ).catch(() => ({ items: [] as Array<{ id: number; name: string }> })),
-          ]);
-          const bannerIds = banners.map((b) => String(b.id));
-
-          const packageMap = new Map<number, string>();
-          for (const pkg of packagesData.items || []) packageMap.set(pkg.id, pkg.name);
-
-          const adPlanObjectiveMap = new Map<number, string>();
-          for (const p of adPlans) adPlanObjectiveMap.set(p.id, p.objective);
-
-          const bannerToGroupId = new Map<number, number>();
-          for (const b of banners) bannerToGroupId.set(b.id, b.campaign_id);
-
-          const groupToAdPlanId = new Map<number, number>();
-          const groupToCategory = new Map<number, ResultCategory>();
-          for (const g of adGroups) {
-            groupToAdPlanId.set(g.id, g.ad_plan_id);
-            const pkgSlug = g.package_id !== undefined ? packageMap.get(g.package_id) : undefined;
-            const objective = adPlanObjectiveMap.get(g.ad_plan_id);
-            groupToCategory.set(g.id, resolveCategory(pkgSlug, objective));
-          }
-
-          const [statsItems, leadCounts] = await Promise.all([
-            fetchStatsBatched(
-              "statistics/banners/day.json", acc.accessToken!,
-              bannerIds, args.dateFrom, args.dateTo
-            ),
-            fetchLeadCounts(acc.accessToken!, args.dateFrom, args.dateTo),
-          ]);
-
-          return { acc, bannerToGroupId, groupToAdPlanId, groupToCategory, statsItems, leadCounts, error: null as string | null };
-        } catch (err) {
-          return { acc, bannerToGroupId: new Map(), groupToAdPlanId: new Map(), groupToCategory: new Map(), statsItems: [] as MtStatItem[], leadCounts: {} as Record<string, number>, error: `Кабинет ${acc.name} (статистика): ${err instanceof Error ? err.message : String(err)}` };
-        }
-      })
-    );
-
-    for (const result of accountResults) {
-      if (result.error) { partialErrors.push(result.error); continue; }
-      const { bannerToGroupId, groupToAdPlanId, groupToCategory, statsItems, leadCounts } = result;
-
-      for (const item of statsItems) {
-          const bannerId = String(item.id);
-          const groupId = bannerToGroupId.get(item.id);
-          const campaignId = groupId !== undefined ? groupToAdPlanId.get(groupId) : undefined;
-          const campaignIdStr = campaignId !== undefined ? String(campaignId) : "";
-          const groupIdStr = groupId !== undefined ? String(groupId) : "";
-          const category = groupId !== undefined ? (groupToCategory.get(groupId) ?? "other") : "other";
-
-          if (args.campaignIds?.length && campaignIdStr && !args.campaignIds.includes(campaignIdStr)) continue;
-
-          const leadAdsCount = leadCounts[bannerId] || 0;
-
-          for (const row of item.rows) {
-            const { vkResult, formEvents } = extractResultMetrics(row);
-            const rowSpent = parseFloat(row.base.spent || "0") || 0;
-
-            const key = buildKey(args.granularity, { date: row.date, campaignId: campaignIdStr, groupId: groupIdStr, adId: bannerId });
-            const existing = rowMap.get(key) ?? initRow(args.granularity, { date: row.date, campaignId: campaignIdStr, groupId: groupIdStr, adId: bannerId });
-            existing.impressions = (existing.impressions ?? 0) + (row.base.shows || 0);
-            existing.clicks = (existing.clicks ?? 0) + (row.base.clicks || 0);
-            existing.spent = Math.round(((existing.spent ?? 0) + rowSpent) * 100) / 100;
-
-            // Route vk.result to the correct column based on campaign objective (package)
-            // For lead_forms category: take max(vkResult, formEvents, leadAdsCount) to avoid double-counting
-            const formTotal = Math.max(formEvents, leadAdsCount);
-            switch (category) {
-              case "subscribes":
-                existing.result_subscribes = (existing.result_subscribes ?? 0) + vkResult;
-                if (formTotal > 0) existing.result_lead_forms = (existing.result_lead_forms ?? 0) + formTotal;
-                break;
-              case "messages":
-                existing.result_messages = (existing.result_messages ?? 0) + vkResult;
-                if (formTotal > 0) existing.result_lead_forms = (existing.result_lead_forms ?? 0) + formTotal;
-                break;
-              case "lead_forms":
-                existing.result_lead_forms = (existing.result_lead_forms ?? 0) + Math.max(vkResult, formTotal);
-                break;
-              default:
-                if (vkResult > 0) existing.result_other = (existing.result_other ?? 0) + vkResult;
-                if (formTotal > 0) existing.result_lead_forms = (existing.result_lead_forms ?? 0) + formTotal;
-            }
-            rowMap.set(key, existing);
-          }
-        }
+    // Map campaignType from metricsDaily to result category
+    function typeToCategory(campaignType: string | undefined): ResultCategory {
+      switch (campaignType) {
+        case "subscription": return "subscribes";
+        case "message": return "messages";
+        case "lead": return "lead_forms";
+        default: return "other";
+      }
     }
 
-    // 2. Community dialogs (message_starts, phones_count, phones_detail)
-    const needsDialogs = args.fields.some((f) =>
-      ["message_starts", "phones_count", "phones_detail"].includes(f)
-    );
+    // Cast query results to proper types (Convex serialization loses type info)
+    const campaignNameMap = campaignNames as Record<string, { name: string; status: string; adPlanId?: string }>;
+    const adNameMap = adNames as Record<string, { name: string; campaignId: string }>;
+
+    // Build ad_group status set for campaignStatus filter
+    const activeGroupIds = args.campaignStatus
+      ? new Set(
+          Object.entries(campaignNameMap)
+            .filter(([_, info]) => info.status === args.campaignStatus)
+            .map(([vkId]) => vkId)
+        )
+      : null;
+
+    // Convert groupIds (numbers) to string Set for comparison with campaignId (string)
+    const groupIdFilter = args.groupIds?.length
+      ? new Set(args.groupIds.map(String))
+      : null;
+
+    for (const m of metrics) {
+      if (!m.campaignId) continue;
+
+      const groupId = m.campaignId; // ad_group_id (string)
+      const adInfo = adNameMap[m.adId];
+      const campaignId = adInfo?.campaignId ?? ""; // ad_plan vkCampaignId
+
+      // Apply campaign (ad_plan) filter
+      if (args.campaignIds?.length && campaignId && !args.campaignIds.includes(campaignId)) continue;
+
+      // Apply ad_group filter
+      if (groupIdFilter && !groupIdFilter.has(groupId)) continue;
+
+      // Apply campaignStatus filter (ad_group status from campaigns table)
+      if (activeGroupIds && !activeGroupIds.has(groupId)) continue;
+
+      const category = typeToCategory(m.campaignType);
+
+      // lead_forms: take max(vkResult, formEvents) to preserve max-logic
+      let vkResult = m.vkResult ?? 0;
+      if (category === "lead_forms" && m.formEvents !== undefined) {
+        vkResult = Math.max(vkResult, m.formEvents);
+      }
+
+      const key = buildKey(args.granularity, {
+        date: m.date,
+        campaignId,
+        groupId,
+        adId: m.adId,
+      });
+
+      const existing = rowMap.get(key) ?? initRow(args.granularity, {
+        date: m.date,
+        campaignId,
+        groupId,
+        adId: m.adId,
+      });
+
+      // Fill names
+      if (args.granularity === "day_campaign" || args.granularity === "day_group" || args.granularity === "day_banner") {
+        if (!existing.campaignName && campaignId) {
+          // campaignNames is keyed by vkCampaignId — but for ad_groups, groupId is the key
+          // adPlanId in campaignNames entry points to ad_plan
+          // campaignId here IS the ad_plan vkCampaignId — not in campaignNames (those are ad_groups)
+          // We need ad_plan name, not ad_group name for "campaign" display
+          existing.campaignName = campaignId;
+        }
+      }
+      if (args.granularity === "day_group" || args.granularity === "day_banner") {
+        if (!existing.groupName && groupId) {
+          existing.groupName = campaignNameMap[groupId]?.name ?? groupId;
+        }
+      }
+      if (args.granularity === "day_banner") {
+        if (!existing.adName) {
+          existing.adName = adInfo?.name ?? m.adId;
+        }
+      }
+
+      existing.impressions = (existing.impressions ?? 0) + m.impressions;
+      existing.clicks = (existing.clicks ?? 0) + m.clicks;
+      existing.spent = Math.round(((existing.spent ?? 0) + m.spent) * 100) / 100;
+
+      // Route vkResult by campaignType
+      switch (category) {
+        case "subscribes":
+          existing.result_subscribes = (existing.result_subscribes ?? 0) + vkResult;
+          break;
+        case "messages":
+          existing.result_messages = (existing.result_messages ?? 0) + vkResult;
+          break;
+        case "lead_forms":
+          existing.result_lead_forms = (existing.result_lead_forms ?? 0) + vkResult;
+          break;
+        default:
+          if (vkResult > 0) existing.result_other = (existing.result_other ?? 0) + vkResult;
+      }
+
+      rowMap.set(key, existing);
+    }
+
+    // Derived metrics per row
+    const rows: ReportRow[] = [];
+    for (const r of rowMap.values()) {
+      if (args.fields.includes("spent_with_vat") && r.spent !== undefined) {
+        r.spent_with_vat = Math.round(r.spent * 1.2 * 100) / 100;
+      }
+      if (args.fields.includes("cpc") && r.clicks && r.spent) {
+        r.cpc = Math.round((r.spent / r.clicks) * 100) / 100;
+      }
+      if (args.fields.includes("ctr") && r.impressions && r.clicks !== undefined) {
+        r.ctr = Math.round((r.clicks / r.impressions) * 10000) / 100;
+      }
+      if (args.fields.includes("cpm") && r.impressions && r.spent) {
+        r.cpm = Math.round((r.spent / r.impressions) * 1000 * 100) / 100;
+      }
+      if (args.fields.includes("cpl") && r.spent) {
+        const totalResults = (r.result_subscribes ?? 0) + (r.result_messages ?? 0) + (r.result_lead_forms ?? 0) + (r.result_other ?? 0);
+        if (totalResults > 0) {
+          r.cpl = Math.round((r.spent / totalResults) * 100) / 100;
+        }
+      }
+      if (args.fields.includes("weekday") && !r.weekday) {
+        r.weekday = weekday(r.date);
+      }
+      rows.push(r);
+    }
+    rows.sort((a, b) => a.date.localeCompare(b.date));
+
+    const totals = computeTotals(rows, args.fields);
+    const totalsByType = computeTotalsByType(metrics, args.fields, args.campaignIds, groupIdFilter, adNameMap);
+
+    return {
+      dateFrom: args.dateFrom,
+      dateTo: args.dateTo,
+      rows,
+      totals,
+      totalsByType,
+      phonesDetail: [],
+      partialErrors,
+    };
+  },
+});
+
+// ─── Public action: buildCommunityReport (VK API) ──────────
+
+export const buildCommunityReport = action({
+  args: {
+    userId: v.id("users"),
+    communityIds: v.array(v.number()),
+    accountId: v.id("adAccounts"),
+    fields: v.array(v.string()),
+    dateFrom: v.string(),
+    dateTo: v.string(),
+  },
+  handler: async (ctx, args): Promise<CommunityReportResult> => {
+    const partialErrors: string[] = [];
+    const messageStartsByDate: Record<string, number> = {};
+    const senlerSubsByDate: Record<string, number> = {};
     const phonesDetail: PhoneEntry[] = [];
     const fromTs = Date.parse(args.dateFrom + "T00:00:00Z") / 1000;
     const toTs = Date.parse(args.dateTo + "T23:59:59Z") / 1000;
 
-    if (needsDialogs && args.communityIds && args.communityIds.length > 0) {
+    const needsDialogs = args.fields.some((f) =>
+      ["message_starts", "phones_count", "phones_detail"].includes(f)
+    );
+
+    // 1. Community dialogs
+    if (needsDialogs && args.communityIds.length > 0) {
       const profiles = await ctx.runQuery(
         internal.clientReport._readCommunityProfiles,
         { userId: args.userId, vkGroupIds: args.communityIds }
@@ -424,7 +386,6 @@ export const buildReport = action({
 
       for (const profile of profiles) {
         try {
-          // Scan conversations with last activity in the date range
           const activeDialogs: Array<{ peerId: number; lastMessageDate: number }> = [];
           let offset = 0;
           for (let page = 0; page < 50; page++) {
@@ -446,10 +407,9 @@ export const buildReport = action({
             }
             if (allOlder) break;
             offset += 200;
-            await new Promise((r) => setTimeout(r, 100));
+            await new Promise((r) => setTimeout(r, 500));
           }
 
-          // Batch fetch user info
           const peerIds = Array.from(new Set(activeDialogs.map((d) => d.peerId)));
           const peerInfo = new Map<number, { firstName: string; lastName: string }>();
           for (let i = 0; i < peerIds.length; i += 100) {
@@ -459,15 +419,13 @@ export const buildReport = action({
             for (const u of users) {
               peerInfo.set(u.id, { firstName: u.first_name, lastName: u.last_name });
             }
-            await new Promise((r) => setTimeout(r, 100));
+            await new Promise((r) => setTimeout(r, 300));
           }
 
-          // For each dialog: check true start date + extract phones (batched, 3 at a time)
-          const dialogStartsByDate = new Map<string, number>();
           const needMessageStarts = args.fields.includes("message_starts");
           const needPhones = args.fields.some((f) => ["phones_count", "phones_detail"].includes(f));
           const groupIdAbs = Math.abs(profile.vkGroupId);
-          const BATCH_SIZE = 3;
+          const BATCH_SIZE = 2;
 
           for (let i = 0; i < activeDialogs.length; i += BATCH_SIZE) {
             const batch = activeDialogs.slice(i, i + BATCH_SIZE);
@@ -487,7 +445,7 @@ export const buildReport = action({
                   const firstMsg = results[idx].items[0];
                   if (firstMsg && firstMsg.date >= fromTs && firstMsg.date <= toTs) {
                     const dateStr = new Date(firstMsg.date * 1000).toISOString().slice(0, 10);
-                    dialogStartsByDate.set(dateStr, (dialogStartsByDate.get(dateStr) ?? 0) + 1);
+                    messageStartsByDate[dateStr] = (messageStartsByDate[dateStr] ?? 0) + 1;
                   }
                   idx++;
                 }
@@ -521,22 +479,7 @@ export const buildReport = action({
               }
             }));
             if (i + BATCH_SIZE < activeDialogs.length) {
-              await new Promise((r) => setTimeout(r, 100));
-            }
-          }
-
-          // Add message_starts to rows
-          if (args.fields.includes("message_starts")) {
-            for (const [date, count] of dialogStartsByDate) {
-              const key = buildKeyFromDate(args.granularity, date);
-              const existing = rowMap.get(key);
-              if (existing) {
-                existing.message_starts = (existing.message_starts ?? 0) + count;
-              } else {
-                const newRow: ReportRow = { date, message_starts: count };
-                if (args.fields.includes("weekday")) newRow.weekday = weekday(date);
-                rowMap.set(key, newRow);
-              }
+              await new Promise((r) => setTimeout(r, 500));
             }
           }
         } catch (err) {
@@ -547,16 +490,15 @@ export const buildReport = action({
       }
     }
 
-    // 3. Lead Ads contacts (phones_detail / phones_count)
+    // 2. Lead Ads contacts
     if (needsDialogs) {
-      for (const acc of accounts) {
-        if (!acc.accessToken) continue;
+      const acc = await ctx.runQuery(internal.clientReport._readAccounts, {
+        accountIds: [args.accountId],
+      });
+      for (const a of acc) {
+        if (!a.accessToken) continue;
         try {
-          const leads = await fetchLeadDetails(
-            acc.accessToken,
-            args.dateFrom,
-            args.dateTo,
-          );
+          const leads = await fetchLeadDetails(a.accessToken, args.dateFrom, args.dateTo);
           for (const lead of leads) {
             if (lead.phone) {
               phonesDetail.push({
@@ -571,17 +513,16 @@ export const buildReport = action({
             }
           }
         } catch (err) {
-          // Lead Ads 404 is expected for accounts without lead forms — skip silently
           const msg = err instanceof Error ? err.message : String(err);
           if (!msg.includes("404")) {
-            partialErrors.push(`Кабинет ${acc.name} (Lead Ads): ${msg}`);
+            partialErrors.push(`Lead Ads: ${msg}`);
           }
         }
       }
     }
 
-    // 4. Senler subs
-    if (args.fields.includes("senler_subs") && args.communityIds && args.communityIds.length > 0) {
+    // 3. Senler subs
+    if (args.fields.includes("senler_subs") && args.communityIds.length > 0) {
       const profiles = await ctx.runQuery(
         internal.clientReport._readCommunityProfiles,
         { userId: args.userId, vkGroupIds: args.communityIds }
@@ -589,20 +530,10 @@ export const buildReport = action({
       for (const profile of profiles) {
         if (!profile.senlerApiKey) continue;
         try {
-          const subs = await getSubscribersByDateRange(
-            profile.senlerApiKey, fromTs, toTs
-          );
+          const subs = await getSubscribersByDateRange(profile.senlerApiKey, fromTs, toTs);
           for (const sub of subs) {
             const date = new Date(sub.date_subscribe * 1000).toISOString().slice(0, 10);
-            const key = buildKeyFromDate(args.granularity, date);
-            const existing = rowMap.get(key);
-            if (existing) {
-              existing.senler_subs = (existing.senler_subs ?? 0) + 1;
-            } else {
-              const newRow: ReportRow = { date, senler_subs: 1 };
-              if (args.fields.includes("weekday")) newRow.weekday = weekday(date);
-              rowMap.set(key, newRow);
-            }
+            senlerSubsByDate[date] = (senlerSubsByDate[date] ?? 0) + 1;
           }
         } catch (err) {
           partialErrors.push(
@@ -612,63 +543,7 @@ export const buildReport = action({
       }
     }
 
-    // 5. phones_count per-row (from phonesDetail)
-    if (args.fields.includes("phones_count")) {
-      const countsByDate = new Map<string, number>();
-      for (const p of phonesDetail) {
-        countsByDate.set(p.date, (countsByDate.get(p.date) ?? 0) + 1);
-      }
-      for (const [date, count] of countsByDate) {
-        const key = buildKeyFromDate(args.granularity, date);
-        const existing = rowMap.get(key);
-        if (existing) {
-          existing.phones_count = (existing.phones_count ?? 0) + count;
-        } else {
-          const newRow: ReportRow = { date, phones_count: count };
-          if (args.fields.includes("weekday")) newRow.weekday = weekday(date);
-          rowMap.set(key, newRow);
-        }
-      }
-    }
-
-    // 6. Derived metrics per row + final rows array
-    const rows: ReportRow[] = [];
-    for (const r of rowMap.values()) {
-      if (args.fields.includes("spent_with_vat") && r.spent !== undefined) {
-        r.spent_with_vat = Math.round(r.spent * 1.2 * 100) / 100;
-      }
-      if (args.fields.includes("cpc") && r.clicks && r.spent) {
-        r.cpc = Math.round((r.spent / r.clicks) * 100) / 100;
-      }
-      if (args.fields.includes("ctr") && r.impressions && r.clicks !== undefined) {
-        r.ctr = Math.round((r.clicks / r.impressions) * 10000) / 100;
-      }
-      if (args.fields.includes("cpm") && r.impressions && r.spent) {
-        r.cpm = Math.round((r.spent / r.impressions) * 1000 * 100) / 100;
-      }
-      if (args.fields.includes("cpl") && r.spent) {
-        const totalResults = (r.result_subscribes ?? 0) + (r.result_messages ?? 0) + (r.result_lead_forms ?? 0) + (r.result_other ?? 0);
-        if (totalResults > 0) {
-          r.cpl = Math.round((r.spent / totalResults) * 100) / 100;
-        }
-      }
-      if (args.fields.includes("weekday") && !r.weekday) {
-        r.weekday = weekday(r.date);
-      }
-      rows.push(r);
-    }
-    rows.sort((a, b) => a.date.localeCompare(b.date));
-
-    const totals = computeTotals(rows, args.fields);
-
-    return {
-      dateFrom: args.dateFrom,
-      dateTo: args.dateTo,
-      rows,
-      totals,
-      phonesDetail,
-      partialErrors,
-    };
+    return { messageStartsByDate, phonesDetail, senlerSubsByDate, partialErrors };
   },
 });
 
@@ -684,11 +559,6 @@ function buildKey(
     case "day_group": return `${m.date}|g${m.groupId ?? ""}`;
     case "day_banner": return `${m.date}|a${m.adId}`;
   }
-}
-
-function buildKeyFromDate(granularity: Granularity, date: string): string {
-  if (granularity === "day") return date;
-  return `comm:${date}`;
 }
 
 function initRow(
@@ -747,4 +617,76 @@ function computeTotals(rows: ReportRow[], fields: string[]): Partial<ReportRow> 
   if (fields.includes("phones_count")) totals.phones_count = phonesCount;
   if (fields.includes("senler_subs")) totals.senler_subs = senlerSubs;
   return totals;
+}
+
+function computeTotalsByType(
+  metrics: Array<{
+    adId: string;
+    campaignId?: string;
+    campaignType?: string;
+    impressions: number;
+    clicks: number;
+    spent: number;
+    vkResult?: number;
+    formEvents?: number;
+  }>,
+  fields: string[],
+  campaignFilter: string[] | undefined,
+  groupFilter: Set<string> | null,
+  adNames: Record<string, { campaignId: string }>,
+): CampaignTypeTotals {
+  const byType: Record<string, { impressions: number; clicks: number; spent: number; results: number }> = {};
+
+  for (const m of metrics) {
+    if (!m.campaignId) continue;
+    const adInfo = adNames[m.adId];
+    const campaignId = adInfo?.campaignId ?? "";
+    if (campaignFilter?.length && campaignId && !campaignFilter.includes(campaignId)) continue;
+    if (groupFilter && !groupFilter.has(m.campaignId)) continue;
+
+    const type = m.campaignType ?? "other";
+    if (!byType[type]) byType[type] = { impressions: 0, clicks: 0, spent: 0, results: 0 };
+    byType[type].impressions += m.impressions;
+    byType[type].clicks += m.clicks;
+    byType[type].spent += m.spent;
+    // lead_forms: max(vkResult, formEvents) — same logic as in buildReport
+    let result = m.vkResult ?? 0;
+    if (type === "lead" && m.formEvents !== undefined) {
+      result = Math.max(result, m.formEvents);
+    }
+    byType[type].results += result;
+  }
+
+  const TYPE_LABELS: Record<string, string> = {
+    subscription: "Подписки",
+    message: "Сообщения",
+    lead: "Лиды",
+    awareness: "Охват",
+    other: "Другое",
+  };
+
+  const result: CampaignTypeTotals = {};
+  for (const [type, data] of Object.entries(byType)) {
+    const row: Partial<ReportRow> = {};
+    if (fields.includes("impressions")) row.impressions = data.impressions;
+    if (fields.includes("clicks")) row.clicks = data.clicks;
+    if (fields.includes("spent")) row.spent = Math.round(data.spent * 100) / 100;
+    if (fields.includes("spent_with_vat")) row.spent_with_vat = Math.round(data.spent * 1.2 * 100) / 100;
+    if (fields.includes("cpc") && data.clicks) row.cpc = Math.round((data.spent / data.clicks) * 100) / 100;
+    if (fields.includes("ctr") && data.impressions) row.ctr = Math.round((data.clicks / data.impressions) * 10000) / 100;
+    if (fields.includes("cpm") && data.impressions) row.cpm = Math.round((data.spent / data.impressions) * 1000 * 100) / 100;
+    if (fields.includes("cpl") && data.results > 0) row.cpl = Math.round((data.spent / data.results) * 100) / 100;
+
+    // Route results to the correct column
+    switch (type) {
+      case "subscription": row.result_subscribes = data.results; break;
+      case "message": row.result_messages = data.results; break;
+      case "lead": row.result_lead_forms = data.results; break;
+      default: row.result_other = data.results; break;
+    }
+
+    result[TYPE_LABELS[type] ?? type] = row;
+  }
+
+  return result;
 }
