@@ -102,15 +102,32 @@ interface MtAdGroupRaw {
   package_id?: number;
 }
 
+interface MtAdPlanRaw {
+  id: number;
+  objective: string;
+}
+
 type ResultCategory = "subscribes" | "messages" | "lead_forms" | "other";
 
-/** Determine result category from package name (most specific label from VK API) */
-function packageNameToCategory(packageName: string | undefined): ResultCategory {
-  if (!packageName) return "other";
-  const lower = packageName.toLowerCase();
-  if (lower.includes("подписк") || lower.includes("subscri") || lower.includes("сообществ")) return "subscribes";
-  if (lower.includes("сообщен") || lower.includes("messag") || lower.includes("переписк")) return "messages";
-  if (lower.includes("заявк") || lower.includes("лид") || lower.includes("lead") || lower.includes("форм")) return "lead_forms";
+/**
+ * Determine result category from package slug + ad_plan objective.
+ * Package slugs are technical strings like "or_tt_crossdevice_community_vk_ocpm_socialengagement_pricedGoals_join".
+ * Objective is a clean string like "socialengagement", "messages", "leadads".
+ */
+function resolveCategory(packageSlug: string | undefined, objective: string | undefined): ResultCategory {
+  // 1. Package slug (most specific): parse pricedGoals target
+  if (packageSlug) {
+    if (packageSlug.includes("pricedGoals_join")) return "subscribes";
+    if (packageSlug.includes("pricedGoals_contact")) return "messages";
+    if (packageSlug.includes("pricedGoals_engage")) return "subscribes";
+    if (packageSlug.includes("leadads")) return "lead_forms";
+  }
+  // 2. Objective fallback
+  if (objective) {
+    if (objective === "socialengagement") return "subscribes";
+    if (objective === "messages") return "messages";
+    if (objective === "leadads" || objective === "lead_generation") return "lead_forms";
+  }
   return "other";
 }
 
@@ -168,6 +185,22 @@ async function fetchAdGroups(accessToken: string): Promise<MtAdGroupRaw[]> {
     offset += items.length;
   }
   return groups;
+}
+
+async function fetchAdPlans(accessToken: string): Promise<MtAdPlanRaw[]> {
+  let plans: MtAdPlanRaw[] = [];
+  let offset = 0;
+  while (true) {
+    const data = await callMtApi<{ items: MtAdPlanRaw[]; count: number }>(
+      "ad_plans.json", accessToken,
+      { fields: "id,objective", limit: "250", offset: String(offset) }
+    );
+    const items = data.items || [];
+    plans = plans.concat(items);
+    if (plans.length >= data.count || items.length === 0) break;
+    offset += items.length;
+  }
+  return plans;
 }
 
 async function fetchLeadCounts(
@@ -280,10 +313,11 @@ export const buildReport = action({
     for (const acc of accounts) {
       if (!acc.accessToken) continue;
       try {
-        // Fetch banners, ad groups, packages in parallel
-        const [banners, adGroups, packagesData] = await Promise.all([
+        // Fetch banners, ad groups, ad plans, packages in parallel
+        const [banners, adGroups, adPlans, packagesData] = await Promise.all([
           fetchAllBanners(acc.accessToken),
           fetchAdGroups(acc.accessToken),
+          fetchAdPlans(acc.accessToken),
           callMtApi<{ items: Array<{ id: number; name: string }> }>(
             "packages.json", acc.accessToken, { fields: "id,name", limit: "50" }
           ).catch(() => ({ items: [] as Array<{ id: number; name: string }> })),
@@ -294,7 +328,10 @@ export const buildReport = action({
         const packageMap = new Map<number, string>();
         for (const pkg of packagesData.items || []) packageMap.set(pkg.id, pkg.name);
 
-        // banner → group, group → ad_plan, group → package → category
+        const adPlanObjectiveMap = new Map<number, string>();
+        for (const p of adPlans) adPlanObjectiveMap.set(p.id, p.objective);
+
+        // banner → group, group → ad_plan, group → category (via package slug + objective)
         const bannerToGroupId = new Map<number, number>();
         for (const b of banners) bannerToGroupId.set(b.id, b.campaign_id);
 
@@ -302,12 +339,10 @@ export const buildReport = action({
         const groupToCategory = new Map<number, ResultCategory>();
         for (const g of adGroups) {
           groupToAdPlanId.set(g.id, g.ad_plan_id);
-          const pkgName = g.package_id !== undefined ? packageMap.get(g.package_id) : undefined;
-          const cat = packageNameToCategory(pkgName);
-          groupToCategory.set(g.id, cat);
-          console.log(`[clientReport] group ${g.id}: package_id=${g.package_id}, pkgName="${pkgName}", category=${cat}`);
+          const pkgSlug = g.package_id !== undefined ? packageMap.get(g.package_id) : undefined;
+          const objective = adPlanObjectiveMap.get(g.ad_plan_id);
+          groupToCategory.set(g.id, resolveCategory(pkgSlug, objective));
         }
-        console.log(`[clientReport] packages loaded: ${packageMap.size}, groups: ${adGroups.length}, banners: ${banners.length}`);
 
         // Fetch stats and lead counts in parallel
         const [statsItems, leadCounts] = await Promise.all([
