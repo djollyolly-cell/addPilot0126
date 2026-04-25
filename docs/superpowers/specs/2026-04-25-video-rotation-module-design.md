@@ -293,6 +293,33 @@ toggleVideoRotation(userId: Id<"users">, enabled: boolean)
 
 При удалении пользователя: удалить все `rotationState` записи, связанные с его правилами `video_rotation`.
 
+## Логирование действий ротации
+
+Все события ротации пишутся в существующую таблицу `actionLogs`. Новые значения `actionType`:
+
+| actionType | Когда | metricsSnapshot |
+|---|---|---|
+| `rotation_switch` | Переключение на следующую кампанию | `{ from: campaignName, to: campaignName, slotHours, budgetRemaining }` |
+| `rotation_paused` | Пауза (тихие часы или вмешательство) | `{ reason: "quiet_hours" \| "intervention" \| "api_error", campaignName }` |
+| `rotation_resumed` | Возобновление после паузы | `{ campaignName, remainingSlotMinutes }` |
+| `rotation_cycle_complete` | Завершение полного цикла | `{ cycleNumber, totalCampaigns, durationHours }` |
+| `rotation_started` | Активация правила ротации | `{ totalCampaigns, slotHours, dailyBudget }` |
+| `rotation_stopped` | Деактивация правила ротации | `{ cycleNumber, lastCampaignName }` |
+
+Поля `actionLogs`:
+- `ruleId` — ID правила ротации
+- `accountId` — ID аккаунта
+- `adId` — не используется (можно `undefined`)
+- `adName` — название текущей/переключаемой кампании
+- `status` — `"success"` или `"failed"`
+
+Cleanup: существующий cron `actionLogs` (90 дней, ежедневно 02:30 UTC) — дополнительный cleanup не нужен.
+
+Объём: ~6-8 записей в сутки на правило (при слоте 4ч). При 10 активных ротациях = ~80 записей/сутки, за 90 дней = ~7200 записей. Незначительная нагрузка.
+
 ## Data retention
 
-`rotationState` — удаляется вместе с правилом или при деактивации (status = "stopped"). Нет отдельного TTL — запись живёт пока правило активно.
+| Таблица | Retention | Cleanup |
+|---|---|---|
+| `rotationState` | Пока правило активно | Удаляется при деактивации правила, удалении правила, или deleteUser cascade. Одна запись на правило — не растёт. |
+| `actionLogs` (rotation_*) | 90 дней | Существующий cron в `logCleanup.ts`, без изменений |
