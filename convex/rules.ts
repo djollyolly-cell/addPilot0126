@@ -495,6 +495,11 @@ export const create = mutation({
       updatedAt: now,
     });
 
+    // Activate rotation immediately after creation
+    if (args.type === "video_rotation") {
+      await ctx.scheduler.runAfter(0, internal.videoRotation.activate, { ruleId });
+    }
+
     // Audit log
     try { await ctx.runMutation(internal.auditLog.log, {
       userId: args.userId,
