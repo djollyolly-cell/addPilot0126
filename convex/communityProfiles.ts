@@ -9,11 +9,26 @@ import { validateSenlerKey as senlerValidate } from "./senlerApi";
 export const list = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const profiles = await ctx.db
       .query("communityProfiles")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .order("desc")
       .collect();
+    // Strip sensitive tokens — never send them to the client
+    return profiles.map((p) => ({
+      _id: p._id,
+      _creationTime: p._creationTime,
+      userId: p.userId,
+      vkGroupId: p.vkGroupId,
+      vkGroupName: p.vkGroupName,
+      vkGroupAvatarUrl: p.vkGroupAvatarUrl,
+      hasVkToken: !!p.vkCommunityToken,
+      hasSenlerKey: !!p.senlerApiKey,
+      lastValidatedAt: p.lastValidatedAt,
+      lastError: p.lastError,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+    }));
   },
 });
 

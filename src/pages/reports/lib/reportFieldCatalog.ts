@@ -24,7 +24,7 @@ export const FIELD_CATALOG: FieldDefinition[] = [
   { id: "leads", label: "Лиды (формы)", category: "ads" },
   { id: "cpl", label: "CPL", category: "ads", dependencies: ["leads", "spent"] },
   { id: "message_starts", label: "Старты сообщений", category: "community", requiresCommunityProfile: true },
-  { id: "phones_count", label: "Но��еров найдено", category: "community", requiresCommunityProfile: true },
+  { id: "phones_count", label: "Номеров найдено", category: "community", requiresCommunityProfile: true },
   { id: "phones_detail", label: "Номера: детали", category: "community", dependencies: ["phones_count"], requiresCommunityProfile: true },
   { id: "senler_subs", label: "Подписки Senler", category: "community", requiresCommunityProfile: true },
 ];

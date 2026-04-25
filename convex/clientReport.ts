@@ -1,6 +1,7 @@
 import { v } from "convex/values";
 import { action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { callMtApi } from "./vkApi";
 import { messagesGetConversations, messagesGetHistory, usersGet } from "./vkCommunityApi";
 import { extractPhones } from "./phoneExtractor";
 import { normalizePhone } from "./phoneExtractor";
@@ -65,30 +66,150 @@ function weekday(dateStr: string): string {
   return WEEKDAYS[d.getUTCDay()];
 }
 
-// ─── Internal queries ───────────────────────────────────────
+// ─── VK API types (same as reports.ts) ──────────────────────
 
-export const _readAdMetrics = internalQuery({
-  args: {
-    accountIds: v.array(v.id("adAccounts")),
-    dateFrom: v.string(),
-    dateTo: v.string(),
-  },
-  handler: async (ctx, args) => {
-    const results = [];
-    for (const accountId of args.accountIds) {
-      const rows = await ctx.db
-        .query("metricsDaily")
-        .withIndex("by_accountId_date", (q) =>
-          q.eq("accountId", accountId)
-            .gte("date", args.dateFrom)
-            .lte("date", args.dateTo)
-        )
-        .collect();
-      results.push({ accountId, rows });
+interface MtStatBase {
+  shows: number;
+  clicks: number;
+  spent: string;
+  goals: number;
+  vk?: { result?: number | string; goals?: number | string };
+}
+
+interface MtStatRow {
+  date: string;
+  base: MtStatBase;
+  events?: Record<string, { count?: number | string } | number>;
+}
+
+interface MtStatItem {
+  id: number;
+  rows: MtStatRow[];
+}
+
+interface MtBannerRaw {
+  id: number;
+  campaign_id: number; // myTarget: this is ad_group.id (Группа), NOT ad_plan.id (Кампания)
+  status: string;
+}
+
+interface MtAdGroupRaw {
+  id: number;
+  ad_plan_id: number; // myTarget: this is the actual campaign (Кампания)
+}
+
+// ─── VK API helpers ─────────────────────────────────────────
+
+const CHUNK_SIZE = 200;
+
+async function fetchStatsBatched(
+  endpoint: string,
+  accessToken: string,
+  ids: string[],
+  dateFrom: string,
+  dateTo: string
+): Promise<MtStatItem[]> {
+  if (ids.length === 0) return [];
+  const allItems: MtStatItem[] = [];
+  for (let i = 0; i < ids.length; i += CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + CHUNK_SIZE).join(",");
+    const data = await callMtApi<{ items: MtStatItem[] }>(
+      endpoint, accessToken,
+      { id: chunk, date_from: dateFrom, date_to: dateTo, metrics: "base,events" }
+    );
+    if (data.items) allItems.push(...data.items);
+  }
+  return allItems;
+}
+
+async function fetchAllBanners(accessToken: string): Promise<MtBannerRaw[]> {
+  let banners: MtBannerRaw[] = [];
+  let offset = 0;
+  while (true) {
+    const data = await callMtApi<{ items: MtBannerRaw[]; count: number }>(
+      "banners.json", accessToken,
+      { fields: "id,campaign_id,status", limit: "250", offset: String(offset), _status__in: "active,blocked" }
+    );
+    const items = data.items || [];
+    banners = banners.concat(items);
+    if (banners.length >= data.count || items.length === 0) break;
+    offset += items.length;
+  }
+  return banners;
+}
+
+async function fetchAdGroups(accessToken: string): Promise<MtAdGroupRaw[]> {
+  let groups: MtAdGroupRaw[] = [];
+  let offset = 0;
+  while (true) {
+    const data = await callMtApi<{ items: MtAdGroupRaw[]; count: number }>(
+      "campaigns.json", accessToken,
+      { fields: "id,ad_plan_id", limit: "250", offset: String(offset) }
+    );
+    const items = data.items || [];
+    groups = groups.concat(items);
+    if (groups.length >= data.count || items.length === 0) break;
+    offset += items.length;
+  }
+  return groups;
+}
+
+async function fetchLeadCounts(
+  accessToken: string,
+  dateFrom: string,
+  dateTo: string
+): Promise<Record<string, number>> {
+  const result: Record<string, number> = {};
+  try {
+    const subs = await callMtApi<{
+      items: Array<{ id: number; banner_id: number }>;
+    }>("lead_ads/vkontakte/subscriptions.json", accessToken, {});
+    if (!subs.items || subs.items.length === 0) return result;
+
+    const formToBanner = new Map<number, number>();
+    for (const sub of subs.items) formToBanner.set(sub.id, sub.banner_id);
+
+    const formIds = subs.items.map((s) => s.id).join(",");
+    const leads = await callMtApi<{
+      items: Array<{ form_id: number; leads: Array<{ id: number; created: string }> }>;
+    }>("lead_ads/vkontakte/leads.json", accessToken, {
+      form_id: formIds, date_from: dateFrom, date_to: dateTo,
+    });
+
+    if (leads.items) {
+      for (const item of leads.items) {
+        const bannerId = formToBanner.get(item.form_id);
+        if (bannerId) {
+          const key = String(bannerId);
+          result[key] = (result[key] || 0) + (item.leads?.length || 0);
+        }
+      }
     }
-    return results;
-  },
-});
+  } catch {
+    // Lead Ads 404 is expected for accounts without lead forms
+  }
+  return result;
+}
+
+function countLeadsFromRow(row: MtStatRow): number {
+  const base = row.base;
+  const baseGoals = Number(base.goals) || 0;
+  const vk = base.vk;
+  const vkResult = vk ? (Number(vk.result) || 0) : 0;
+  const vkGoals = vk ? (Number(vk.goals) || 0) : 0;
+  let eventsGoals = 0;
+  if (row.events && typeof row.events === "object") {
+    const sendingForm = (row.events as Record<string, unknown>).sending_form;
+    if (typeof sendingForm === "number") {
+      eventsGoals = sendingForm;
+    } else if (sendingForm && typeof sendingForm === "object") {
+      eventsGoals = Number((sendingForm as { count?: number | string }).count) || 0;
+    }
+  }
+  return Math.max(baseGoals, vkResult, vkGoals, eventsGoals);
+}
+
+// ─── Internal queries ───────────────────────────────────────
 
 export const _readCommunityProfiles = internalQuery({
   args: { userId: v.id("users"), vkGroupIds: v.array(v.number()) },
@@ -135,29 +256,68 @@ export const buildReport = action({
   },
   handler: async (ctx, args): Promise<ReportResult> => {
     const partialErrors: string[] = [];
-
-    // 1. Ad metrics
-    const metricsData = await ctx.runQuery(
-      internal.clientReport._readAdMetrics,
-      {
-        accountIds: args.accountIds,
-        dateFrom: args.dateFrom,
-        dateTo: args.dateTo,
-      }
-    );
-
     const rowMap = new Map<string, ReportRow>();
-    for (const { rows } of metricsData) {
-      for (const m of rows) {
-        if (args.campaignIds?.length && m.campaignId && !args.campaignIds.includes(m.campaignId)) continue;
 
-        const key = buildKey(args.granularity, m);
-        const existing = rowMap.get(key) ?? initRow(args.granularity, m);
-        existing.impressions = (existing.impressions ?? 0) + m.impressions;
-        existing.clicks = (existing.clicks ?? 0) + m.clicks;
-        existing.spent = (existing.spent ?? 0) + m.spent;
-        existing.leads = (existing.leads ?? 0) + m.leads;
-        rowMap.set(key, existing);
+    // 1. Ad metrics — direct VK API calls
+    const accounts = await ctx.runQuery(internal.clientReport._readAccounts, {
+      accountIds: args.accountIds,
+    });
+
+    for (const acc of accounts) {
+      if (!acc.accessToken) continue;
+      try {
+        // Fetch banners + ad groups in parallel
+        const [banners, adGroups] = await Promise.all([
+          fetchAllBanners(acc.accessToken),
+          fetchAdGroups(acc.accessToken),
+        ]);
+        const bannerIds = banners.map((b) => String(b.id));
+
+        // banner.campaign_id = ad_group.id (Группа)
+        // ad_group.ad_plan_id = actual campaign (Кампания)
+        const bannerToGroupId = new Map<number, number>();
+        for (const b of banners) bannerToGroupId.set(b.id, b.campaign_id);
+
+        const groupToAdPlanId = new Map<number, number>();
+        for (const g of adGroups) groupToAdPlanId.set(g.id, g.ad_plan_id);
+
+        // Fetch stats and lead counts in parallel
+        const [statsItems, leadCounts] = await Promise.all([
+          fetchStatsBatched(
+            "statistics/banners/day.json", acc.accessToken,
+            bannerIds, args.dateFrom, args.dateTo
+          ),
+          fetchLeadCounts(acc.accessToken, args.dateFrom, args.dateTo),
+        ]);
+
+        for (const item of statsItems) {
+          const bannerId = String(item.id);
+          const groupId = bannerToGroupId.get(item.id);
+          const campaignId = groupId !== undefined ? groupToAdPlanId.get(groupId) : undefined;
+          const campaignIdStr = campaignId !== undefined ? String(campaignId) : "";
+          const groupIdStr = groupId !== undefined ? String(groupId) : "";
+
+          if (args.campaignIds?.length && campaignIdStr && !args.campaignIds.includes(campaignIdStr)) continue;
+
+          const leadAdsCount = leadCounts[bannerId] || 0;
+
+          for (const row of item.rows) {
+            const rowLeads = Math.max(countLeadsFromRow(row), leadAdsCount);
+            const rowSpent = parseFloat(row.base.spent || "0") || 0;
+
+            const key = buildKey(args.granularity, { date: row.date, campaignId: campaignIdStr, groupId: groupIdStr, adId: bannerId });
+            const existing = rowMap.get(key) ?? initRow(args.granularity, { date: row.date, campaignId: campaignIdStr, groupId: groupIdStr, adId: bannerId });
+            existing.impressions = (existing.impressions ?? 0) + (row.base.shows || 0);
+            existing.clicks = (existing.clicks ?? 0) + (row.base.clicks || 0);
+            existing.spent = Math.round(((existing.spent ?? 0) + rowSpent) * 100) / 100;
+            existing.leads = (existing.leads ?? 0) + rowLeads;
+            rowMap.set(key, existing);
+          }
+        }
+      } catch (err) {
+        partialErrors.push(
+          `Кабинет ${acc.name} (статистика): ${err instanceof Error ? err.message : String(err)}`
+        );
       }
     }
 
@@ -166,18 +326,19 @@ export const buildReport = action({
       ["message_starts", "phones_count", "phones_detail"].includes(f)
     );
     const phonesDetail: PhoneEntry[] = [];
+    const fromTs = Date.parse(args.dateFrom + "T00:00:00Z") / 1000;
+    const toTs = Date.parse(args.dateTo + "T23:59:59Z") / 1000;
 
     if (needsDialogs && args.communityIds && args.communityIds.length > 0) {
       const profiles = await ctx.runQuery(
         internal.clientReport._readCommunityProfiles,
         { userId: args.userId, vkGroupIds: args.communityIds }
       );
-      const fromTs = Date.parse(args.dateFrom + "T00:00:00Z") / 1000;
-      const toTs = Date.parse(args.dateTo + "T23:59:59Z") / 1000;
 
       for (const profile of profiles) {
         try {
-          const newDialogs: Array<{ peerId: number; firstMessageDate: number }> = [];
+          // Scan conversations with last activity in the date range
+          const activeDialogs: Array<{ peerId: number; lastMessageDate: number }> = [];
           let offset = 0;
           for (let page = 0; page < 50; page++) {
             const res = await messagesGetConversations(
@@ -190,9 +351,9 @@ export const buildReport = action({
               if (lastDate === undefined) continue;
               if (lastDate >= fromTs) allOlder = false;
               if (lastDate >= fromTs && lastDate <= toTs) {
-                newDialogs.push({
+                activeDialogs.push({
                   peerId: item.conversation.peer.id,
-                  firstMessageDate: lastDate,
+                  lastMessageDate: lastDate,
                 });
               }
             }
@@ -202,7 +363,7 @@ export const buildReport = action({
           }
 
           // Batch fetch user info
-          const peerIds = Array.from(new Set(newDialogs.map((d) => d.peerId)));
+          const peerIds = Array.from(new Set(activeDialogs.map((d) => d.peerId)));
           const peerInfo = new Map<number, { firstName: string; lastName: string }>();
           for (let i = 0; i < peerIds.length; i += 100) {
             const batch = peerIds.slice(i, i + 100).filter((id) => id > 0);
@@ -214,16 +375,26 @@ export const buildReport = action({
             await new Promise((r) => setTimeout(r, 400));
           }
 
-          // Count dialog starts by date
+          // For each dialog: check true start date + extract phones
           const dialogStartsByDate = new Map<string, number>();
-          for (const d of newDialogs) {
-            const dateStr = new Date(d.firstMessageDate * 1000).toISOString().slice(0, 10);
-            dialogStartsByDate.set(dateStr, (dialogStartsByDate.get(dateStr) ?? 0) + 1);
-          }
 
-          // Read message history and extract phones
-          for (const d of newDialogs) {
+          for (const d of activeDialogs) {
             try {
+              // Get first message (rev=0 = oldest first, count=1)
+              // to determine if dialog truly STARTED in the selected range
+              if (args.fields.includes("message_starts")) {
+                const firstHist = await messagesGetHistory(
+                  profile.vkCommunityToken, d.peerId, 1, 0
+                );
+                const firstMsg = firstHist.items[0];
+                if (firstMsg && firstMsg.date >= fromTs && firstMsg.date <= toTs) {
+                  const dateStr = new Date(firstMsg.date * 1000).toISOString().slice(0, 10);
+                  dialogStartsByDate.set(dateStr, (dialogStartsByDate.get(dateStr) ?? 0) + 1);
+                }
+                await new Promise((r) => setTimeout(r, 400));
+              }
+
+              // Get recent messages for phone extraction (rev=1 = newest first)
               const hist = await messagesGetHistory(
                 profile.vkCommunityToken, d.peerId, 50, 1
               );
@@ -232,6 +403,9 @@ export const buildReport = action({
                 (m) => m.from_id !== -groupIdAbs && m.from_id > 0
               );
               for (const msg of inbound) {
+                // Filter messages to selected date range only
+                if (msg.date < fromTs || msg.date > toTs) continue;
+
                 const phones = extractPhones(msg.text);
                 for (const p of phones) {
                   const info = peerInfo.get(d.peerId) ?? { firstName: "", lastName: "" };
@@ -279,9 +453,6 @@ export const buildReport = action({
 
     // 3. Lead Ads contacts (phones_detail / phones_count)
     if (needsDialogs) {
-      const accounts = await ctx.runQuery(internal.clientReport._readAccounts, {
-        accountIds: args.accountIds,
-      });
       for (const acc of accounts) {
         if (!acc.accessToken) continue;
         try {
@@ -317,8 +488,6 @@ export const buildReport = action({
         internal.clientReport._readCommunityProfiles,
         { userId: args.userId, vkGroupIds: args.communityIds }
       );
-      const fromTs = Date.parse(args.dateFrom + "T00:00:00Z") / 1000;
-      const toTs = Date.parse(args.dateTo + "T23:59:59Z") / 1000;
       for (const profile of profiles) {
         if (!profile.senlerApiKey) continue;
         try {
@@ -364,7 +533,7 @@ export const buildReport = action({
       }
     }
 
-    // Derived metrics per row + final rows array
+    // 6. Derived metrics per row + final rows array
     const rows: ReportRow[] = [];
     for (const r of rowMap.values()) {
       if (args.fields.includes("spent_with_vat") && r.spent !== undefined) {
@@ -406,12 +575,12 @@ export const buildReport = action({
 
 function buildKey(
   granularity: Granularity,
-  m: { date: string; campaignId?: string; adId: string }
+  m: { date: string; campaignId?: string; groupId?: string; adId: string }
 ): string {
   switch (granularity) {
     case "day": return m.date;
     case "day_campaign": return `${m.date}|c${m.campaignId ?? ""}`;
-    case "day_group": return `${m.date}|c${m.campaignId ?? ""}|g`;
+    case "day_group": return `${m.date}|g${m.groupId ?? ""}`;
     case "day_banner": return `${m.date}|a${m.adId}`;
   }
 }
@@ -423,13 +592,19 @@ function buildKeyFromDate(granularity: Granularity, date: string): string {
 
 function initRow(
   granularity: Granularity,
-  m: { date: string; campaignId?: string; adId: string }
+  m: { date: string; campaignId?: string; groupId?: string; adId: string }
 ): ReportRow {
   const row: ReportRow = { date: m.date };
-  if (granularity === "day_campaign" || granularity === "day_group" || granularity === "day_banner") {
+  if (granularity === "day_campaign") {
     row.campaignId = m.campaignId;
   }
+  if (granularity === "day_group") {
+    row.campaignId = m.campaignId;
+    row.groupId = m.groupId;
+  }
   if (granularity === "day_banner") {
+    row.campaignId = m.campaignId;
+    row.groupId = m.groupId;
     row.adId = m.adId;
   }
   return row;

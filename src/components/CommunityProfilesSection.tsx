@@ -77,12 +77,6 @@ export function CommunityProfilesSection() {
         <CommunityProfileModal
           userId={userId}
           existingProfileId={editingId}
-          initialToken={editingId
-            ? profiles?.find((p) => p._id === editingId)?.vkCommunityToken
-            : undefined}
-          initialSenlerKey={editingId
-            ? profiles?.find((p) => p._id === editingId)?.senlerApiKey
-            : undefined}
           onClose={() => setModalOpen(false)}
           onSaved={() => setModalOpen(false)}
         />

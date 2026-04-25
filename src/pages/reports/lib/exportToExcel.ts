@@ -57,11 +57,20 @@ export function exportReportToExcel(p: ExportParams): void {
       ph.source === "vk_dialog" ? "VK сообщения" : "Lead Ads",
       ph.dialogUrl ?? "",
     ]);
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.aoa_to_sheet([phoneHeaders, ...phoneRows]),
-      "Номера"
-    );
+    const phoneSheet = XLSX.utils.aoa_to_sheet([phoneHeaders, ...phoneRows]);
+
+    // Make dialog URLs clickable hyperlinks in Excel (column G, index 6)
+    for (let row = 0; row < p.phonesDetail.length; row++) {
+      const url = p.phonesDetail[row].dialogUrl;
+      if (!url) continue;
+      const cellRef = XLSX.utils.encode_cell({ r: row + 1, c: 6 });
+      const cell = phoneSheet[cellRef];
+      if (cell) {
+        cell.l = { Target: url, Tooltip: "Открыть диалог" };
+      }
+    }
+
+    XLSX.utils.book_append_sheet(wb, phoneSheet, "Номера");
   }
 
   const fn = `report_${p.dateFrom}_${p.dateTo}_${p.accountNames[0] || "report"}.xlsx`;

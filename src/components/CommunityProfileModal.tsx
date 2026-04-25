@@ -18,22 +18,18 @@ interface ValidatedGroup {
 export function CommunityProfileModal({
   userId,
   existingProfileId,
-  initialToken,
-  initialSenlerKey,
   onClose,
   onSaved,
 }: {
   userId: Id<"users">;
   existingProfileId?: Id<"communityProfiles">;
-  initialToken?: string;
-  initialSenlerKey?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const [step, setStep] = useState<Step>("vk_token");
-  const [vkToken, setVkToken] = useState(initialToken ?? "");
-  const [senlerKey, setSenlerKey] = useState(initialSenlerKey ?? "");
-  const [skipSenler, setSkipSenler] = useState(!initialSenlerKey);
+  const [vkToken, setVkToken] = useState("");
+  const [senlerKey, setSenlerKey] = useState("");
+  const [skipSenler, setSkipSenler] = useState(true);
   const [validated, setValidated] = useState<ValidatedGroup | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,10 +79,10 @@ export function CommunityProfileModal({
         await updateProfile({
           id: existingProfileId,
           userId,
-          vkCommunityToken: vkToken,
+          vkCommunityToken: vkToken || undefined,
           vkGroupName: validated.vkGroupName,
           vkGroupAvatarUrl: validated.vkGroupAvatarUrl,
-          senlerApiKey: skipSenler ? undefined : senlerKey,
+          senlerApiKey: skipSenler ? undefined : (senlerKey || undefined),
         });
       } else {
         await createProfile({

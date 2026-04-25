@@ -8,7 +8,8 @@ export interface CommunityProfile {
   vkGroupId: number;
   vkGroupName: string;
   vkGroupAvatarUrl?: string;
-  senlerApiKey?: string;
+  hasVkToken: boolean;
+  hasSenlerKey: boolean;
   lastValidatedAt: number;
   lastError?: string;
 }
@@ -62,7 +63,7 @@ export function CommunityProfileCard({
           )}
         </div>
         <div className="text-xs text-muted-foreground mt-0.5">
-          Senler: {profile.senlerApiKey ? "подключён" : "не подключён"}
+          Senler: {profile.hasSenlerKey ? "подключён" : "не подключён"}
         </div>
         {hasError && (
           <div className="text-xs text-destructive mt-1">{profile.lastError}</div>
