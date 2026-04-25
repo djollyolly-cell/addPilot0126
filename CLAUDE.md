@@ -62,6 +62,7 @@ Detailed rules are in `.claude/rules/`:
 ## Feature Implementation Checks
 
 - **Facts only, no assumptions.** Every claim about the codebase must be backed by reading the actual file or running the actual API call. If you haven't read the code — you don't know how it works. If you haven't called the API — you don't know what it returns. Never say "скорее всего", "наверное", "должно быть" about code behavior — open the file and verify.
+- **Numbers and data — query first, answer second.** When discussing specific metrics, counts, or statuses (подписки, лиды, ошибки, etc.) — FIRST query the database or API, THEN answer. Never state numbers from memory, context, or assumption. The sequence is: (1) identify what data is needed, (2) write and run a query/script to get real data, (3) present verified results. All access is provided — there is no excuse to guess instead of checking.
 - **Data chain first:** Before implementing a feature, trace DB schema → backend query → frontend display. If a field is missing in `schema.ts`, the feature **cannot work** — don't build UI for it.
 - **Happy path walkthrough:** After writing aggregation/grouping code, mentally walk 1 example through the full pipeline. Verify grouping keys produce unique values for distinct entities.
 - **Fresh data vs cache:** For client-facing reports, call VK API directly (`fetchStatsBatched` + `statistics/banners/day.json`) instead of reading from `metricsDaily` cache. Cache is for rule engine 5-min monitoring, not for accurate reports.
