@@ -1706,6 +1706,7 @@ async function postCampaignWithFallback(
  * Update ad_plan status directly (for video rotation module).
  * targetCampaignIds in rules may contain ad_plan IDs, not ad_group IDs.
  * This function calls ad_plans/{id}.json endpoint directly.
+ * When activating: also cascades to child ad_groups (VK doesn't cascade automatically).
  */
 export const updateAdPlanStatus = internalAction({
   args: {
@@ -1714,6 +1715,7 @@ export const updateAdPlanStatus = internalAction({
     status: v.string(),
   },
   handler: async (_, args) => {
+    // 1. Update ad_plan status
     const url = `${MT_API_BASE}/api/v2/ad_plans/${args.adPlanId}.json`;
     const resp = await fetchWithTimeout(url, {
       method: "POST",
@@ -1728,8 +1730,35 @@ export const updateAdPlanStatus = internalAction({
       const text = await resp.text();
       throw new Error(`VK Ads API Error ${resp.status} (ad_plan ${args.adPlanId}): ${text}`);
     }
-    const text = await resp.text();
-    return text.trim() ? JSON.parse(text) : { id: args.adPlanId };
+    const planResult = await resp.text();
+
+    // 2. Cascade to child ad_groups (VK doesn't auto-cascade status changes)
+    const groupsResp = await fetchWithTimeout(
+      `${MT_API_BASE}/api/v2/ad_groups.json?_ad_plan_id=${args.adPlanId}&fields=id,status&limit=50`,
+      { headers: { Authorization: `Bearer ${args.accessToken}` } }
+    );
+    if (groupsResp.ok) {
+      const groupsData = await groupsResp.json() as { items?: Array<{ id: number; status: string }> };
+      for (const group of groupsData.items ?? []) {
+        // Only change groups that need it (blocked→active or active→blocked)
+        if (group.status !== args.status) {
+          try {
+            await fetchWithTimeout(`${MT_API_BASE}/api/v2/ad_groups/${group.id}.json`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${args.accessToken}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ status: args.status }),
+            });
+          } catch (e) {
+            console.error(`[updateAdPlanStatus] Failed to cascade status to ad_group ${group.id}:`, e);
+          }
+        }
+      }
+    }
+
+    return planResult.trim() ? JSON.parse(planResult) : { id: args.adPlanId };
   },
 });
 
