@@ -303,8 +303,11 @@ export const buildReport = action({
         for (const g of adGroups) {
           groupToAdPlanId.set(g.id, g.ad_plan_id);
           const pkgName = g.package_id !== undefined ? packageMap.get(g.package_id) : undefined;
-          groupToCategory.set(g.id, packageNameToCategory(pkgName));
+          const cat = packageNameToCategory(pkgName);
+          groupToCategory.set(g.id, cat);
+          console.log(`[clientReport] group ${g.id}: package_id=${g.package_id}, pkgName="${pkgName}", category=${cat}`);
         }
+        console.log(`[clientReport] packages loaded: ${packageMap.size}, groups: ${adGroups.length}, banners: ${banners.length}`);
 
         // Fetch stats and lead counts in parallel
         const [statsItems, leadCounts] = await Promise.all([
@@ -329,6 +332,9 @@ export const buildReport = action({
 
           for (const row of item.rows) {
             const { vkResult, formEvents } = extractResultMetrics(row);
+            if (vkResult > 0) {
+              console.log(`[clientReport] banner ${bannerId} date=${row.date}: vkResult=${vkResult}, category=${category}, raw vk=${JSON.stringify(row.base.vk)}`);
+            }
             const rowSpent = parseFloat(row.base.spent || "0") || 0;
 
             const key = buildKey(args.granularity, { date: row.date, campaignId: campaignIdStr, groupId: groupIdStr, adId: bannerId });
