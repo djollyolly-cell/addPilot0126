@@ -2868,9 +2868,9 @@ export const dispatchUzBatch = internalMutation({
   args: { accountIds: v.array(v.id("adAccounts")) },
   handler: async (ctx, args) => {
     const STAGGER_BATCH = 8;
-    const STAGGER_DELAY_MS = 2_000;
+    const STAGGER_DELAY_MS = 3_000;
     for (let i = 0; i < args.accountIds.length; i++) {
-      const delayMs = i < 32 ? 0 : (Math.floor((i - 32) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      const delayMs = i < 16 ? 0 : (Math.floor((i - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
       await ctx.scheduler.runAfter(delayMs, internal.ruleEngine.uzBudgetOneAccount, {
         accountId: args.accountIds[i],
       });

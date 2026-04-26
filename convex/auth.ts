@@ -1855,25 +1855,25 @@ export const dispatchTokenBatch = internalMutation({
   },
   handler: async (ctx, args) => {
     const STAGGER_BATCH = 8;
-    const STAGGER_DELAY_MS = 2_000;
+    const STAGGER_DELAY_MS = 3_000;
     let idx = 0;
 
     for (const accountId of args.accounts) {
-      const delayMs = idx < 32 ? 0 : (Math.floor((idx - 32) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      const delayMs = idx < 16 ? 0 : (Math.floor((idx - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
       await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOne, {
         targetType: "account", targetId: accountId,
       });
       idx++;
     }
     for (const userId of args.users) {
-      const delayMs = idx < 32 ? 0 : (Math.floor((idx - 32) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      const delayMs = idx < 16 ? 0 : (Math.floor((idx - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
       await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOne, {
         targetType: "user_vkads", targetId: userId,
       });
       idx++;
     }
     for (const userId of args.vkUsers) {
-      const delayMs = idx < 32 ? 0 : (Math.floor((idx - 32) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      const delayMs = idx < 16 ? 0 : (Math.floor((idx - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
       await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOne, {
         targetType: "user_vk", targetId: userId,
       });

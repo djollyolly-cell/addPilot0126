@@ -755,9 +755,9 @@ const SYNC_ADMIN_CHAT_ID = "325307765";
 export const dispatchSyncBatch = internalMutation({
   args: { accountIds: v.array(v.id("adAccounts")) },
   handler: async (ctx, args) => {
-    const IMMEDIATE_BATCH = 32; // matches APPLICATION_MAX_CONCURRENT_V8_ACTIONS
+    const IMMEDIATE_BATCH = 16; // half of V8 slots — leave room for other actions (rules, tokens, crons)
     const STAGGER_BATCH = 8;
-    const STAGGER_DELAY_MS = 2_000; // 2s between stagger batches
+    const STAGGER_DELAY_MS = 3_000; // 3s between stagger batches
 
     for (let i = 0; i < args.accountIds.length; i++) {
       let delayMs = 0;
