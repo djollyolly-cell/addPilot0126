@@ -1854,20 +1854,30 @@ export const dispatchTokenBatch = internalMutation({
     vkUsers: v.array(v.id("users")),
   },
   handler: async (ctx, args) => {
+    const STAGGER_BATCH = 8;
+    const STAGGER_DELAY_MS = 2_000;
+    let idx = 0;
+
     for (const accountId of args.accounts) {
-      await ctx.scheduler.runAfter(0, internal.auth.tokenRefreshOne, {
+      const delayMs = idx < 32 ? 0 : (Math.floor((idx - 32) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOne, {
         targetType: "account", targetId: accountId,
       });
+      idx++;
     }
     for (const userId of args.users) {
-      await ctx.scheduler.runAfter(0, internal.auth.tokenRefreshOne, {
+      const delayMs = idx < 32 ? 0 : (Math.floor((idx - 32) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOne, {
         targetType: "user_vkads", targetId: userId,
       });
+      idx++;
     }
     for (const userId of args.vkUsers) {
-      await ctx.scheduler.runAfter(0, internal.auth.tokenRefreshOne, {
+      const delayMs = idx < 32 ? 0 : (Math.floor((idx - 32) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOne, {
         targetType: "user_vk", targetId: userId,
       });
+      idx++;
     }
   },
 });

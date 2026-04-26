@@ -749,12 +749,26 @@ export const markCronAlertSent = internalMutation({
 const ALERT_COOLDOWN_MS = 30 * 60_000; // 30 min between same alert
 const SYNC_ADMIN_CHAT_ID = "325307765";
 
-/** Schedule syncOneAccount workers for each account. Must be mutation for ctx.scheduler. */
+/** Schedule syncOneAccount workers for each account. Must be mutation for ctx.scheduler.
+ *  Staggers launches: first 32 immediately, then +2s per batch of 8 to avoid VK API overload.
+ */
 export const dispatchSyncBatch = internalMutation({
   args: { accountIds: v.array(v.id("adAccounts")) },
   handler: async (ctx, args) => {
-    for (const accountId of args.accountIds) {
-      await ctx.scheduler.runAfter(0, internal.syncMetrics.syncOneAccount, { accountId });
+    const IMMEDIATE_BATCH = 32; // matches APPLICATION_MAX_CONCURRENT_V8_ACTIONS
+    const STAGGER_BATCH = 8;
+    const STAGGER_DELAY_MS = 2_000; // 2s between stagger batches
+
+    for (let i = 0; i < args.accountIds.length; i++) {
+      let delayMs = 0;
+      if (i >= IMMEDIATE_BATCH) {
+        // Stagger remaining: every 8 accounts get +2s delay
+        const staggerIndex = Math.floor((i - IMMEDIATE_BATCH) / STAGGER_BATCH);
+        delayMs = (staggerIndex + 1) * STAGGER_DELAY_MS;
+      }
+      await ctx.scheduler.runAfter(delayMs, internal.syncMetrics.syncOneAccount, {
+        accountId: args.accountIds[i],
+      });
     }
   },
 });
@@ -1215,7 +1229,7 @@ export const syncDispatch = internalAction({
       const allBasic = await ctx.runQuery(internal.syncMetrics.listAllActiveAccountsBasic);
       const now = Date.now();
       const staleCount = allBasic.filter(
-        (a) => !a.lastSyncAt || now - a.lastSyncAt > 15 * 60_000
+        (a) => !a.lastSyncAt || now - a.lastSyncAt > 20 * 60_000
       ).length;
       const totalCount = allBasic.length;
 
@@ -1228,7 +1242,7 @@ export const syncDispatch = internalAction({
           try {
             await ctx.runAction(internal.telegram.sendMessage, {
               chatId: SYNC_ADMIN_CHAT_ID,
-              text: `⚠️ <b>Sync</b>: ${staleCount}/${totalCount} аккаунтов не синхронизированы >15 мин`,
+              text: `⚠️ <b>Sync</b>: ${staleCount}/${totalCount} аккаунтов не синхронизированы >20 мин`,
             });
             await ctx.runMutation(internal.syncMetrics.markCronAlertSent, {
               cronName: "syncDispatch",

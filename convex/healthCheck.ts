@@ -121,7 +121,7 @@ export const checkCronSyncResults = internalQuery({
     const allAccounts = await ctx.db.query("adAccounts").collect();
     const activeAccounts = allAccounts.filter((a) => a.status === "active" || a.status === "error");
     const now = Date.now();
-    const syncedCount = activeAccounts.filter((a) => a.lastSyncAt && now - a.lastSyncAt < 15 * 60_000).length;
+    const syncedCount = activeAccounts.filter((a) => a.lastSyncAt && now - a.lastSyncAt < 20 * 60_000).length;
 
     if (activeAccounts.length > 0 && syncedCount < activeAccounts.length) {
       issues.push(`sync: ${syncedCount}/${activeAccounts.length} синхронизированы`);
