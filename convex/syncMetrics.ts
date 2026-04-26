@@ -680,7 +680,8 @@ export const listSyncableAccounts = internalQuery({
           : SKIP_IF_SYNCED_WITHIN_MS;
         return (now - a.lastSyncAt) > interval;
       })
-      .sort((a, b) => (a.lastSyncAt || 0) - (b.lastSyncAt || 0));
+      .sort((a, b) => (a.lastSyncAt || 0) - (b.lastSyncAt || 0))
+      .slice(0, 100); // Limit per cycle — all 264 accounts sync within 3 cycles (15 min) via staleness sort
   },
 });
 
