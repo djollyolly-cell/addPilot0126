@@ -699,6 +699,22 @@ export const getCronHeartbeat = internalQuery({
   },
 });
 
+/** Schedule escalation alert via adminAlerts.notify (called from action via runMutation). */
+export const scheduleEscalationAlert = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    text: v.string(),
+    dedupKey: v.string(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+      category: "criticalErrors",
+      dedupKey: args.dedupKey,
+      text: args.text,
+    });
+  },
+});
+
 export const upsertCronHeartbeat = internalMutation({
   args: {
     name: v.string(),
@@ -805,18 +821,31 @@ export const syncOneAccount = internalAction({
       return;
     }
 
-    // Escalation: if account stuck in error for >2h, notify admin
+    // Escalation: if account stuck in error for >2h, notify admin (max once per 2h via time-slot dedup)
     if (
       account.status === "error" &&
       account.lastSyncAt &&
       Date.now() - account.lastSyncAt > ERROR_ESCALATION_MS
     ) {
+      const timeSlot = Math.floor(Date.now() / ERROR_ESCALATION_MS); // changes every 2h
       try {
         await ctx.runMutation(internal.systemLogger.log, {
           accountId: account._id,
-          level: "error",
+          level: "warn",
           source: "escalation",
           message: `Кабинет "${account.name}" в ошибке более 2ч. Ошибка: ${(account.lastError || "неизвестно").slice(0, 150)}`,
+        });
+        // Direct admin alert with 2h time-slot dedup (systemLogger warn doesn't send Telegram)
+        await ctx.runMutation(internal.syncMetrics.scheduleEscalationAlert, {
+          accountId: account._id,
+          text: [
+            `⏰ <b>Эскалация: кабинет в ошибке >2ч</b>`,
+            ``,
+            `<b>Кабинет:</b> ${account.name}`,
+            `<b>Последний синк:</b> ${new Date(account.lastSyncAt).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })}`,
+            `<b>Ошибка:</b> ${(account.lastError || "неизвестно").slice(0, 200)}`,
+          ].join("\n"),
+          dedupKey: `escalation:${account._id}:${timeSlot}`,
         });
       } catch { /* non-critical */ }
     }
@@ -1202,16 +1231,14 @@ export const syncOneAccount = internalAction({
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error(`[syncOne] Error syncing account ${account._id}: ${msg}`);
 
-      try { await ctx.runMutation(internal.systemLogger.log, {
-        accountId: account._id, level: "error", source: "syncMetrics",
-        message: `Sync failed: ${msg.slice(0, 180)}`,
-      }); } catch { /* non-critical */ }
-
       if (msg.includes("TOKEN_EXPIRED")) {
+        // Try recovery first — only alert if recovery fails
+        let recovered = false;
         try {
           await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
             accountId: account._id,
           });
+          recovered = true;
         } catch (handleErr) {
           await ctx.runMutation(api.adAccounts.updateStatus, {
             accountId: account._id, status: "error",
@@ -1222,11 +1249,24 @@ export const syncOneAccount = internalAction({
         await ctx.runMutation(internal.adAccounts.clearSyncErrors, {
           accountId: account._id,
         });
+        // Recovered → warn (no Telegram), failed → error (sends Telegram)
+        try { await ctx.runMutation(internal.systemLogger.log, {
+          accountId: account._id,
+          level: recovered ? "warn" : "error",
+          source: "syncMetrics",
+          message: recovered
+            ? `Token expired, auto-recovered: ${msg.slice(0, 150)}`
+            : `Sync failed (recovery failed): ${msg.slice(0, 150)}`,
+        }); } catch { /* non-critical */ }
       } else if (isPermanentError(msg)) {
         await ctx.runMutation(api.adAccounts.updateStatus, {
           accountId: account._id, status: "error",
           lastError: `Sync failed: ${msg}`,
         });
+        try { await ctx.runMutation(internal.systemLogger.log, {
+          accountId: account._id, level: "error", source: "syncMetrics",
+          message: `Sync failed (permanent): ${msg.slice(0, 180)}`,
+        }); } catch { /* non-critical */ }
       } else {
         const consecutive = (account.consecutiveSyncErrors ?? 0) + 1;
         await ctx.runMutation(internal.adAccounts.incrementSyncErrors, {
@@ -1238,6 +1278,10 @@ export const syncOneAccount = internalAction({
             accountId: account._id, status: "error",
             lastError: `Sync failed (${consecutive}x): ${msg}`,
           });
+          try { await ctx.runMutation(internal.systemLogger.log, {
+            accountId: account._id, level: "error", source: "syncMetrics",
+            message: `Sync failed (${consecutive}x transient): ${msg.slice(0, 180)}`,
+          }); } catch { /* non-critical */ }
         } else {
           console.log(`[syncOne] "${account.name}" transient error ${consecutive}/${TRANSIENT_ERROR_THRESHOLD} -- will retry next cycle`);
         }
