@@ -247,18 +247,13 @@ export const activate = internalAction({
       }
     }
 
-    // Start the first ad_plan
+    // Start the first ad_plan (set budget on campaigns inside, then activate)
     const firstCampaignId = Number(campaignOrder[0]);
-    // Try to set budget (non-fatal: campaigns with budget optimization reject this)
-    try {
-      await ctx.runAction(internal.vkApi.setAdPlanBudget, {
-        accessToken,
-        adPlanId: firstCampaignId,
-        newLimitRubles: dailyBudget,
-      });
-    } catch (err) {
-      console.warn(`[videoRotation.activate] Budget set failed for ${firstCampaignId}, continuing:`, err instanceof Error ? err.message : err);
-    }
+    await ctx.runAction(internal.vkApi.setAdPlanBudget, {
+      accessToken,
+      adPlanId: firstCampaignId,
+      newLimitRubles: dailyBudget,
+    });
     await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
       accessToken,
       adPlanId: firstCampaignId,
@@ -640,17 +635,12 @@ async function switchToNext(
     }
   }
 
-  // 6. Set budget (non-fatal) then start next ad_plan
-  try {
-    await ctx.runAction(internal.vkApi.setAdPlanBudget, {
-      accessToken,
-      adPlanId: Number(nextCampaignId),
-      newLimitRubles: remaining > 0 ? remaining : dailyBudget,
-    });
-  } catch (budgetErr) {
-    // Budget optimization campaigns reject this — continue without budget change
-    console.warn(`[videoRotation.switchToNext] Budget set failed for ${nextCampaignId}, continuing:`, budgetErr instanceof Error ? budgetErr.message : budgetErr);
-  }
+  // 6. Set budget on campaigns inside ad_plan, then start ad_plan
+  await ctx.runAction(internal.vkApi.setAdPlanBudget, {
+    accessToken,
+    adPlanId: Number(nextCampaignId),
+    newLimitRubles: remaining > 0 ? remaining : dailyBudget,
+  });
   try {
     await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
       accessToken,
@@ -837,20 +827,15 @@ export const debugActivate = action({
       const matched = adPlans.filter(c => targetSet.has(String(c.id)));
       console.log("[debugActivate] matched target ad_plans:", matched.map(c => ({ id: c.id, name: c.name, status: c.status })));
 
-      // Try to set budget (non-fatal: campaigns with budget optimization reject this)
       const firstCampaignId = Number(campaignOrder[0]);
-      console.log("[debugActivate] starting ad_plan:", firstCampaignId);
+      console.log("[debugActivate] setting budget + starting ad_plan:", firstCampaignId);
 
-      try {
-        await ctx.runAction(internal.vkApi.setAdPlanBudget, {
-          accessToken,
-          adPlanId: firstCampaignId,
-          newLimitRubles: dailyBudget,
-        });
-        console.log("[debugActivate] budget set OK");
-      } catch (budgetErr: any) {
-        console.warn("[debugActivate] budget set failed (non-fatal):", budgetErr.message);
-      }
+      await ctx.runAction(internal.vkApi.setAdPlanBudget, {
+        accessToken,
+        adPlanId: firstCampaignId,
+        newLimitRubles: dailyBudget,
+      });
+      console.log("[debugActivate] budget set OK");
       await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
         accessToken,
         adPlanId: firstCampaignId,

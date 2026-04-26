@@ -1772,22 +1772,45 @@ export const setAdPlanBudget = internalAction({
     newLimitRubles: v.number(),
   },
   handler: async (_, args) => {
-    const url = `${MT_API_BASE}/api/v2/ad_plans/${args.adPlanId}.json`;
-    const resp = await fetchWithTimeout(url, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${args.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ budget_limit_day: String(Math.round(args.newLimitRubles)) }),
+    // Budget is set on campaigns (groups) inside the ad_plan, not on the ad_plan itself.
+    // First, get all campaigns under this ad_plan.
+    const listUrl = `${MT_API_BASE}/api/v2/campaigns.json?_ad_plan_id=${args.adPlanId}&fields=id,status,budget_limit_day`;
+    const listResp = await fetchWithTimeout(listUrl, {
+      headers: { Authorization: `Bearer ${args.accessToken}` },
     });
-    if (resp.status === 401) throw new Error("TOKEN_EXPIRED");
-    if (!resp.ok) {
-      const text = await resp.text();
-      throw new Error(`VK Ads API Error ${resp.status} (ad_plan budget ${args.adPlanId}): ${text}`);
+    if (listResp.status === 401) throw new Error("TOKEN_EXPIRED");
+    if (!listResp.ok) {
+      const text = await listResp.text();
+      throw new Error(`VK Ads API Error ${listResp.status} (list campaigns for ad_plan ${args.adPlanId}): ${text}`);
     }
-    const text = await resp.text();
-    return text.trim() ? JSON.parse(text) : { id: args.adPlanId };
+    const listData = await listResp.json();
+    const campaigns: { id: number; status: string; budget_limit_day: number | null }[] = listData.items ?? [];
+    if (campaigns.length === 0) {
+      console.warn(`[setAdPlanBudget] No campaigns found under ad_plan ${args.adPlanId}`);
+      return { id: args.adPlanId, campaignsUpdated: 0 };
+    }
+
+    // Set budget_limit_day on each campaign
+    let updated = 0;
+    for (const campaign of campaigns) {
+      const url = `${MT_API_BASE}/api/v2/campaigns/${campaign.id}.json`;
+      const resp = await fetchWithTimeout(url, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${args.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ budget_limit_day: String(Math.round(args.newLimitRubles)) }),
+      });
+      if (resp.status === 401) throw new Error("TOKEN_EXPIRED");
+      if (!resp.ok) {
+        const text = await resp.text();
+        console.warn(`[setAdPlanBudget] Failed to set budget on campaign ${campaign.id}: ${text}`);
+        continue;
+      }
+      updated++;
+    }
+    return { id: args.adPlanId, campaignsUpdated: updated };
   },
 });
 
