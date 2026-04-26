@@ -12,6 +12,7 @@ import {
   Settings,
   LogOut,
   User,
+  Users,
   Wallet,
   Crown,
   Shield,
@@ -20,6 +21,7 @@ import {
   Wand2,
   MessageCircle,
 } from 'lucide-react';
+import { OverageBanner } from '@/components/OverageBanner';
 import { cn } from '../lib/utils';
 
 const navigation = [
@@ -51,6 +53,7 @@ export function Layout() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const isAdmin = user && (user.isAdmin === true || ADMIN_EMAILS.includes(user.email));
+  const isInOrg = !!user?.organizationId;
 
   // Unread support messages count
   const supportThreads = useQuery(
@@ -68,6 +71,7 @@ export function Layout() {
 
   const navItems = [
     ...navigation,
+    ...(isInOrg ? [{ name: 'Команда', href: '/team', icon: Users }] : []),
     ...(isAdmin ? [{ name: 'Админ', href: '/admin', icon: Shield }] : []),
   ];
 
@@ -165,6 +169,7 @@ export function Layout() {
 
       {/* Main content — no left padding on mobile, pl-64 on md+ */}
       <main className="md:pl-64 pb-20 md:pb-0">
+        <OverageBanner />
         <div className="p-4 md:p-8">
           <Outlet />
         </div>

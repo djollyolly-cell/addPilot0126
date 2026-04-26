@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Check, Crown, Zap, Sparkles, CheckCircle, XCircle } from 'lucide-react';
 import { useAuth } from '@/lib/useAuth';
 import { PaymentModal } from '@/components/PaymentModal';
+import { AgencyTierCard } from '@/components/AgencyTierCard';
+import { useNavigate } from 'react-router-dom';
 
 const TIERS = {
   freemium: {
@@ -45,8 +47,20 @@ const TIERS = {
 
 type TierKey = keyof typeof TIERS;
 
+const AGENCY_TIERS = [
+  { code: "agency_s", name: "Agency S", price: 14900, includedLoadUnits: 30,
+    features: ["Конструктор правил", "Команда менеджеров", "Приоритетная поддержка"] },
+  { code: "agency_m", name: "Agency M", price: 24900, includedLoadUnits: 60,
+    features: ["+ Расширенная аналитика", "+ Месячный отчёт"] },
+  { code: "agency_l", name: "Agency L", price: 39900, includedLoadUnits: 120,
+    features: ["+ Кастомные типы правил", "+ Выделенный IP", "+ SLA"], recommended: true },
+  { code: "agency_xl", name: "Agency XL", price: 59900, includedLoadUnits: 200,
+    features: ["+ Персональный менеджер", "+ Кастомная разработка"] },
+];
+
 export function PricingPage() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const [selectedTier, setSelectedTier] = useState<TierKey | null>(null);
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -217,6 +231,27 @@ export function PricingPage() {
             </Card>
           );
         })}
+      </div>
+
+      {/* Agency tiers */}
+      <div className="mt-16 max-w-5xl mx-auto" data-testid="agency-tiers-section">
+        <div className="text-center mb-8">
+          <h2 className="text-3xl font-bold mb-2">Для агентств</h2>
+          <p className="text-muted-foreground text-lg">Управление 10+ кабинетов с командой менеджеров</p>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {AGENCY_TIERS.map((t) => (
+            <AgencyTierCard
+              key={t.code}
+              name={t.name}
+              price={t.price}
+              includedLoadUnits={t.includedLoadUnits}
+              features={t.features}
+              recommended={t.recommended}
+              onSelect={() => navigate(`/agency/onboarding?tier=${t.code}`)}
+            />
+          ))}
+        </div>
       </div>
 
       <div className="mt-8 max-w-2xl mx-auto p-4 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 text-center">

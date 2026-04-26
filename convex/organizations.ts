@@ -346,6 +346,50 @@ export const setExcludeFromOrgTransfer = mutation({
   },
 });
 
+/** List pending invites awaiting owner confirmation (for TeamPage) */
+export const listPendingInvites = query({
+  args: { orgId: v.id("organizations"), requesterId: v.id("users") },
+  handler: async (ctx, args) => {
+    const requester = await ctx.db.get(args.requesterId);
+    if (requester?.organizationId !== args.orgId) throw new Error("Доступ запрещён");
+
+    const invites = await ctx.db
+      .query("orgInvites")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+
+    // Show accepted (awaiting owner confirm) and pending (awaiting manager)
+    const relevant = invites.filter((i) => i.status === "accepted" || i.status === "pending");
+
+    const out = [];
+    for (const inv of relevant) {
+      const acceptedUser = inv.acceptedByUserId ? await ctx.db.get(inv.acceptedByUserId) : null;
+      const transferredAccounts = [];
+      for (const accId of inv.transferredAccountIds ?? []) {
+        const acc = await ctx.db.get(accId);
+        if (acc) transferredAccounts.push({ _id: acc._id, name: acc.name });
+      }
+      out.push({
+        _id: inv._id,
+        email: inv.email,
+        status: inv.status,
+        permissions: inv.permissions,
+        acceptedByUserName: acceptedUser?.name ?? acceptedUser?.email,
+        transferredAccounts,
+        createdAt: inv.createdAt,
+        expiresAt: inv.expiresAt,
+      });
+    }
+    return out;
+  },
+});
+
+/** Get org by ID (for cron/actions that need org data) */
+export const getInternal = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => ctx.db.get(args.orgId),
+});
+
 /** Get active membership for a user (used by loginWithEmail to enrich session) */
 export const getMembershipForUser = internalQuery({
   args: { userId: v.id("users") },

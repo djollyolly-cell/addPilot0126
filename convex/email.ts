@@ -338,7 +338,83 @@ export const sendExpiryNotificationEmail = internalAction({
   },
 });
 
-/** Stub: sends invite email to new manager. Full implementation in Plan 6. */
+// ═══════════════════════════════════════════════════════════
+// Agency Email Templates (Plan 6)
+// ═══════════════════════════════════════════════════════════
+
+function getInviteEmailHtml(params: { orgName: string; inviterName: string; inviteUrl: string }): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif; background:#f5f5f5;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f5f5f5; padding:20px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background:#fff; border-radius:8px; overflow:hidden; box-shadow:0 2px 4px rgba(0,0,0,0.1);">
+        <tr><td style="background:#3b82f6; padding:24px; text-align:center;">
+          <h1 style="margin:0; color:#fff; font-size:24px;">AddPilot</h1>
+        </td></tr>
+        <tr><td style="padding:32px;">
+          <h2 style="margin:0 0 16px; color:#1f2937;">Приглашение в ${params.orgName}</h2>
+          <p style="color:#4b5563;">${params.inviterName} пригласил вас в команду AdPilot как менеджера.</p>
+          <p style="margin:24px 0;">
+            <a href="${params.inviteUrl}" style="display:inline-block; padding:12px 24px; background:#3b82f6; color:#fff; text-decoration:none; border-radius:6px; font-weight:500;">Принять приглашение</a>
+          </p>
+          <p style="color:#9ca3af; font-size:12px;">Срок действия ссылки — 7 дней.</p>
+        </td></tr>
+        <tr><td style="background:#f9fafb; padding:16px; text-align:center; border-top:1px solid #e5e7eb;">
+          <p style="margin:0; color:#9ca3af; font-size:12px;">Автоматическое уведомление от AddPilot.</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>`.trim();
+}
+
+function getExpiredPhaseEmailHtml(params: { orgName: string; phase: string; daysToFreeze: number }): string {
+  const titles: Record<string, string> = {
+    warnings: "Подписка истекла",
+    read_only: "Включён режим только для чтения",
+    deep_read_only: "Правила приостановлены",
+    frozen: "Кабинеты заморожены",
+  };
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif; padding:20px; max-width:600px; margin:0 auto;">
+  <h2 style="color:#dc2626;">${titles[params.phase] ?? "Уведомление"} — ${params.orgName}</h2>
+  <p>Текущий статус: <strong>${params.phase}</strong>.</p>
+  <p>До полной заморозки: <strong>${params.daysToFreeze}</strong> дней.</p>
+  <p><a href="https://aipilot.by/pricing" style="display:inline-block; padding:12px 24px; background:#3b82f6; color:#fff; text-decoration:none; border-radius:6px;">Восстановить подписку</a></p>
+</body>
+</html>`.trim();
+}
+
+function getMonthlyOrgReportEmailHtml(params: {
+  orgName: string; tier: string; month: string;
+  avgUnits: number; peakUnits: number; daysOver: number; maxLoadUnits: number;
+}): string {
+  return `
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif; padding:20px; max-width:600px; margin:0 auto;">
+  <h2>Отчёт за ${params.month}</h2>
+  <p>${params.orgName} — пакет ${params.tier}</p>
+  <ul>
+    <li>Средняя нагрузка: ${params.avgUnits} ед.</li>
+    <li>Пиковая: ${params.peakUnits} ед.</li>
+    <li>Дней с превышением: ${params.daysOver} из 30</li>
+    <li>Лимит пакета: ${params.maxLoadUnits} ед.</li>
+  </ul>
+  ${params.peakUnits > params.maxLoadUnits ? '<p style="color:#dc2626;"><strong>Рекомендуем перейти на пакет выше.</strong></p>' : ''}
+</body>
+</html>`.trim();
+}
+
+/** Send invite email to new manager */
 export const sendInviteEmail = internalAction({
   args: {
     to: v.string(),
@@ -347,8 +423,80 @@ export const sendInviteEmail = internalAction({
     inviteToken: v.string(),
   },
   handler: async (_ctx, args) => {
-    // Plan 6: real SMTP email with invite link
-    console.log(`[email] TODO: send invite to ${args.to} for org "${args.orgName}" by ${args.inviterName}`);
+    const transporter = createTransporter();
+    const fromEmail = process.env.YANDEX_EMAIL;
+    if (!transporter || !fromEmail) {
+      console.log("[email] SMTP not configured, skipping invite email");
+      return;
+    }
+    const inviteUrl = `${process.env.SITE_URL ?? "https://aipilot.by"}/invite/${args.inviteToken}`;
+    try {
+      await transporter.sendMail({
+        from: `AddPilot <${fromEmail}>`,
+        to: args.to,
+        subject: `Приглашение в ${args.orgName} — AddPilot`,
+        html: getInviteEmailHtml({ orgName: args.orgName, inviterName: args.inviterName, inviteUrl }),
+      });
+      console.log(`[email] Invite sent to ${args.to}`);
+    } catch (err) {
+      console.error("[email] Error sending invite:", err);
+    }
+  },
+});
+
+/** Send expired grace phase notification email */
+export const sendExpiredPhaseEmail = internalAction({
+  args: {
+    to: v.string(),
+    orgName: v.string(),
+    phase: v.string(),
+    daysToFreeze: v.number(),
+  },
+  handler: async (_ctx, args) => {
+    const transporter = createTransporter();
+    const fromEmail = process.env.YANDEX_EMAIL;
+    if (!transporter || !fromEmail) return;
+    try {
+      await transporter.sendMail({
+        from: `AddPilot <${fromEmail}>`,
+        to: args.to,
+        subject: `${args.orgName} — статус подписки`,
+        html: getExpiredPhaseEmailHtml(args),
+      });
+      console.log(`[email] Expired phase email sent to ${args.to}`);
+    } catch (err) {
+      console.error("[email] Error sending expired phase email:", err);
+    }
+  },
+});
+
+/** Send monthly org load report email */
+export const sendMonthlyOrgReportEmail = internalAction({
+  args: {
+    to: v.string(),
+    orgName: v.string(),
+    tier: v.string(),
+    month: v.string(),
+    avgUnits: v.number(),
+    peakUnits: v.number(),
+    daysOver: v.number(),
+    maxLoadUnits: v.number(),
+  },
+  handler: async (_ctx, args) => {
+    const transporter = createTransporter();
+    const fromEmail = process.env.YANDEX_EMAIL;
+    if (!transporter || !fromEmail) return;
+    try {
+      await transporter.sendMail({
+        from: `AddPilot <${fromEmail}>`,
+        to: args.to,
+        subject: `Отчёт за ${args.month} — AddPilot`,
+        html: getMonthlyOrgReportEmailHtml(args),
+      });
+      console.log(`[email] Monthly org report sent to ${args.to}`);
+    } catch (err) {
+      console.error("[email] Error sending monthly report:", err);
+    }
   },
 });
 

@@ -2560,22 +2560,57 @@ export const getSupportMapping = internalQuery({
 
 export const sendOverageStartNotification = internalAction({
   args: { orgId: v.id("organizations") },
-  handler: async (_ctx, args) => {
-    console.log(`[telegram] TODO: send overage start notification for ${args.orgId}`);
+  handler: async (ctx, args) => {
+    const org = await ctx.runQuery(internal.organizations.getInternal, { orgId: args.orgId });
+    if (!org) return;
+    const owner = await ctx.runQuery(internal.users.getById, { userId: org.ownerId });
+    if (!owner?.telegramChatId) {
+      console.log(`[telegram] Overage start: owner ${org.ownerId} has no telegramChatId`);
+      return;
+    }
+    const text = `⚠ <b>Превышение лимита пакета</b>\n\n` +
+      `Организация: ${org.name}\n` +
+      `Текущая нагрузка: ${org.currentLoadUnits} / ${org.maxLoadUnits} ед.\n\n` +
+      `У вас есть 14 дней до отключения premium-фич.\n\n` +
+      `<a href="${process.env.SITE_URL ?? "https://aipilot.by"}/pricing">Обновить тариф →</a>`;
+    await ctx.runAction(internal.telegram.sendMessage, {
+      chatId: owner.telegramChatId,
+      text,
+    });
+    // Parallel email
+    if (owner.email && !owner.email.endsWith("@vk.com")) {
+      await ctx.runAction(internal.email.sendExpiredPhaseEmail, {
+        to: owner.email, orgName: org.name, phase: "warnings", daysToFreeze: 14,
+      });
+    }
   },
 });
 
 export const sendOverageRecoveryNotification = internalAction({
   args: { orgId: v.id("organizations") },
-  handler: async (_ctx, args) => {
-    console.log(`[telegram] TODO: send overage recovery for ${args.orgId}`);
+  handler: async (ctx, args) => {
+    const org = await ctx.runQuery(internal.organizations.getInternal, { orgId: args.orgId });
+    if (!org) return;
+    const owner = await ctx.runQuery(internal.users.getById, { userId: org.ownerId });
+    if (!owner?.telegramChatId) return;
+    await ctx.runAction(internal.telegram.sendMessage, {
+      chatId: owner.telegramChatId,
+      text: `✅ <b>Нагрузка вернулась в норму</b>\n\n${org.name}: ${org.currentLoadUnits} / ${org.maxLoadUnits} ед. Все функции восстановлены.`,
+    });
   },
 });
 
 export const sendFeaturesDisabledNotification = internalAction({
   args: { orgId: v.id("organizations") },
-  handler: async (_ctx, args) => {
-    console.log(`[telegram] TODO: features-disabled notification for ${args.orgId}`);
+  handler: async (ctx, args) => {
+    const org = await ctx.runQuery(internal.organizations.getInternal, { orgId: args.orgId });
+    if (!org) return;
+    const owner = await ctx.runQuery(internal.users.getById, { userId: org.ownerId });
+    if (!owner?.telegramChatId) return;
+    await ctx.runAction(internal.telegram.sendMessage, {
+      chatId: owner.telegramChatId,
+      text: `🔒 <b>Premium-фичи отключены</b>\n\n${org.name} превышает лимит ${org.maxLoadUnits} ед. более 14 дней.\nSync продолжает работать. Конструктор и добавление кабинетов недоступны.\n\n<a href="${process.env.SITE_URL ?? "https://aipilot.by"}/pricing">Обновить тариф →</a>`,
+    });
   },
 });
 
@@ -2589,8 +2624,31 @@ export const sendExpiredWarningNotification = internalAction({
       v.literal("frozen")
     ),
   },
-  handler: async (_ctx, args) => {
-    console.log(`[telegram] TODO: expired ${args.phase} notification for ${args.orgId}`);
+  handler: async (ctx, args) => {
+    const org = await ctx.runQuery(internal.organizations.getInternal, { orgId: args.orgId });
+    if (!org) return;
+    const owner = await ctx.runQuery(internal.users.getById, { userId: org.ownerId });
+    if (!owner?.telegramChatId) return;
+
+    const messages: Record<string, string> = {
+      warnings: `⚠ Подписка истекла. До перехода в read-only осталось 14 дней.`,
+      read_only: `🔒 Включён режим «только просмотр». Sync и правила работают, ручные действия недоступны.`,
+      deep_read_only: `🛑 Правила приостановлены. До полной заморозки 15 дней.`,
+      frozen: `❄ Кабинеты заморожены. Восстановите подписку для возобновления sync.`,
+    };
+    const daysMap: Record<string, number> = { warnings: 60, read_only: 46, deep_read_only: 15, frozen: 0 };
+
+    await ctx.runAction(internal.telegram.sendMessage, {
+      chatId: owner.telegramChatId,
+      text: `<b>${org.name}</b>\n\n${messages[args.phase]}\n\n<a href="${process.env.SITE_URL ?? "https://aipilot.by"}/pricing">Восстановить →</a>`,
+    });
+
+    if (owner.email && !owner.email.endsWith("@vk.com")) {
+      await ctx.runAction(internal.email.sendExpiredPhaseEmail, {
+        to: owner.email, orgName: org.name,
+        phase: args.phase, daysToFreeze: daysMap[args.phase] ?? 0,
+      });
+    }
   },
 });
 
@@ -2601,7 +2659,15 @@ export const sendOwnerInviteAcceptedNotification = internalAction({
     transferredCount: v.number(),
     inviteId: v.id("orgInvites"),
   },
-  handler: async (_ctx, args) => {
-    console.log(`[telegram] TODO: notify owner ${args.ownerId} — ${args.managerEmail} accepted invite, ${args.transferredCount} cabinets offered`);
+  handler: async (ctx, args) => {
+    const owner = await ctx.runQuery(internal.users.getById, { userId: args.ownerId });
+    if (!owner?.telegramChatId) {
+      console.log(`[telegram] Owner ${args.ownerId} has no telegramChatId, skipping invite notification`);
+      return;
+    }
+    await ctx.runAction(internal.telegram.sendMessage, {
+      chatId: owner.telegramChatId,
+      text: `📥 <b>Менеджер принял приглашение</b>\n\nEmail: ${args.managerEmail}\nПринёс кабинетов: ${args.transferredCount}\n\n<a href="${process.env.SITE_URL ?? "https://aipilot.by"}/team">Подтвердить вступление →</a>`,
+    });
   },
 });
