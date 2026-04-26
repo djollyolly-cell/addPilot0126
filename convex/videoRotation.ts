@@ -41,6 +41,25 @@ export const listActiveRotations = internalQuery({
   },
 });
 
+/** Find active video_rotation rules that have no rotationState (orphaned) */
+export const listOrphanedRotationRules = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const allRules = await ctx.db.query("rules").collect();
+    const rotationRules = allRules.filter(
+      (r) => r.type === "video_rotation" && r.isActive
+    );
+    if (rotationRules.length === 0) return [];
+
+    const allStates = await ctx.db.query("rotationState").collect();
+    const ruleIdsWithState = new Set(allStates.map((s) => s.ruleId));
+
+    return rotationRules
+      .filter((r) => !ruleIdsWithState.has(r._id))
+      .map((r) => r._id);
+  },
+});
+
 /** Get rotationState by ruleId */
 export const getByRuleId = internalQuery({
   args: { ruleId: v.id("rules") },
@@ -349,6 +368,18 @@ export const tick = internalAction({
         await processRotation(ctx, state);
       } catch (err) {
         console.error(`[videoRotation.tick] Error processing rotation ${state.ruleId}:`, err);
+      }
+    }
+
+    // Self-healing: find active video_rotation rules without rotationState
+    // This handles cases where activate() failed on initial creation/toggle
+    const orphanedRuleIds = await ctx.runQuery(internal.videoRotation.listOrphanedRotationRules);
+    for (const ruleId of orphanedRuleIds) {
+      try {
+        console.log(`[videoRotation.tick] Self-healing: activating orphaned rule ${ruleId}`);
+        await ctx.runAction(internal.videoRotation.activate, { ruleId });
+      } catch (err) {
+        console.error(`[videoRotation.tick] Self-healing failed for rule ${ruleId}:`, err);
       }
     }
   },

@@ -732,6 +732,17 @@ export const update = mutation({
 
     await ctx.db.patch(args.ruleId, patch);
 
+    // Re-activate video_rotation if campaigns or key params changed while rule is active
+    if (rule.type === "video_rotation" && rule.isActive) {
+      const campaignsChanged = args.campaignOrder !== undefined || args.targetCampaignIds !== undefined;
+      const paramsChanged = args.slotDurationHours !== undefined || args.rotationDailyBudget !== undefined;
+      if (campaignsChanged || paramsChanged) {
+        // Deactivate old state (if any), then activate with new params
+        await ctx.scheduler.runAfter(0, internal.videoRotation.deactivate, { ruleId: args.ruleId });
+        await ctx.scheduler.runAfter(500, internal.videoRotation.activate, { ruleId: args.ruleId });
+      }
+    }
+
     // Audit log
     try { await ctx.runMutation(internal.auditLog.log, {
       userId: args.userId,
