@@ -247,17 +247,17 @@ export const activate = internalAction({
       }
     }
 
-    // Start the first ad_plan
+    // Set budget BEFORE starting (VK rejects budget changes on running ad_plans)
     const firstCampaignId = Number(campaignOrder[0]);
-    await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
-      accessToken,
-      adPlanId: firstCampaignId,
-      status: "active",
-    });
     await ctx.runAction(internal.vkApi.setAdPlanBudget, {
       accessToken,
       adPlanId: firstCampaignId,
       newLimitRubles: dailyBudget,
+    });
+    await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
+      accessToken,
+      adPlanId: firstCampaignId,
+      status: "active",
     });
 
     // Create rotationState
@@ -635,17 +635,17 @@ async function switchToNext(
     }
   }
 
-  // 6. Start next ad_plan
+  // 6. Set budget BEFORE starting (VK rejects budget changes on running ad_plans)
   try {
-    await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
-      accessToken,
-      adPlanId: Number(nextCampaignId),
-      status: "active",
-    });
     await ctx.runAction(internal.vkApi.setAdPlanBudget, {
       accessToken,
       adPlanId: Number(nextCampaignId),
       newLimitRubles: remaining > 0 ? remaining : dailyBudget,
+    });
+    await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
+      accessToken,
+      adPlanId: Number(nextCampaignId),
+      status: "active",
     });
   } catch (err) {
     // Campaign might be deleted — skip to next
@@ -827,10 +827,15 @@ export const debugActivate = action({
       const matched = adPlans.filter(c => targetSet.has(String(c.id)));
       console.log("[debugActivate] matched target ad_plans:", matched.map(c => ({ id: c.id, name: c.name, status: c.status })));
 
-      // Try to start first ad_plan
+      // Set budget BEFORE starting (VK rejects changes on running ad_plans)
       const firstCampaignId = Number(campaignOrder[0]);
-      console.log("[debugActivate] starting ad_plan:", firstCampaignId);
+      console.log("[debugActivate] setting budget then starting ad_plan:", firstCampaignId);
 
+      await ctx.runAction(internal.vkApi.setAdPlanBudget, {
+        accessToken,
+        adPlanId: firstCampaignId,
+        newLimitRubles: dailyBudget,
+      });
       await ctx.runAction(internal.vkApi.updateAdPlanStatus, {
         accessToken,
         adPlanId: firstCampaignId,
