@@ -77,6 +77,11 @@ export function CommunityProfilesSection() {
         <CommunityProfileModal
           userId={userId}
           existingProfileId={editingId}
+          existingProfile={
+            editingId
+              ? profiles?.find((p) => p._id === editingId)
+              : undefined
+          }
           onClose={() => setModalOpen(false)}
           onSaved={() => setModalOpen(false)}
         />

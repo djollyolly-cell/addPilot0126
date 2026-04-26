@@ -18,19 +18,27 @@ interface ValidatedGroup {
 export function CommunityProfileModal({
   userId,
   existingProfileId,
+  existingProfile,
   onClose,
   onSaved,
 }: {
   userId: Id<"users">;
   existingProfileId?: Id<"communityProfiles">;
+  existingProfile?: { vkGroupId: number; vkGroupName: string; vkGroupAvatarUrl?: string };
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [step, setStep] = useState<Step>("vk_token");
+  // При редактировании — сразу на шаг Senler, VK-токен уже есть
+  const isEditing = !!existingProfileId;
+  const [step, setStep] = useState<Step>(isEditing ? "senler" : "vk_token");
   const [vkToken, setVkToken] = useState("");
   const [senlerKey, setSenlerKey] = useState("");
   const [skipSenler, setSkipSenler] = useState(true);
-  const [validated, setValidated] = useState<ValidatedGroup | null>(null);
+  const [validated, setValidated] = useState<ValidatedGroup | null>(
+    isEditing && existingProfile
+      ? { vkGroupId: existingProfile.vkGroupId, vkGroupName: existingProfile.vkGroupName, vkGroupAvatarUrl: existingProfile.vkGroupAvatarUrl }
+      : null
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,9 +87,12 @@ export function CommunityProfileModal({
         await updateProfile({
           id: existingProfileId,
           userId,
-          vkCommunityToken: vkToken || undefined,
-          vkGroupName: validated.vkGroupName,
-          vkGroupAvatarUrl: validated.vkGroupAvatarUrl,
+          // VK-токен обновляем только если пользователь ввёл новый
+          ...(vkToken.trim() ? {
+            vkCommunityToken: vkToken,
+            vkGroupName: validated.vkGroupName,
+            vkGroupAvatarUrl: validated.vkGroupAvatarUrl,
+          } : {}),
           senlerApiKey: skipSenler ? undefined : (senlerKey || undefined),
         });
       } else {
@@ -184,14 +195,16 @@ export function CommunityProfileModal({
               </label>
             </div>
             <div className="flex gap-2 justify-end">
-              <Button variant="outline" onClick={() => setStep("vk_token")}>Назад</Button>
+              <Button variant="outline" onClick={() => setStep("vk_token")}>
+                {isEditing ? "Обновить VK-токен" : "Назад"}
+              </Button>
               <Button
                 onClick={handleValidateSenler}
                 disabled={loading || (!skipSenler && !senlerKey.trim())}
                 data-testid="validate-senler-btn"
               >
                 {loading && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
-                {skipSenler ? "Пропустить" : "Проверить"}
+                {skipSenler ? (isEditing ? "Без изменений" : "Пропустить") : "Проверить"}
               </Button>
             </div>
           </div>
