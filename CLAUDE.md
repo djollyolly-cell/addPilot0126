@@ -106,6 +106,7 @@ When converting sequential processing to parallel/fan-out (e.g. `ctx.scheduler.r
 - If a bug appears in a child, inspect the parent/owner layer first.
 - When changing a mechanic, align all directly coupled layers:
   - contracts, handlers, queries, cache, serializers, loading/error states
+- **String-based coupling:** When renaming or replacing a function/cron/heartbeat, `grep -rn '"oldName"' convex/ --include="*.ts"` for ALL string references. TypeScript catches broken imports but NOT broken string identifiers (heartbeat names, cron labels, log sources, event keys). Every grep hit must be updated or explicitly justified as dead code.
 - Be skeptical of one-file fixes; justify why other layers are unaffected.
 - For frontend issues, inspect the full flow:
   - route → layout → page → hooks → API → backend
