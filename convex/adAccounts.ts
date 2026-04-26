@@ -1347,6 +1347,17 @@ export const clearSyncErrors = internalMutation({
   },
 });
 
+export const incrementEmptySyncs = internalMutation({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return;
+    await ctx.db.patch(args.accountId, {
+      consecutiveEmptySyncs: (account.consecutiveEmptySyncs ?? 0) + 1,
+    });
+  },
+});
+
 // Update account status
 export const updateStatus = mutation({
   args: {
@@ -1657,6 +1668,7 @@ export const updateSyncTime = mutation({
       lastError: undefined,
       consecutiveSyncErrors: undefined,
       lastSyncError: undefined,
+      consecutiveEmptySyncs: undefined,
     });
   },
 });

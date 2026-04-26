@@ -111,6 +111,8 @@ export default defineSchema({
     // Transient sync error tracking (non-TOKEN_EXPIRED)
     consecutiveSyncErrors: v.optional(v.number()),
     lastSyncError: v.optional(v.string()),
+    // Empty account throttling: after 3+ empty syncs, sync once per hour instead of 5 min
+    consecutiveEmptySyncs: v.optional(v.number()),
     // Agency org membership
     orgId: v.optional(v.id("organizations")),
     excludeFromOrgTransfer: v.optional(v.boolean()),  // Решение 3: prevents auto-transfer to org

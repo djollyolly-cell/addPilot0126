@@ -632,6 +632,7 @@ import { internalQuery, internalMutation, query } from "./_generated/server";
 
 const BATCH_SIZE = 40; // Max accounts per sync cycle (~40 × 45s = 30 min)
 const SKIP_IF_SYNCED_WITHIN_MS = 4 * 60 * 1000; // Skip if synced < 4 min ago
+const EMPTY_ACCOUNT_SYNC_INTERVAL_MS = 60 * 60 * 1000; // 1h for accounts with 3+ consecutive empty syncs
 
 export const listActiveAccounts = internalQuery({
   args: {},
@@ -643,7 +644,13 @@ export const listActiveAccounts = internalQuery({
 
     // Prioritize: oldest lastSyncAt first, skip recently synced
     return active
-      .filter((a) => !a.lastSyncAt || (now - a.lastSyncAt) > SKIP_IF_SYNCED_WITHIN_MS)
+      .filter((a) => {
+        if (!a.lastSyncAt) return true;
+        const interval = (a.consecutiveEmptySyncs ?? 0) >= 3
+          ? EMPTY_ACCOUNT_SYNC_INTERVAL_MS
+          : SKIP_IF_SYNCED_WITHIN_MS;
+        return (now - a.lastSyncAt) > interval;
+      })
       .sort((a, b) => (a.lastSyncAt || 0) - (b.lastSyncAt || 0))
       .slice(0, BATCH_SIZE);
   },
@@ -658,7 +665,13 @@ export const listSyncableAccounts = internalQuery({
     const now = Date.now();
 
     return active
-      .filter((a) => !a.lastSyncAt || (now - a.lastSyncAt) > SKIP_IF_SYNCED_WITHIN_MS)
+      .filter((a) => {
+        if (!a.lastSyncAt) return true;
+        const interval = (a.consecutiveEmptySyncs ?? 0) >= 3
+          ? EMPTY_ACCOUNT_SYNC_INTERVAL_MS
+          : SKIP_IF_SYNCED_WITHIN_MS;
+        return (now - a.lastSyncAt) > interval;
+      })
       .sort((a, b) => (a.lastSyncAt || 0) - (b.lastSyncAt || 0));
   },
 });
@@ -1055,6 +1068,8 @@ export const syncOneAccount = internalAction({
 
         if (!stats || stats.length === 0) {
           console.log(`[syncOne] Empty stats for account ${account._id}, skipping`);
+          await ctx.runMutation(internal.adAccounts.incrementEmptySyncs, { accountId: account._id });
+          await ctx.runMutation(api.adAccounts.updateSyncTime, { accountId: account._id });
           return;
         }
 
