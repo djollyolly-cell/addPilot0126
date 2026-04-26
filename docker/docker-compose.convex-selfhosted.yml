@@ -57,6 +57,7 @@ services:
       - DO_NOT_REQUIRE_SSL=true
       - RUST_LOG=info
       - DOCUMENT_RETENTION_DELAY=172800
+      - APPLICATION_MAX_CONCURRENT_V8_ACTIONS=32
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3210/version"]
       interval: 5s

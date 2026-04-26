@@ -1842,6 +1842,217 @@ export const proactiveTokenRefresh = internalAction({
   },
 });
 
+// ─── Fan-Out: Token Refresh Dispatch + Worker ────────────────────
+
+const TOKEN_ALERT_COOLDOWN_MS = 30 * 60_000;
+
+/** Schedule tokenRefreshOne workers. Must be mutation for ctx.scheduler. */
+export const dispatchTokenBatch = internalMutation({
+  args: {
+    accounts: v.array(v.id("adAccounts")),
+    users: v.array(v.id("users")),
+    vkUsers: v.array(v.id("users")),
+  },
+  handler: async (ctx, args) => {
+    for (const accountId of args.accounts) {
+      await ctx.scheduler.runAfter(0, internal.auth.tokenRefreshOne, {
+        targetType: "account", targetId: accountId,
+      });
+    }
+    for (const userId of args.users) {
+      await ctx.scheduler.runAfter(0, internal.auth.tokenRefreshOne, {
+        targetType: "user_vkads", targetId: userId,
+      });
+    }
+    for (const userId of args.vkUsers) {
+      await ctx.scheduler.runAfter(0, internal.auth.tokenRefreshOne, {
+        targetType: "user_vk", targetId: userId,
+      });
+    }
+  },
+});
+
+/**
+ * Refresh token for ONE account or user. Scheduled by tokenRefreshDispatch.
+ */
+export const tokenRefreshOne = internalAction({
+  args: {
+    targetType: v.union(v.literal("account"), v.literal("user_vkads"), v.literal("user_vk")),
+    targetId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+
+    if (args.targetType === "account") {
+      const accountId = args.targetId as Id<"adAccounts">;
+      const acc = await ctx.runQuery(internal.adAccounts.getInternal, { accountId });
+      const label = acc?.name || accountId;
+
+      try {
+        await ctx.runAction(internal.auth.getValidTokenForAccount, { accountId });
+        const updated = await ctx.runQuery(internal.auth.getAccountTokenExpiry, { accountId });
+        if (updated && updated > now) {
+          console.log(`[tokenRefreshOne] Account "${label}": refreshed, expires ${new Date(updated).toISOString()}`);
+        } else {
+          console.log(`[tokenRefreshOne] Account "${label}": refresh returned OK but token not updated`);
+          try {
+            await ctx.runAction(internal.telegram.sendMessage, {
+              chatId: ADMIN_CHAT_ID,
+              text: `🔑 Account "${label}": refresh OK but token not updated`,
+            });
+          } catch { /* non-critical */ }
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[tokenRefreshOne] Account "${label}": failed -- ${errMsg}`);
+        if (isUnrecoverable(err)) {
+          await ctx.runMutation(internal.auth.clearAccountRefreshToken, { accountId });
+          try {
+            const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId });
+            if (recovered) {
+              console.log(`[tokenRefreshOne] Account "${label}": recovered via cascade after ${errMsg}`);
+              return; // success via recovery
+            }
+          } catch (recoveryErr) {
+            console.error(`[tokenRefreshOne] Account "${label}": recovery failed: ${recoveryErr}`);
+          }
+        }
+        try {
+          await ctx.runAction(internal.telegram.sendMessage, {
+            chatId: ADMIN_CHAT_ID,
+            text: `🔑 Token refresh failed: Account "${label}": ${errMsg.slice(0, 200)}`,
+          });
+        } catch { /* non-critical */ }
+      }
+    } else if (args.targetType === "user_vkads") {
+      const userId = args.targetId as Id<"users">;
+      const user = await ctx.runQuery(internal.users.getById, { userId });
+      const label = user?.name || user?.email || userId;
+
+      try {
+        await ctx.runAction(internal.auth.getValidVkAdsToken, { userId });
+        const updated = await ctx.runQuery(internal.auth.getUserVkAdsTokenExpiry, { userId });
+        if (updated && updated > now) {
+          console.log(`[tokenRefreshOne] User "${label}": VK Ads token refreshed, expires ${new Date(updated).toISOString()}`);
+        } else {
+          console.log(`[tokenRefreshOne] User "${label}": VK Ads refresh OK but token not updated`);
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[tokenRefreshOne] User "${label}": VK Ads refresh failed -- ${errMsg}`);
+        if (isUnrecoverable(err)) {
+          await ctx.runMutation(internal.auth.clearUserVkAdsRefreshToken, { userId });
+        }
+        try {
+          await ctx.runAction(internal.telegram.sendMessage, {
+            chatId: ADMIN_CHAT_ID,
+            text: `🔑 VK Ads token refresh failed: User "${label}": ${errMsg.slice(0, 200)}`,
+          });
+        } catch { /* non-critical */ }
+      }
+    } else if (args.targetType === "user_vk") {
+      const userId = args.targetId as Id<"users">;
+      const user = await ctx.runQuery(internal.users.getById, { userId });
+      const label = user?.name || user?.email || userId;
+
+      try {
+        await ctx.runAction(internal.auth.getValidVkToken, { userId });
+        console.log(`[tokenRefreshOne] User "${label}": VK ID token refreshed`);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[tokenRefreshOne] User "${label}": VK ID refresh failed -- ${errMsg}`);
+        if (isUnrecoverable(err)) {
+          await ctx.runMutation(internal.auth.clearUserVkRefreshToken, { userId });
+        }
+        try {
+          await ctx.runAction(internal.telegram.sendMessage, {
+            chatId: ADMIN_CHAT_ID,
+            text: `🔑 VK ID token refresh failed: User "${label}": ${errMsg.slice(0, 200)}`,
+          });
+        } catch { /* non-critical */ }
+      }
+    }
+  },
+});
+
+/**
+ * Fan-out dispatcher for proactive token refresh. Replaces sequential proactiveTokenRefresh.
+ * Runs every 2h (was 4h). Dispatches tokenRefreshOne per account/user.
+ */
+export const tokenRefreshDispatch = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+      name: "tokenRefreshDispatch", status: "running",
+    });
+
+    let cronError: string | undefined;
+    try {
+      const now = Date.now();
+      const threshold = now + PROACTIVE_REFRESH_WINDOW_MS;
+
+      // Health check: accounts with tokenExpiresAt < 1h
+      const expiringAccounts = await ctx.runQuery(internal.auth.getExpiringAccounts, { threshold });
+      const urgentCount = expiringAccounts.filter(
+        (a) => a.tokenExpiresAt && a.tokenExpiresAt > 0 && a.tokenExpiresAt < now + 60 * 60_000
+      ).length;
+
+      if (urgentCount > 0) {
+        const canAlert = await ctx.runQuery(internal.syncMetrics.shouldSendCronAlert, {
+          cronName: "tokenRefreshDispatch", cooldownMs: TOKEN_ALERT_COOLDOWN_MS,
+        });
+        if (canAlert) {
+          try {
+            await ctx.runAction(internal.telegram.sendMessage, {
+              chatId: ADMIN_CHAT_ID,
+              text: `⚠️ <b>Токены</b>: ${urgentCount} аккаунтов истекают < 1ч`,
+            });
+            await ctx.runMutation(internal.syncMetrics.markCronAlertSent, {
+              cronName: "tokenRefreshDispatch",
+            });
+          } catch { /* non-critical */ }
+        }
+      }
+
+      // Gather all expiring targets
+      const accounts = expiringAccounts.map((a) => a._id);
+      const users = (await ctx.runQuery(internal.auth.getExpiringUserTokens, { threshold }))
+        .map((u) => u._id);
+      const vkUsers = (await ctx.runQuery(internal.auth.getExpiringUserVkTokens, { threshold }))
+        .map((u) => u._id);
+
+      const total = accounts.length + users.length + vkUsers.length;
+      if (total === 0) {
+        console.log("[tokenRefreshDispatch] No tokens to refresh");
+        return;
+      }
+
+      // Dispatch all workers
+      await ctx.runMutation(internal.auth.dispatchTokenBatch, {
+        accounts, users, vkUsers,
+      });
+      console.log(`[tokenRefreshDispatch] Dispatched ${accounts.length} accounts + ${users.length} VK Ads users + ${vkUsers.length} VK users`);
+
+      // Retry recovery for accounts stuck in error state
+      try {
+        await ctx.runAction(internal.tokenRecovery.retryRecovery, {});
+      } catch (retryErr) {
+        console.error(`[tokenRefreshDispatch] retryRecovery failed: ${retryErr}`);
+      }
+
+    } catch (err) {
+      cronError = err instanceof Error ? err.message : "Unknown error";
+      console.error("[tokenRefreshDispatch] Fatal error:", cronError);
+    } finally {
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "tokenRefreshDispatch",
+        status: cronError ? "failed" : "completed",
+        error: cronError,
+      });
+    }
+  },
+});
+
 export const getExpiringAccounts = internalQuery({
   args: { threshold: v.number() },
   handler: async (ctx, args) => {

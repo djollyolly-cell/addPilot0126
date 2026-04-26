@@ -121,7 +121,7 @@ export const checkCronSyncResults = internalQuery({
     const allAccounts = await ctx.db.query("adAccounts").collect();
     const activeAccounts = allAccounts.filter((a) => a.status === "active" || a.status === "error");
     const now = Date.now();
-    const syncedCount = activeAccounts.filter((a) => a.lastSyncAt && now - a.lastSyncAt < 10 * 60_000).length;
+    const syncedCount = activeAccounts.filter((a) => a.lastSyncAt && now - a.lastSyncAt < 15 * 60_000).length;
 
     if (activeAccounts.length > 0 && syncedCount < activeAccounts.length) {
       issues.push(`sync: ${syncedCount}/${activeAccounts.length} синхронизированы`);
@@ -298,9 +298,9 @@ export const checkAccountSync = internalQuery({
         continue;
       }
 
-      // With batching (40 accounts per 5min cycle), full coverage takes ~20min.
-      // Use 30min threshold to avoid false positives.
-      if (minutesAgo(acc.lastSyncAt) > 30) {
+      // With fan-out, all accounts sync in parallel every 5min.
+      // 20min = 4 missed cycles — real problem, not false positive.
+      if (minutesAgo(acc.lastSyncAt) > 20) {
         issues.push(`${label}: lastSync ${minutesAgo(acc.lastSyncAt)} мин назад`);
         if (status === "ok") status = "warning";
       }

@@ -801,6 +801,7 @@ export default defineSchema({
     finishedAt: v.optional(v.number()),
     status: v.union(v.literal("running"), v.literal("completed"), v.literal("failed")),
     error: v.optional(v.string()),
+    lastAlertSentAt: v.optional(v.number()),
   }).index("by_name", ["name"]),
 
   // Health check results — diagnostic history

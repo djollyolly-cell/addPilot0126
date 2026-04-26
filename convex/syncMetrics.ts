@@ -647,6 +647,31 @@ export const listActiveAccounts = internalQuery({
   },
 });
 
+/** All active/error accounts — no batch limit, for fan-out dispatcher. */
+export const listSyncableAccounts = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const accounts = await ctx.db.query("adAccounts").collect();
+    const active = accounts.filter((a) => a.status === "active" || a.status === "error");
+    const now = Date.now();
+
+    return active
+      .filter((a) => !a.lastSyncAt || (now - a.lastSyncAt) > SKIP_IF_SYNCED_WITHIN_MS)
+      .sort((a, b) => (a.lastSyncAt || 0) - (b.lastSyncAt || 0));
+  },
+});
+
+/** All active/error accounts with lastSyncAt — for dispatcher health check. */
+export const listAllActiveAccountsBasic = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const accounts = await ctx.db.query("adAccounts").collect();
+    return accounts
+      .filter((a) => a.status === "active" || a.status === "error")
+      .map((a) => ({ _id: a._id, lastSyncAt: a.lastSyncAt }));
+  },
+});
+
 // ─── Cron Heartbeat ──────────────────────────────────────────────
 
 export const getCronHeartbeat = internalQuery({
@@ -685,6 +710,569 @@ export const upsertCronHeartbeat = internalMutation({
         startedAt: now,
         status: args.status,
         error: args.error,
+      });
+    }
+  },
+});
+
+// ─── Alert Dedup Helpers ─────────────────────────────────────────
+
+/** Check if enough time has passed since last alert for this cron. */
+export const shouldSendCronAlert = internalQuery({
+  args: { cronName: v.string(), cooldownMs: v.number() },
+  handler: async (ctx, args) => {
+    const hb = await ctx.db
+      .query("cronHeartbeats")
+      .withIndex("by_name", (q) => q.eq("name", args.cronName))
+      .first();
+    if (!hb?.lastAlertSentAt) return true;
+    return Date.now() - hb.lastAlertSentAt > args.cooldownMs;
+  },
+});
+
+/** Mark that an alert was sent for this cron (for dedup). */
+export const markCronAlertSent = internalMutation({
+  args: { cronName: v.string() },
+  handler: async (ctx, args) => {
+    const hb = await ctx.db
+      .query("cronHeartbeats")
+      .withIndex("by_name", (q) => q.eq("name", args.cronName))
+      .first();
+    if (hb) {
+      await ctx.db.patch(hb._id, { lastAlertSentAt: Date.now() });
+    }
+  },
+});
+
+// ─── Fan-Out: Sync Dispatch + Worker ─────────────────────────────
+
+const ALERT_COOLDOWN_MS = 30 * 60_000; // 30 min between same alert
+const SYNC_ADMIN_CHAT_ID = "325307765";
+
+/** Schedule syncOneAccount workers for each account. Must be mutation for ctx.scheduler. */
+export const dispatchSyncBatch = internalMutation({
+  args: { accountIds: v.array(v.id("adAccounts")) },
+  handler: async (ctx, args) => {
+    for (const accountId of args.accountIds) {
+      await ctx.scheduler.runAfter(0, internal.syncMetrics.syncOneAccount, { accountId });
+    }
+  },
+});
+
+/**
+ * Sync metrics for ONE ad account. Scheduled by syncDispatch.
+ * Contains the full per-account logic from the former syncAll loop.
+ */
+export const syncOneAccount = internalAction({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    // Load account
+    const account = await ctx.runQuery(internal.adAccounts.getInternal, { accountId: args.accountId });
+    if (!account) {
+      console.log(`[syncOne] Account ${args.accountId} not found, skipping`);
+      return;
+    }
+    if (account.status !== "active" && account.status !== "error") {
+      return;
+    }
+
+    // Double-check SKIP_IF_SYNCED_WITHIN_MS (another worker may have synced it)
+    if (account.lastSyncAt && Date.now() - account.lastSyncAt < SKIP_IF_SYNCED_WITHIN_MS) {
+      return;
+    }
+
+    const date = todayStr();
+
+    try {
+      await withTimeout((async () => {
+        // Auto-recovery: if account is in error from a transient failure, check if token is alive
+        if (
+          account.status === "error" &&
+          account.lastError &&
+          !account.lastError.includes("TOKEN_EXPIRED")
+        ) {
+          try {
+            const alive = await quickTokenCheck(account.accessToken);
+            if (alive) {
+              console.log(`[syncOne] Auto-recovery: "${account.name}" token alive, restoring to active`);
+              await ctx.runMutation(api.adAccounts.updateStatus, {
+                accountId: account._id,
+                status: "active",
+              });
+              await ctx.runMutation(internal.adAccounts.clearSyncErrors, {
+                accountId: account._id,
+              });
+            } else {
+              console.log(`[syncOne] "${account.name}" in error, token dead -- skipping`);
+              return;
+            }
+          } catch {
+            // quickTokenCheck failed — optimistic, try sync anyway
+          }
+        }
+
+        // Get valid token
+        const accessToken = await ctx.runAction(
+          internal.auth.getValidTokenForAccount,
+          { accountId: account._id }
+        );
+
+        // Fetch banners (only active/blocked)
+        const banners = await ctx.runAction(api.vkApi.getMtBanners, {
+          accessToken, accountId: account._id,
+        });
+        const bannerIds = banners.map((b: { id: number }) => String(b.id)).join(",");
+
+        // Fetch statistics and lead counts in parallel
+        const [stats, leadCounts] = bannerIds
+          ? await Promise.all([
+              ctx.runAction(api.vkApi.getMtStatistics, {
+                accessToken, dateFrom: date, dateTo: date,
+                accountId: account._id, bannerIds,
+              }),
+              ctx.runAction(api.vkApi.getMtLeadCounts, {
+                accessToken, dateFrom: date, dateTo: date,
+                accountId: account._id,
+              }),
+            ])
+          : [[] as MtStatItem[], {} as Record<string, number>];
+
+        // Build bannerId -> campaignId map
+        const bannerCampaignMap = new Map<string, string>();
+        for (const b of banners) {
+          bannerCampaignMap.set(String(b.id), String(b.campaign_id));
+        }
+
+        // Fetch campaigns from VK API (no circuit breaker — each worker is independent)
+        let vkCampaigns: MtCampaign[] = [];
+        try {
+          vkCampaigns = await ctx.runAction(
+            internal.vkApi.getCampaignsForAccount, { accessToken }
+          );
+        } catch (err) {
+          console.warn(`[syncOne] getCampaignsForAccount failed for "${account.name}": ${err}`);
+          // Retry once
+          try {
+            vkCampaigns = await ctx.runAction(
+              internal.vkApi.getCampaignsForAccount, { accessToken }
+            );
+          } catch (retryErr) {
+            console.error(`[syncOne] getCampaignsForAccount retry failed for "${account.name}": ${retryErr}`);
+            try { await ctx.runMutation(internal.systemLogger.log, {
+              accountId: account._id, level: "error", source: "syncMetrics",
+              message: `getCampaignsForAccount failed after retry: ${String(retryErr).slice(0, 180)}`,
+            }); } catch { /* non-critical */ }
+          }
+        }
+
+        // Build campaign data map: ad_group_id -> { adPlanId, dailyBudget }
+        const groupData = new Map<string, { adPlanId: string | null; dailyBudget: number }>();
+        for (const c of vkCampaigns) {
+          groupData.set(String(c.id), {
+            adPlanId: c.ad_plan_id ? String(c.ad_plan_id) : null,
+            dailyBudget: Number(c.budget_limit_day || "0"),
+          });
+        }
+
+        // Build campaignType map
+        const campaignTypeMap = new Map<string, string>();
+        try {
+          const typeMapArray = await ctx.runAction(
+            internal.vkApi.getCampaignTypeMap, { accessToken }
+          );
+          for (const entry of typeMapArray) {
+            campaignTypeMap.set(entry.adGroupId, entry.type);
+          }
+        } catch (err) {
+          console.warn(`[syncOne] getCampaignTypeMap failed for "${account.name}": ${err}`);
+        }
+
+        // Fetch ad_plan budgets for cascade fallback
+        const adPlanBudgets = new Map<string, number>();
+        let fetchedAdPlans: { id: number; name: string; status: string; budget_limit_day: number | null; budget_limit: number | null }[] = [];
+        try {
+          fetchedAdPlans = await ctx.runAction(api.vkApi.getMtAdPlans, { accessToken });
+          for (const plan of fetchedAdPlans) {
+            if (plan.budget_limit_day && plan.budget_limit_day > 0) {
+              adPlanBudgets.set(String(plan.id), plan.budget_limit_day);
+            }
+          }
+        } catch (err) {
+          console.warn(`[syncOne] getMtAdPlans failed for "${account.name}": ${err}`);
+        }
+
+        // Build adCampaignMap with cascade: group budget -> ad_plan budget
+        const adCampaignMap: Array<{ adId: string; adGroupId: string; adPlanId: string | null; dailyBudget: number }> = [];
+        for (const [adId, adGroupId] of bannerCampaignMap) {
+          const data = groupData.get(adGroupId);
+          let dailyBudget = data?.dailyBudget ?? 0;
+          if (dailyBudget <= 0 && data?.adPlanId) {
+            dailyBudget = adPlanBudgets.get(data.adPlanId) ?? 0;
+          }
+          adCampaignMap.push({
+            adId, adGroupId,
+            adPlanId: data?.adPlanId ?? null,
+            dailyBudget,
+          });
+        }
+
+        if (adCampaignMap.length > 0) {
+          console.log(`[syncOne] Live campaign map: ${adCampaignMap.length} ads, ${vkCampaigns.length} campaigns for "${account.name}"`);
+        }
+
+        // Auto-upsert campaigns (ad groups)
+        if (vkCampaigns.length > 0) {
+          try {
+            for (const c of vkCampaigns) {
+              await ctx.runMutation(api.adAccounts.upsertCampaign, {
+                accountId: account._id,
+                vkCampaignId: String(c.id),
+                adPlanId: c.ad_plan_id ? String(c.ad_plan_id) : undefined,
+                name: c.name || `Кампания ${c.id}`,
+                status: c.status,
+                dailyLimit: Number(c.budget_limit_day || "0") || undefined,
+                allLimit: Number(c.budget_limit || "0") || undefined,
+              });
+            }
+          } catch (err) {
+            console.error(`[syncOne] upsertCampaigns failed for "${account.name}":`, err);
+            try { await ctx.runMutation(internal.systemLogger.log, {
+              accountId: account._id, level: "warn", source: "syncMetrics",
+              message: `Auto-upsert campaigns failed: ${String(err).slice(0, 180)}`,
+            }); } catch { /* non-critical */ }
+          }
+        }
+
+        // Auto-upsert ad_plans
+        if (fetchedAdPlans.length > 0) {
+          try {
+            for (const plan of fetchedAdPlans) {
+              await ctx.runMutation(api.adAccounts.upsertCampaign, {
+                accountId: account._id,
+                vkCampaignId: String(plan.id),
+                name: plan.name || `Кампания ${plan.id}`,
+                status: plan.status,
+                dailyLimit: plan.budget_limit_day && plan.budget_limit_day > 0 ? plan.budget_limit_day : undefined,
+                allLimit: plan.budget_limit && plan.budget_limit > 0 ? plan.budget_limit : undefined,
+              });
+            }
+          } catch (err) {
+            console.warn(`[syncOne] upsert ad_plans failed for "${account.name}": ${err}`);
+          }
+        }
+
+        // Auto-upsert ads from getMtBanners data
+        try {
+          for (const banner of banners) {
+            const campaignVkId = String(banner.campaign_id);
+            const campaign = await ctx.runQuery(api.adAccounts.getCampaignByVkId, {
+              accountId: account._id, vkCampaignId: campaignVkId,
+            });
+            if (campaign) {
+              const bannerName = banner.textblocks?.title?.text || `Баннер ${banner.id}`;
+              await ctx.runMutation(api.adAccounts.upsertAd, {
+                accountId: account._id, campaignId: campaign._id,
+                vkAdId: String(banner.id), name: bannerName,
+                status: banner.status, approved: banner.moderation_status,
+              });
+            }
+          }
+        } catch (err) {
+          console.error(`[syncOne] upsertAds failed for "${account.name}":`, err);
+          try { await ctx.runMutation(internal.systemLogger.log, {
+            accountId: account._id, level: "warn", source: "syncMetrics",
+            message: `Auto-upsert ads failed: ${String(err).slice(0, 180)}`,
+          }); } catch { /* non-critical */ }
+        }
+
+        // Auto-link videos to banners
+        try {
+          const bannerVideoMap: { bannerId: string; videoMediaId: string }[] = [];
+          for (const banner of banners) {
+            if (!banner.content) continue;
+            for (const slotKey of Object.keys(banner.content)) {
+              const slot = banner.content[slotKey];
+              const isVideo =
+                slot.type === "video" ||
+                (slot.variants &&
+                  Object.values(slot.variants).some(
+                    (variant) => variant.media_type === "video"
+                  ));
+              if (isVideo && slot.id) {
+                bannerVideoMap.push({
+                  bannerId: String(banner.id),
+                  videoMediaId: String(slot.id),
+                });
+                break;
+              }
+            }
+          }
+          if (bannerVideoMap.length > 0) {
+            await ctx.runMutation(internal.videos.autoLinkVideos, {
+              accountId: account._id, bannerVideoMap,
+            });
+          }
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.error(`[syncOne] Auto-link error for account ${account._id}:`, errMsg);
+          try { await ctx.runMutation(internal.systemLogger.log, {
+            accountId: account._id, level: "warn", source: "syncMetrics",
+            message: `Auto-link videos failed: ${errMsg.slice(0, 180)}`,
+          }); } catch { /* non-critical */ }
+        }
+
+        if (!stats || stats.length === 0) {
+          console.log(`[syncOne] Empty stats for account ${account._id}, skipping`);
+          return;
+        }
+
+        // Save metrics for each ad
+        for (const item of stats) {
+          const adId = String(item.id);
+          for (const row of item.rows) {
+            const base = row.base;
+            const spent = parseFloat(base.spent || "0") || 0;
+            const impressions = base.shows || 0;
+            const clicks = base.clicks || 0;
+            const baseGoals = Number(base.goals) || 0;
+            const vkData = base.vk;
+            const vkResult = vkData ? (Number(vkData.result) || 0) : 0;
+            const vkGoals = vkData ? (Number(vkData.goals) || 0) : 0;
+            let eventsGoals = 0;
+            const events = row.events;
+            if (events && typeof events === "object") {
+              const sendingForm = (events as Record<string, unknown>).sending_form;
+              if (typeof sendingForm === "number") {
+                eventsGoals = sendingForm;
+              } else if (sendingForm && typeof sendingForm === "object") {
+                eventsGoals = Number((sendingForm as { count?: number | string }).count) || 0;
+              }
+            }
+            const leadAdsCount = leadCounts[adId] || 0;
+            const leads = Math.max(baseGoals, vkResult, vkGoals, eventsGoals, leadAdsCount);
+
+            console.log(
+              `[syncOne] Ad ${adId}: clicks=${clicks}, base.goals=${baseGoals}, vk.result=${vkResult}, vk.goals=${vkGoals}, events=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
+            );
+
+            await ctx.runMutation(internal.metrics.saveRealtime, {
+              accountId: account._id, adId, spent, leads, impressions, clicks,
+            });
+
+            const adGroupId = bannerCampaignMap.get(adId);
+            await ctx.runMutation(internal.metrics.saveDaily, {
+              accountId: account._id, adId,
+              campaignId: adGroupId, date: row.date,
+              impressions, clicks, spent, leads,
+              vkResult: vkResult > 0 ? vkResult : undefined,
+              campaignType: adGroupId ? campaignTypeMap.get(adGroupId) : undefined,
+              formEvents: eventsGoals > 0 ? eventsGoals : undefined,
+              reach: base.reach,
+            });
+          }
+        }
+
+        // Collect video stats for linked creatives
+        try {
+          const linkedVideos = await ctx.runQuery(internal.videos.listLinkedVideos, {});
+          const accountVideos = linkedVideos.filter((vid) => vid.accountId === account._id);
+          if (accountVideos.length > 0) {
+            const videoAdIds = accountVideos
+              .map((vid) => vid.vkAdId)
+              .filter(Boolean)
+              .join(",");
+            if (videoAdIds) {
+              const videoStats = await ctx.runAction(api.vkApi.getMtVideoStatistics, {
+                accessToken, dateFrom: date, dateTo: date, bannerIds: videoAdIds,
+              });
+              for (const item of videoStats) {
+                const adId = String(item.id);
+                const linkedVideo = accountVideos.find((vid) => vid.vkAdId === adId);
+                for (const row of item.rows) {
+                  const base = row.base;
+                  const vid: MtVideoStats = row.video || {};
+                  await ctx.runMutation(internal.creativeAnalytics.saveCreativeStats, {
+                    accountId: account._id, videoId: linkedVideo?._id,
+                    adId, date: row.date,
+                    impressions: base.shows || 0,
+                    clicks: base.clicks || 0,
+                    spent: parseFloat(base.spent || "0") || 0,
+                    videoStarted: vid.started || undefined,
+                    videoViewed3s: vid.viewed_3_seconds || undefined,
+                    videoViewed10s: vid.viewed_10_seconds || undefined,
+                    videoViewed25: vid.viewed_25_percent || undefined,
+                    videoViewed50: vid.viewed_50_percent || undefined,
+                    videoViewed75: vid.viewed_75_percent || undefined,
+                    videoViewed100: vid.viewed_100_percent || undefined,
+                    depthOfView: vid.depth_of_view || undefined,
+                    viewed3sRate: vid.viewed_3_seconds_rate || undefined,
+                    viewed25Rate: vid.viewed_25_percent_rate || undefined,
+                    viewed50Rate: vid.viewed_50_percent_rate || undefined,
+                    viewed75Rate: vid.viewed_75_percent_rate || undefined,
+                    viewed100Rate: vid.viewed_100_percent_rate || undefined,
+                  });
+                }
+              }
+              console.log(
+                `[syncOne] Account ${account._id}: ${accountVideos.length} video creatives stats synced`
+              );
+            }
+          }
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.error(`[syncOne] Error fetching video stats for account ${account._id}:`, errMsg);
+          try { await ctx.runMutation(internal.systemLogger.log, {
+            accountId: account._id, level: "warn", source: "syncMetrics",
+            message: `Video stats fetch failed: ${errMsg.slice(0, 180)}`,
+          }); } catch { /* non-critical */ }
+        }
+
+        // Update sync time and clear any previous error
+        await ctx.runMutation(api.adAccounts.updateSyncTime, { accountId: account._id });
+        if (account.lastError) {
+          await ctx.runMutation(api.adAccounts.updateStatus, {
+            accountId: account._id, status: "active",
+          });
+        }
+        console.log(`[syncOne] Account ${account._id}: ${stats.length} ads synced`);
+
+        // Run rules for this account
+        try {
+          await ctx.runAction(internal.ruleEngine.checkRulesForAccount, {
+            accountId: account._id,
+            adCampaignMap: adCampaignMap.length > 0 ? adCampaignMap : undefined,
+          });
+        } catch (err) {
+          console.error(`[syncOne] checkRulesForAccount failed for "${account.name}":`, err);
+          try { await ctx.runMutation(internal.systemLogger.log, {
+            accountId: account._id, level: "error", source: "syncMetrics",
+            message: `checkRulesForAccount failed: ${String(err).slice(0, 180)}`,
+          }); } catch { /* non-critical */ }
+        }
+      })(), ACCOUNT_TIMEOUT_MS, `syncOne account ${account._id}`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : "Unknown error";
+      console.error(`[syncOne] Error syncing account ${account._id}: ${msg}`);
+
+      try { await ctx.runMutation(internal.systemLogger.log, {
+        accountId: account._id, level: "error", source: "syncMetrics",
+        message: `Sync failed: ${msg.slice(0, 180)}`,
+      }); } catch { /* non-critical */ }
+
+      if (msg.includes("TOKEN_EXPIRED")) {
+        try {
+          await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
+            accountId: account._id,
+          });
+        } catch (handleErr) {
+          await ctx.runMutation(api.adAccounts.updateStatus, {
+            accountId: account._id, status: "error",
+            lastError: `Sync failed: ${msg}`,
+          });
+          console.log(`[syncOne] handleTokenExpired for ${account._id} failed: ${handleErr}`);
+        }
+        await ctx.runMutation(internal.adAccounts.clearSyncErrors, {
+          accountId: account._id,
+        });
+      } else if (isPermanentError(msg)) {
+        await ctx.runMutation(api.adAccounts.updateStatus, {
+          accountId: account._id, status: "error",
+          lastError: `Sync failed: ${msg}`,
+        });
+      } else {
+        const consecutive = (account.consecutiveSyncErrors ?? 0) + 1;
+        await ctx.runMutation(internal.adAccounts.incrementSyncErrors, {
+          accountId: account._id, error: msg,
+        });
+        if (consecutive >= TRANSIENT_ERROR_THRESHOLD) {
+          console.warn(`[syncOne] "${account.name}" ${consecutive} consecutive transient errors -- marking as error`);
+          await ctx.runMutation(api.adAccounts.updateStatus, {
+            accountId: account._id, status: "error",
+            lastError: `Sync failed (${consecutive}x): ${msg}`,
+          });
+        } else {
+          console.log(`[syncOne] "${account.name}" transient error ${consecutive}/${TRANSIENT_ERROR_THRESHOLD} -- will retry next cycle`);
+        }
+      }
+    }
+  },
+});
+
+/**
+ * Fan-out dispatcher for metrics sync. Replaces sequential syncAll.
+ * Runs every 5 min via cron. Dispatches syncOneAccount per account.
+ */
+export const syncDispatch = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+      name: "syncDispatch", status: "running",
+    });
+
+    let syncError: string | undefined;
+    try {
+      // Health check: count stale accounts
+      const allBasic = await ctx.runQuery(internal.syncMetrics.listAllActiveAccountsBasic);
+      const now = Date.now();
+      const staleCount = allBasic.filter(
+        (a) => !a.lastSyncAt || now - a.lastSyncAt > 15 * 60_000
+      ).length;
+      const totalCount = allBasic.length;
+
+      // Alert if >20% stale
+      if (totalCount > 0 && staleCount > totalCount * 0.2) {
+        const canAlert = await ctx.runQuery(internal.syncMetrics.shouldSendCronAlert, {
+          cronName: "syncDispatch", cooldownMs: ALERT_COOLDOWN_MS,
+        });
+        if (canAlert) {
+          try {
+            await ctx.runAction(internal.telegram.sendMessage, {
+              chatId: SYNC_ADMIN_CHAT_ID,
+              text: `⚠️ <b>Sync</b>: ${staleCount}/${totalCount} аккаунтов не синхронизированы >15 мин`,
+            });
+            await ctx.runMutation(internal.syncMetrics.markCronAlertSent, {
+              cronName: "syncDispatch",
+            });
+          } catch { /* non-critical */ }
+        }
+      }
+
+      // Get accounts to sync (filtered, sorted, no batch limit)
+      const accounts = await ctx.runQuery(internal.syncMetrics.listSyncableAccounts);
+      if (accounts.length === 0) {
+        console.log("[syncDispatch] No accounts to sync");
+        return;
+      }
+
+      // Dispatch all workers
+      const accountIds = accounts.map((a) => a._id);
+      await ctx.runMutation(internal.syncMetrics.dispatchSyncBatch, { accountIds });
+      console.log(`[syncDispatch] Dispatched ${accountIds.length} sync workers`);
+
+      // Poll AI banner moderation (separate from per-account sync)
+      try {
+        await ctx.runAction(internal.syncMetrics.pollAiBannerModeration, {});
+      } catch (error) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.error("[syncDispatch] Error polling AI banner moderation:", errMsg);
+        try { await ctx.runMutation(internal.systemLogger.log, {
+          level: "warn", source: "syncMetrics",
+          message: `AI banner moderation poll failed: ${errMsg.slice(0, 180)}`,
+        }); } catch { /* non-critical */ }
+      }
+
+    } catch (err) {
+      syncError = err instanceof Error ? err.message : "Unknown error";
+      console.error("[syncDispatch] Fatal error:", syncError);
+      try { await ctx.runMutation(internal.systemLogger.log, {
+        level: "error", source: "syncMetrics",
+        message: `Fatal syncDispatch error: ${syncError.slice(0, 180)}`,
+      }); } catch { /* non-critical */ }
+    } finally {
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "syncDispatch",
+        status: syncError ? "failed" : "completed",
+        error: syncError,
       });
     }
   },

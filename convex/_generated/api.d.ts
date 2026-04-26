@@ -66,6 +66,7 @@ import type * as userSettings from "../userSettings.js";
 import type * as users from "../users.js";
 import type * as uzBudgetCron from "../uzBudgetCron.js";
 import type * as uzBudgetHelpers from "../uzBudgetHelpers.js";
+import type * as videoRotation from "../videoRotation.js";
 import type * as videos from "../videos.js";
 import type * as vkApi from "../vkApi.js";
 import type * as vkApiLimits from "../vkApiLimits.js";
@@ -136,6 +137,7 @@ declare const fullApi: ApiFromModules<{
   users: typeof users;
   uzBudgetCron: typeof uzBudgetCron;
   uzBudgetHelpers: typeof uzBudgetHelpers;
+  videoRotation: typeof videoRotation;
   videos: typeof videos;
   vkApi: typeof vkApi;
   vkApiLimits: typeof vkApiLimits;

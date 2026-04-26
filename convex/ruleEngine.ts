@@ -2860,3 +2860,337 @@ export const checkUzBudgetRules = internalAction({
     }
   },
 });
+
+// ─── Fan-Out: UZ Budget Dispatch + Worker ────────────────────────
+
+/** Schedule uzBudgetOneAccount workers. Must be mutation for ctx.scheduler. */
+export const dispatchUzBatch = internalMutation({
+  args: { accountIds: v.array(v.id("adAccounts")) },
+  handler: async (ctx, args) => {
+    for (const accountId of args.accountIds) {
+      await ctx.scheduler.runAfter(0, internal.ruleEngine.uzBudgetOneAccount, { accountId });
+    }
+  },
+});
+
+/**
+ * Process UZ budget rules for ONE account. Scheduled by uzBudgetDispatch.
+ */
+export const uzBudgetOneAccount = internalAction({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    // Re-fetch UZ rules for this account (lightweight query)
+    const allUzRules = await ctx.runQuery(internal.ruleEngine.getActiveUzRules);
+    const rulesByAccount = groupRulesByAccount(allUzRules as UzRule[]);
+    const accountRules = rulesByAccount.get(args.accountId as string);
+    if (!accountRules || accountRules.length === 0) return;
+
+    let totalActions = 0;
+    const skipped = { blocked: 0, noBudget: 0, delivering: 0, dedup: 0, maxReached: 0, tokenErr: 0 };
+
+    try {
+      await withTimeout((async () => {
+        // 1. Get token ONCE per account
+        let accessToken: string;
+        try {
+          accessToken = await ctx.runAction(
+            internal.auth.getValidTokenForAccount,
+            { accountId: args.accountId }
+          );
+        } catch (tokenErr) {
+          const tokenMsg = tokenErr instanceof Error ? tokenErr.message : String(tokenErr);
+          console.error(`[uz_budget] Cannot get token for account ${args.accountId}: ${tokenMsg}`);
+          if (tokenMsg.includes("TOKEN_EXPIRED")) {
+            try {
+              await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
+                accountId: args.accountId,
+              });
+            } catch (handleErr) {
+              console.log(`[uz_budget] handleTokenExpired for ${args.accountId} failed: ${handleErr}`);
+            }
+          }
+          skipped.tokenErr++;
+          return;
+        }
+
+        // 2. Get campaigns ONCE per account
+        let campaigns: VkCampaign[] = [];
+        try {
+          campaigns = await ctx.runAction(
+            internal.vkApi.getCampaignsForAccount, { accessToken }
+          ) as VkCampaign[];
+        } catch (apiErr) {
+          console.error(`[uz_budget] Failed to fetch campaigns for account ${args.accountId}:`, apiErr);
+          return;
+        }
+
+        // 3. Collect all real campaign IDs that match any rule's targets
+        const allMatchedCampaignIds = new Set<string>();
+        for (const rule of accountRules) {
+          const matched = filterCampaignsForRule(campaigns, rule);
+          for (const c of matched) allMatchedCampaignIds.add(String(c.id));
+        }
+
+        // 4. Fetch spent for ALL matched campaigns in one batch API call
+        const eligibleIds: string[] = [];
+        for (const cid of allMatchedCampaignIds) {
+          const camp = campaigns.find((c) => String(c.id) === cid);
+          if (!camp) continue;
+          if (Number(camp.budget_limit_day || "0") <= 0) continue;
+          if (camp.status === "deleted") continue;
+          eligibleIds.push(cid);
+        }
+
+        const spentCache = new Map<string, number>();
+        if (eligibleIds.length > 0) {
+          try {
+            const batchResult = await ctx.runAction(
+              internal.vkApi.getCampaignsSpentTodayBatch,
+              { accessToken, campaignIds: eligibleIds }
+            ) as Record<string, number>;
+            for (const [cid, spent] of Object.entries(batchResult)) {
+              spentCache.set(cid, spent);
+            }
+          } catch (err) {
+            console.error(`[uz_budget] Batch spent fetch failed for account ${args.accountId}:`, err);
+          }
+        }
+
+        // 5. Evaluate each rule using cached data
+        for (const rule of accountRules) {
+          try {
+            const { initialBudget, budgetStep, maxDailyBudget } = rule.conditions;
+            if (!initialBudget || !budgetStep) continue;
+
+            const ruleCampaigns = filterCampaignsForRule(campaigns, rule);
+
+            for (const campaign of ruleCampaigns) {
+              const dailyLimitRubles = Number(campaign.budget_limit_day || "0");
+              if (dailyLimitRubles <= 0) { skipped.noBudget++; continue; }
+              if (campaign.status === "deleted") { skipped.blocked++; continue; }
+
+              const campaignIdStr = String(campaign.id);
+              const spentToday = spentCache.get(campaignIdStr);
+
+              // Cascade unblock for blocked campaigns
+              if (campaign.status === "blocked") {
+                if (spentToday !== undefined) {
+                  if (spentToday < dailyLimitRubles) {
+                    skipped.blocked++;
+                    continue;
+                  }
+                } else {
+                  const lastLog = await ctx.runQuery(
+                    internal.ruleEngine.getLastBudgetLogForCampaign,
+                    { ruleId: rule._id, campaignId: campaignIdStr }
+                  );
+                  if (!lastLog || lastLog.newBudget === undefined) {
+                    skipped.blocked++;
+                    continue;
+                  }
+                  if (dailyLimitRubles !== lastLog.newBudget) {
+                    skipped.blocked++;
+                    continue;
+                  }
+                }
+                const spent = spentToday ?? dailyLimitRubles;
+
+                const recentUnblock = await ctx.runQuery(
+                  internal.ruleEngine.hasRecentBudgetIncrease,
+                  { ruleId: rule._id, campaignId: campaignIdStr, withinMs: 5 * 60 * 1000, currentSpent: spentToday ?? 0, currentBudget: dailyLimitRubles }
+                );
+                if (recentUnblock) { skipped.dedup++; continue; }
+
+                try {
+                  const cappedBudget = calculateNewBudget(dailyLimitRubles, spent, budgetStep, maxDailyBudget);
+                  await ctx.runAction(internal.vkApi.setCampaignBudget, {
+                    accessToken, campaignId: campaign.id, newLimitRubles: cappedBudget,
+                  });
+                  const stoppedBannerIds = await ctx.runQuery(
+                    internal.ruleEngine.getStoppedBannerIdsForAccount,
+                    { accountId: args.accountId }
+                  );
+                  await ctx.runAction(internal.vkApi.resumeCampaign, {
+                    accessToken, campaignId: campaign.id,
+                    excludeBannerIds: stoppedBannerIds,
+                  });
+                  await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+                    userId: rule.userId, ruleId: rule._id,
+                    accountId: args.accountId,
+                    campaignId: campaignIdStr, campaignName: campaign.name,
+                    actionType: "budget_increased" as const,
+                    oldBudget: dailyLimitRubles, newBudget: cappedBudget,
+                    step: cappedBudget - dailyLimitRubles, spentToday: spent,
+                  });
+                  console.log(`[uz_budget] Cascade unblock: ${campaign.name} (${campaignIdStr}) budget=${cappedBudget} spent=${spent} excludedBanners=${stoppedBannerIds.length}`);
+                  totalActions++;
+                } catch (err) {
+                  console.error(`[uz_budget] Cascade unblock failed for ${campaignIdStr}:`, err);
+                }
+                continue;
+              }
+
+              // Normal path: not blocked
+              if (spentToday === undefined) { skipped.delivering++; continue; }
+
+              if (!shouldTriggerBudgetIncrease(campaign.delivery, campaign.status, spentToday, dailyLimitRubles, budgetStep)) {
+                skipped.delivering++;
+                continue;
+              }
+
+              const recentIncrease = await ctx.runQuery(
+                internal.ruleEngine.hasRecentBudgetIncrease,
+                { ruleId: rule._id, campaignId: campaignIdStr, withinMs: 5 * 60 * 1000, currentSpent: spentToday, currentBudget: dailyLimitRubles }
+              );
+              if (recentIncrease) { skipped.dedup++; continue; }
+
+              if (maxDailyBudget && dailyLimitRubles >= maxDailyBudget) {
+                skipped.maxReached++;
+                if (rule.actions.notifyOnKeyEvents) {
+                  try {
+                    await ctx.runAction(internal.telegram.sendBudgetNotification, {
+                      userId: rule.userId, type: "max_reached" as const,
+                      campaignName: campaign.name, currentBudget: dailyLimitRubles,
+                      maxBudget: maxDailyBudget,
+                    });
+                  } catch (notifErr) {
+                    console.error(`[uz_budget] Failed to send max_reached notification:`, notifErr);
+                  }
+                }
+                continue;
+              }
+
+              const newLimit = calculateNewBudget(dailyLimitRubles, spentToday, budgetStep, maxDailyBudget);
+
+              try {
+                await ctx.runAction(internal.vkApi.setCampaignBudget, {
+                  accessToken, campaignId: campaign.id, newLimitRubles: newLimit,
+                });
+                const isFirstToday = await ctx.runQuery(
+                  internal.ruleEngine.isFirstBudgetIncreaseToday,
+                  { ruleId: rule._id, campaignId: campaignIdStr }
+                );
+                if (campaign.status !== "active" || campaign.delivery === "not_delivering") {
+                  try {
+                    const stoppedBannerIds = await ctx.runQuery(
+                      internal.ruleEngine.getStoppedBannerIdsForAccount,
+                      { accountId: args.accountId }
+                    );
+                    await ctx.runAction(internal.vkApi.resumeCampaign, {
+                      accessToken, campaignId: campaign.id,
+                      excludeBannerIds: stoppedBannerIds,
+                    });
+                  } catch (resumeErr) {
+                    console.error(`[uz_budget] Budget set OK but resume failed for campaign ${campaign.id}:`, resumeErr);
+                  }
+                }
+
+                let verifyFailed = false;
+                try {
+                  const actual = await ctx.runAction(internal.vkApi.verifyCampaignState, {
+                    accessToken, campaignId: campaign.id,
+                  });
+                  if (actual && actual.budget < newLimit) {
+                    console.warn(`[uz_budget] VERIFY FAILED: campaign ${campaign.id} budget=${actual.budget} (expected ${newLimit}), status=${actual.status}`);
+                    verifyFailed = true;
+                  }
+                } catch { /* Verification failed -- don't block */ }
+
+                await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+                  userId: rule.userId, ruleId: rule._id,
+                  accountId: args.accountId,
+                  campaignId: campaignIdStr, campaignName: campaign.name,
+                  actionType: "budget_increased" as const,
+                  oldBudget: dailyLimitRubles, newBudget: newLimit,
+                  step: newLimit - dailyLimitRubles, spentToday,
+                  ...(verifyFailed ? { error: `VK не применил изменение бюджета` } : {}),
+                });
+
+                if (rule.actions.notifyOnEveryIncrease ||
+                    (rule.actions.notifyOnKeyEvents && isFirstToday)) {
+                  try {
+                    await ctx.runAction(internal.telegram.sendBudgetNotification, {
+                      userId: rule.userId,
+                      type: isFirstToday ? ("first_increase" as const) : ("increase" as const),
+                      campaignName: campaign.name,
+                      oldBudget: dailyLimitRubles, newBudget: newLimit,
+                      step: newLimit - dailyLimitRubles,
+                    });
+                  } catch (notifErr) {
+                    console.error(`[uz_budget] Failed to send budget notification:`, notifErr);
+                  }
+                }
+                totalActions++;
+              } catch (err) {
+                console.error(`[uz_budget] Failed to increase budget for campaign ${campaign.id}:`, err);
+                await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
+                  userId: rule.userId, ruleId: rule._id,
+                  accountId: args.accountId,
+                  campaignId: campaignIdStr, campaignName: campaign.name,
+                  actionType: "budget_increased" as const,
+                  oldBudget: dailyLimitRubles, newBudget: newLimit,
+                  step: budgetStep, spentToday,
+                  error: err instanceof Error ? err.message : "Unknown error",
+                });
+              }
+            }
+          } catch (err) {
+            console.error(`[uz_budget] Error processing rule ${rule._id}:`, err);
+          }
+        }
+      })(), ACCOUNT_TIMEOUT_MS, `uz_budget account ${args.accountId}`);
+    } catch (accountErr) {
+      console.error(`[uz_budget] Account ${args.accountId} timed out or failed:`, accountErr);
+    }
+
+    // Summary log
+    const skipTotal = Object.values(skipped).reduce((a, b) => a + b, 0);
+    if (totalActions > 0 || skipTotal > 0) {
+      console.log(
+        `[uz_budget] Account ${args.accountId}: ${totalActions} increased` +
+        (skipTotal > 0
+          ? ` | skipped: ${skipped.delivering} delivering, ${skipped.dedup} dedup, ${skipped.blocked} blocked, ${skipped.maxReached} max, ${skipped.noBudget} no-budget, ${skipped.tokenErr} token-err`
+          : "")
+      );
+    }
+  },
+});
+
+/**
+ * Fan-out dispatcher for UZ budget rules. Replaces sequential checkUzBudgetRules.
+ */
+export const uzBudgetDispatch = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+      name: "uzBudgetDispatch", status: "running",
+    });
+
+    let cronError: string | undefined;
+    try {
+      const uzRules = await ctx.runQuery(internal.ruleEngine.getActiveUzRules);
+      if (uzRules.length === 0) {
+        console.log("[uzBudgetDispatch] No active UZ rules");
+        return;
+      }
+
+      // Collect unique accountIds
+      const rulesByAccount = groupRulesByAccount(uzRules as UzRule[]);
+      const accountIds = [...rulesByAccount.keys()] as Id<"adAccounts">[];
+
+      // Dispatch workers
+      await ctx.runMutation(internal.ruleEngine.dispatchUzBatch, { accountIds });
+      console.log(`[uzBudgetDispatch] Dispatched ${accountIds.length} UZ budget workers for ${uzRules.length} rules`);
+
+    } catch (err) {
+      cronError = err instanceof Error ? err.message : "Unknown error";
+      console.error("[uzBudgetDispatch] Fatal error:", cronError);
+    } finally {
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "uzBudgetDispatch",
+        status: cronError ? "failed" : "completed",
+        error: cronError,
+      });
+    }
+  },
+});

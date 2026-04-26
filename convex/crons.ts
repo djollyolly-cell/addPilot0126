@@ -3,11 +3,11 @@ import { internal } from "./_generated/api";
 
 const crons = cronJobs();
 
-// Sync ad metrics every 5 minutes
+// Sync ad metrics every 5 minutes (fan-out: dispatch + per-account workers)
 crons.interval(
   "sync-metrics",
   { minutes: 5 },
-  internal.syncMetrics.syncAll
+  internal.syncMetrics.syncDispatch
 );
 
 // Daily digest at 06:00 UTC (09:00 MSK)
@@ -80,12 +80,12 @@ crons.interval(
   internal.aiRecommendations.checkAllCampaigns
 );
 
-// UZ budget increase — independent cron, not tied to syncAll
+// UZ budget increase — fan-out: dispatch + per-account workers
 // Runs every 5 min to catch budget-exhausted campaigns quickly
 crons.interval(
   "uz-budget-increase",
   { minutes: 5 },
-  internal.ruleEngine.checkUzBudgetRules
+  internal.ruleEngine.uzBudgetDispatch
 );
 
 // UZ budget reset — every 30 min, checks user timezone for midnight reset
@@ -130,12 +130,11 @@ crons.cron(
   internal.healthCheck.runFunctionCheck
 );
 
-// Proactive token refresh — every 4 hours, refreshes tokens expiring within 12h
+// Proactive token refresh — every 2 hours (fan-out), refreshes tokens expiring within 12h
 crons.interval(
   "proactive-token-refresh",
-  { hours: 4 },
-  internal.auth.proactiveTokenRefresh,
-  {}
+  { hours: 2 },
+  internal.auth.tokenRefreshDispatch
 );
 
 // Cleanup stuck pending payments — every 2 hours
