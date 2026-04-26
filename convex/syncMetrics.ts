@@ -13,8 +13,8 @@ const ERROR_ESCALATION_MS = 2 * 60 * 60 * 1000; // 2 hours — escalate if accou
 
 // Batch worker constants
 const WORKER_COUNT = 6;
-const WORKER_TIMEOUT_MS = 540_000; // 9 min total (Convex action limit = 10 min)
-const BATCH_ACCOUNT_TIMEOUT_MS = 480_000; // 8 min per account — heavy accounts (2000+ campaigns) need 3-7 min; worker timeout (9 min) is the real guard
+const WORKER_TIMEOUT_MS = 570_000; // 9.5 min total (Convex action limit = 10 min, 30s margin)
+const BATCH_ACCOUNT_TIMEOUT_MS = 560_000; // 9 min 20s per account — heaviest account (2000+ campaigns) needs ~540s
 
 /** Permanent errors → immediate error status. Everything else is transient. */
 function isPermanentError(msg: string): boolean {
