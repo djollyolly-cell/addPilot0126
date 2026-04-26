@@ -97,6 +97,7 @@ interface BannerReport {
   leads: number;
   ctr: number;
   cpl: number;
+  cpc: number;
 }
 
 // VK Ads Группа (myTarget ad_group / campaign)
@@ -110,6 +111,7 @@ interface GroupReport {
   leads: number;
   ctr: number;
   cpl: number;
+  cpc: number;
   banners: BannerReport[];
 }
 
@@ -127,6 +129,7 @@ interface CampaignReport {
   leads: number;
   ctr: number;
   cpl: number;
+  cpc: number;
 }
 
 // Кабинет
@@ -140,6 +143,7 @@ interface AccountReport {
   leads: number;
   ctr: number;
   cpl: number;
+  cpc: number;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────
@@ -187,7 +191,12 @@ function aggregateStats(rows: MtStatRow[]) {
 function computeDerived(stats: { impressions: number; clicks: number; spent: number; leads: number }) {
   const ctr = stats.impressions > 0 ? (stats.clicks / stats.impressions) * 100 : 0;
   const cpl = stats.leads > 0 ? stats.spent / stats.leads : 0;
-  return { ctr: Math.round(ctr * 100) / 100, cpl: Math.round(cpl * 100) / 100 };
+  const cpc = stats.clicks > 0 ? stats.spent / stats.clicks : 0;
+  return {
+    ctr: Math.round(ctr * 100) / 100,
+    cpl: Math.round(cpl * 100) / 100,
+    cpc: Math.round(cpc * 100) / 100,
+  };
 }
 
 // ─── Objective labels ────────────────────────────────────────────────
@@ -358,6 +367,7 @@ function buildReport(
           leads: finalLeads,
           ctr: derived.ctr,
           cpl: derived.cpl,
+          cpc: derived.cpc,
         });
         bannerLeadsTotal += finalLeads;
       }
@@ -383,6 +393,7 @@ function buildReport(
         leads: grpLeads,
         ctr: grpDerived.ctr,
         cpl: grpDerived.cpl,
+        cpc: grpDerived.cpc,
         banners: bannerReports,
       });
     }
@@ -421,6 +432,7 @@ function buildReport(
       leads: planLeads,
       ctr: planDerived.ctr,
       cpl: planDerived.cpl,
+      cpc: planDerived.cpc,
     });
   }
 
@@ -437,6 +449,15 @@ export const getUserAccounts = internalQuery({
       .query("adAccounts")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .collect();
+  },
+});
+
+/** Get ad accounts by their IDs (for org members who see assigned accounts) */
+export const getAccountsByIds = internalQuery({
+  args: { accountIds: v.array(v.id("adAccounts")) },
+  handler: async (ctx, args) => {
+    const accounts = await Promise.all(args.accountIds.map((id) => ctx.db.get(id)));
+    return accounts.filter((a): a is NonNullable<typeof a> => a !== null);
   },
 });
 
@@ -473,6 +494,7 @@ async function buildAccountReport(
     impressions, clicks, spent, leads,
     ctr: derived.ctr,
     cpl: derived.cpl,
+    cpc: derived.cpc,
   };
 }
 
@@ -487,11 +509,14 @@ export const fetchReport = action({
     dateFrom: string;
     dateTo: string;
   }> => {
-    // Get all user's ad accounts
-    const adAccounts = await ctx.runQuery(
-      internal.reports.getUserAccounts,
+    // Get accessible accounts (respects org access control for managers)
+    const accessibleIds = await ctx.runQuery(
+      internal.accessControl.getAccessibleAccountIds,
       { userId: args.userId }
     );
+    const adAccounts = accessibleIds.length > 0
+      ? await ctx.runQuery(internal.reports.getAccountsByIds, { accountIds: accessibleIds })
+      : [];
 
     if (adAccounts.length === 0) {
       // Fallback: use global token (legacy behavior)

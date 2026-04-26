@@ -1,7 +1,7 @@
 import { v } from "convex/values";
 import { internalAction, internalMutation, internalQuery, query } from "./_generated/server";
 import { internal } from "./_generated/api";
-import type { Id } from "./_generated/dataModel";
+import type { Id, Doc } from "./_generated/dataModel";
 import type { QueryCtx, MutationCtx } from "./_generated/server";
 
 const ACTIVE_CAMPAIGN_STATUSES = ["active", "blocked", "moderation"];
@@ -713,5 +713,104 @@ export const getCurrentLoadStatus = query({
       expiredGraceStartedAt: org.expiredGraceStartedAt,
       subscriptionExpiresAt: org.subscriptionExpiresAt,
     };
+  },
+});
+
+// ─── Monthly Org Report ──────────────────────────────────────────────
+
+const MONTH_NAMES_RU = [
+  "январь", "февраль", "март", "апрель", "май", "июнь",
+  "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+];
+
+/**
+ * Cron handler: runs every 6 hours.
+ * On the 1st of each month at ~09:00 org timezone, sends monthly load unit report to owner.
+ */
+export const sendMonthlyOrgReport = internalAction({
+  args: {},
+  handler: async (ctx) => {
+    // Get all orgs with active subscription
+    const orgs: Doc<"organizations">[] = await ctx.runQuery(
+      internal.loadUnits.listActiveOrgs, {}
+    );
+    if (orgs.length === 0) return;
+
+    const now = new Date();
+
+    for (const org of orgs) {
+      const tz = org.timezone || "Europe/Moscow";
+      try {
+        const formatter = new Intl.DateTimeFormat("en-US", {
+          timeZone: tz,
+          day: "numeric",
+          hour: "numeric",
+          hour12: false,
+        });
+        const parts = formatter.formatToParts(now);
+        const day = parseInt(parts.find((p) => p.type === "day")?.value ?? "0");
+        const hour = parseInt(parts.find((p) => p.type === "hour")?.value ?? "0");
+
+        // Only on 1st of month, between 08:00–13:59 local time (to handle 6h interval)
+        if (day !== 1 || hour < 8 || hour >= 14) continue;
+
+        // Get previous month's load history
+        const prevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+        const yearMonth = `${prevMonth.getFullYear()}-${String(prevMonth.getMonth() + 1).padStart(2, "0")}`;
+        const monthName = MONTH_NAMES_RU[prevMonth.getMonth()];
+
+        const history: Doc<"loadUnitsHistory">[] = await ctx.runQuery(
+          internal.loadUnits.getMonthHistory,
+          { orgId: org._id, yearMonth }
+        );
+
+        if (history.length === 0) continue;
+
+        const units = history.map((h) => h.loadUnits);
+        const avgUnits = Math.round(units.reduce((s, u) => s + u, 0) / units.length);
+        const peakUnits = Math.max(...units);
+        const daysOver = units.filter((u) => u > org.maxLoadUnits).length;
+
+        // Get owner email
+        const owner = await ctx.runQuery(internal.users.getById, { userId: org.ownerId });
+        if (!owner?.email) continue;
+
+        await ctx.runAction(internal.email.sendMonthlyOrgReportEmail, {
+          to: owner.email,
+          orgName: org.name,
+          tier: org.subscriptionTier,
+          month: `${monthName} ${prevMonth.getFullYear()}`,
+          avgUnits,
+          peakUnits,
+          daysOver,
+          maxLoadUnits: org.maxLoadUnits,
+        });
+      } catch (err) {
+        console.error(`[loadUnits] Monthly report error for org ${org._id}:`, err);
+      }
+    }
+  },
+});
+
+/** List active organizations (with subscription) */
+export const listActiveOrgs = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const all = await ctx.db.query("organizations").collect();
+    return all.filter((o) =>
+      o.subscriptionExpiresAt && o.subscriptionExpiresAt > Date.now()
+    );
+  },
+});
+
+/** Get load units history for a given org and year-month prefix */
+export const getMonthHistory = internalQuery({
+  args: { orgId: v.id("organizations"), yearMonth: v.string() },
+  handler: async (ctx, args) => {
+    const all = await ctx.db
+      .query("loadUnitsHistory")
+      .withIndex("by_orgId_date", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    return all.filter((h) => h.date.startsWith(args.yearMonth));
   },
 });

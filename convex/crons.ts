@@ -224,4 +224,11 @@ crons.cron(
   internal.communityProfiles.dailyValidateAll
 );
 
+// Monthly org report — runs every 6 hours, checks org timezone for 1st of month 08:00-13:59
+crons.interval(
+  "monthly-org-report",
+  { hours: 6 },
+  internal.loadUnits.sendMonthlyOrgReport
+);
+
 export default crons;

@@ -1261,11 +1261,63 @@ export const markNotificationFailed = internalMutation({
   },
 });
 
+/** Format rule event as HTML message for Telegram */
+function formatRuleEvent(event: {
+  ruleName: string;
+  adName: string;
+  campaignName?: string;
+  reason: string;
+  actionType: string;
+  savedAmount: number;
+  metrics: { spent: number; leads: number; cpl?: number; ctr?: number };
+}): string {
+  const icon = event.actionType === "stopped" || event.actionType === "stopped_and_notified" ? "🛑" : "📊";
+  const action = event.actionType === "stopped" || event.actionType === "stopped_and_notified"
+    ? "Объявление остановлено" : "Уведомление";
+  let text = `${icon} <b>${action}</b>\n\n`;
+  text += `Правило: ${event.ruleName}\n`;
+  text += `Объявление: ${event.adName}\n`;
+  if (event.campaignName) text += `Кампания: ${event.campaignName}\n`;
+  text += `Причина: ${event.reason}\n`;
+  text += `Расход: ${event.metrics.spent.toLocaleString("ru-RU")} ₽`;
+  if (event.metrics.cpl) text += ` | CPL: ${event.metrics.cpl.toLocaleString("ru-RU")} ₽`;
+  if (event.savedAmount > 0) text += `\nСэкономлено: ${event.savedAmount.toLocaleString("ru-RU")} ₽`;
+  return text;
+}
+
+/** Get Telegram chatIds of org managers who have a specific account assigned */
+export const getManagerChatIdsForAccount = internalQuery({
+  args: {
+    accountId: v.id("adAccounts"),
+    excludeUserId: v.id("users"),
+  },
+  handler: async (ctx, args): Promise<string[]> => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account?.orgId) return [];
+
+    const members = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", account.orgId!))
+      .collect();
+
+    const chatIds: string[] = [];
+    for (const m of members) {
+      if (m.status !== "active" || m.role !== "manager") continue;
+      if (String(m.userId) === String(args.excludeUserId)) continue;
+      if (!m.assignedAccountIds.some((id) => String(id) === String(args.accountId))) continue;
+      const user = await ctx.db.get(m.userId);
+      if (user?.telegramChatId) chatIds.push(user.telegramChatId);
+    }
+    return chatIds;
+  },
+});
+
 /**
  * Send a rule notification via Telegram.
  * - critical priority → send immediately
  * - standard priority → store as pending, flush grouped later
  * - missing chatId → skip silently
+ * - also notifies org managers with assigned account access
  */
 export const sendRuleNotification = internalAction({
   args: {
@@ -1290,8 +1342,31 @@ export const sendRuleNotification = internalAction({
     }),
     priority: v.union(v.literal("critical"), v.literal("standard")),
     actionLogId: v.optional(v.string()),
+    accountId: v.optional(v.id("adAccounts")),
   },
   handler: async (ctx, args) => {
+    // Notify org managers who have this account assigned (fan-out)
+    if (args.accountId) {
+      try {
+        const managerChatIds = await ctx.runQuery(
+          internal.telegram.getManagerChatIdsForAccount,
+          { accountId: args.accountId, excludeUserId: args.userId }
+        );
+        for (const mgrChatId of managerChatIds) {
+          try {
+            await ctx.runAction(internal.telegram.sendMessage, {
+              chatId: mgrChatId,
+              text: formatRuleEvent(args.event),
+            });
+          } catch {
+            // Non-fatal: manager notification failure shouldn't block owner
+          }
+        }
+      } catch {
+        // Non-fatal
+      }
+    }
+
     // Check if user has Telegram connected
     const chatId = await ctx.runQuery(internal.telegram.getUserChatId, {
       userId: args.userId,

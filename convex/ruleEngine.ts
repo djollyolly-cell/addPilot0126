@@ -2038,6 +2038,7 @@ export const checkRulesForAccount = internalAction({
               internal.telegram.sendRuleNotification,
               {
                 userId: account.userId,
+                accountId: targetAccountId,
                 event: {
                   ruleName: rule.name,
                   adName: `Ad ${adId}`,
