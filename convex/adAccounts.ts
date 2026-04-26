@@ -1707,6 +1707,69 @@ export const upsertAd = mutation({
   },
 });
 
+/** Batch upsert ads — includes campaign lookup inside mutation to eliminate separate queries */
+export const upsertAdsBatch = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    ads: v.array(v.object({
+      vkAdId: v.string(),
+      campaignVkId: v.string(),
+      name: v.string(),
+      status: v.string(),
+      approved: v.optional(v.string()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    // Cache campaign lookups within this batch (many ads share the same campaign)
+    const campaignCache = new Map<string, string | null>();
+
+    for (const ad of args.ads) {
+      // Lookup campaign (with cache)
+      let campaignId = campaignCache.get(ad.campaignVkId);
+      if (campaignId === undefined) {
+        const campaign = await ctx.db
+          .query("campaigns")
+          .withIndex("by_accountId_vkCampaignId", (q) =>
+            q.eq("accountId", args.accountId).eq("vkCampaignId", ad.campaignVkId)
+          )
+          .first();
+        campaignId = campaign?._id ?? null;
+        campaignCache.set(ad.campaignVkId, campaignId);
+      }
+      if (!campaignId) continue;
+
+      const existing = await ctx.db
+        .query("ads")
+        .withIndex("by_accountId_vkAdId", (q) =>
+          q.eq("accountId", args.accountId).eq("vkAdId", ad.vkAdId)
+        )
+        .first();
+
+      if (existing) {
+        const patch: Record<string, unknown> = {
+          name: ad.name,
+          status: ad.status,
+          updatedAt: now,
+        };
+        if (ad.approved !== undefined) patch.approved = ad.approved;
+        await ctx.db.patch(existing._id, patch);
+      } else {
+        await ctx.db.insert("ads", {
+          accountId: args.accountId,
+          campaignId: campaignId as any,
+          vkAdId: ad.vkAdId,
+          name: ad.name,
+          status: ad.status,
+          approved: ad.approved,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+  },
+});
+
 export const updateSyncTime = mutation({
   args: {
     accountId: v.id("adAccounts"),

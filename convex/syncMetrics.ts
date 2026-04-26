@@ -271,34 +271,35 @@ export const syncAll = internalAction({
           }
         }
 
-        // Auto-upsert ads from getMtBanners data
-        try {
+        // Auto-upsert ads from getMtBanners data — batched
+        {
+          const adBatch: { vkAdId: string; campaignVkId: string; name: string; status: string; approved?: string }[] = [];
           for (const banner of banners) {
-            const campaignVkId = String(banner.campaign_id);
-            const campaign = await ctx.runQuery(api.adAccounts.getCampaignByVkId, {
-              accountId: account._id,
-              vkCampaignId: campaignVkId,
+            adBatch.push({
+              vkAdId: String(banner.id),
+              campaignVkId: String(banner.campaign_id),
+              name: banner.textblocks?.title?.text || `Баннер ${banner.id}`,
+              status: banner.status,
+              approved: banner.moderation_status,
             });
-            if (campaign) {
-              const bannerName = banner.textblocks?.title?.text || `Баннер ${banner.id}`;
-              await ctx.runMutation(api.adAccounts.upsertAd, {
-                accountId: account._id,
-                campaignId: campaign._id,
-                vkAdId: String(banner.id),
-                name: bannerName,
-                status: banner.status,
-                approved: banner.moderation_status,
-              });
+          }
+          if (adBatch.length > 0) {
+            try {
+              const CHUNK = 200;
+              for (let i = 0; i < adBatch.length; i += CHUNK) {
+                await ctx.runMutation(internal.adAccounts.upsertAdsBatch, {
+                  accountId: account._id,
+                  ads: adBatch.slice(i, i + CHUNK),
+                });
+              }
+            } catch (err) {
+              console.error(`[syncAll] upsertAdsBatch failed for «${account.name}»:`, err);
+              try { await ctx.runMutation(internal.systemLogger.log, {
+                accountId: account._id, level: "warn", source: "syncMetrics",
+                message: `Auto-upsert ads batch failed: ${String(err).slice(0, 180)}`,
+              }); } catch { /* non-critical */ }
             }
           }
-        } catch (err) {
-          console.error(`[syncAll] upsertAds failed for «${account.name}»:`, err);
-          try { await ctx.runMutation(internal.systemLogger.log, {
-            accountId: account._id,
-            level: "warn",
-            source: "syncMetrics",
-            message: `Auto-upsert ads failed: ${String(err).slice(0, 180)}`,
-          }); } catch { /* non-critical */ }
         }
 
         // Auto-link videos to banners by matching content.video_id with videos.vkMediaId
@@ -352,28 +353,21 @@ export const syncAll = internalAction({
           return;
         }
 
-        // Save metrics for each ad (banner)
+        // Save metrics for each ad (banner) — batched
+        const realtimeBatchAll: { adId: string; spent: number; leads: number; impressions: number; clicks: number }[] = [];
+        const dailyBatchAll: { adId: string; campaignId?: string; date: string; impressions: number; clicks: number; spent: number; leads: number; vkResult?: number; campaignType?: string; formEvents?: number; reach?: number }[] = [];
+
         for (const item of stats) {
           const adId = String(item.id);
-
           for (const row of item.rows) {
-            // myTarget API v2 nests metrics under row.base
             const base = row.base;
             const spent = parseFloat(base.spent || "0") || 0;
             const impressions = base.shows || 0;
             const clicks = base.clicks || 0;
-
-            // Count leads from base.goals (handle both number and string)
             const baseGoals = Number(base.goals) || 0;
-
-            // Count leads from base.vk.result / base.vk.goals
-            // VK Ads reports campaign results (joins, leads, etc.) in this nested object
             const vkData = base.vk;
             const vkResult = vkData ? (Number(vkData.result) || 0) : 0;
             const vkGoals = vkData ? (Number(vkData.goals) || 0) : 0;
-
-            // Count leads from events.sending_form only (lead form submissions)
-            // Other events (moving_into_group, clicks_on_external_url, likes, etc.) are NOT leads
             let eventsGoals = 0;
             const events = row.events;
             if (events && typeof events === "object") {
@@ -384,42 +378,43 @@ export const syncAll = internalAction({
                 eventsGoals = Number((sendingForm as { count?: number | string }).count) || 0;
               }
             }
-
-            // Count leads from Lead Ads API (separate endpoint for VK lead forms)
             const leadAdsCount = leadCounts[adId] || 0;
-
-            // Use the maximum across all sources (4 sources now)
             const leads = Math.max(baseGoals, vkResult, vkGoals, eventsGoals, leadAdsCount);
 
             console.log(
               `[syncMetrics] Ad ${adId}: clicks=${clicks}, base.goals=${baseGoals}, vk.result=${vkResult}, vk.goals=${vkGoals}, events=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
             );
 
-            // Save realtime snapshot
-            await ctx.runMutation(internal.metrics.saveRealtime, {
-              accountId: account._id,
-              adId,
-              spent,
-              leads,
-              impressions,
-              clicks,
-            });
+            realtimeBatchAll.push({ adId, spent, leads, impressions, clicks });
 
-            // Save / update daily aggregate
             const adGroupId = bannerCampaignMap.get(adId);
-            await ctx.runMutation(internal.metrics.saveDaily, {
-              accountId: account._id,
-              adId,
+            dailyBatchAll.push({
+              adId, date: row.date, impressions, clicks, spent, leads,
               campaignId: adGroupId,
-              date: row.date,
-              impressions,
-              clicks,
-              spent,
-              leads,
               vkResult: vkResult > 0 ? vkResult : undefined,
               campaignType: adGroupId ? campaignTypeMap.get(adGroupId) : undefined,
               formEvents: eventsGoals > 0 ? eventsGoals : undefined,
               reach: base.reach,
+            });
+          }
+        }
+
+        // Flush metrics batches
+        if (realtimeBatchAll.length > 0) {
+          const CHUNK = 200;
+          for (let i = 0; i < realtimeBatchAll.length; i += CHUNK) {
+            await ctx.runMutation(internal.metrics.saveRealtimeBatch, {
+              accountId: account._id,
+              items: realtimeBatchAll.slice(i, i + CHUNK),
+            });
+          }
+        }
+        if (dailyBatchAll.length > 0) {
+          const CHUNK = 100;
+          for (let i = 0; i < dailyBatchAll.length; i += CHUNK) {
+            await ctx.runMutation(internal.metrics.saveDailyBatch, {
+              accountId: account._id,
+              items: dailyBatchAll.slice(i, i + CHUNK),
             });
           }
         }
@@ -1036,28 +1031,35 @@ async function syncSingleAccount(
           }
         }
 
-        // Auto-upsert ads from getMtBanners data
-        try {
+        // Auto-upsert ads from getMtBanners data — batched
+        {
+          const adBatch: { vkAdId: string; campaignVkId: string; name: string; status: string; approved?: string }[] = [];
           for (const banner of banners) {
-            const campaignVkId = String(banner.campaign_id);
-            const campaign = await ctx.runQuery(api.adAccounts.getCampaignByVkId, {
-              accountId: account._id, vkCampaignId: campaignVkId,
+            adBatch.push({
+              vkAdId: String(banner.id),
+              campaignVkId: String(banner.campaign_id),
+              name: banner.textblocks?.title?.text || `Баннер ${banner.id}`,
+              status: banner.status,
+              approved: banner.moderation_status,
             });
-            if (campaign) {
-              const bannerName = banner.textblocks?.title?.text || `Баннер ${banner.id}`;
-              await ctx.runMutation(api.adAccounts.upsertAd, {
-                accountId: account._id, campaignId: campaign._id,
-                vkAdId: String(banner.id), name: bannerName,
-                status: banner.status, approved: banner.moderation_status,
-              });
+          }
+          if (adBatch.length > 0) {
+            try {
+              const CHUNK = 200;
+              for (let i = 0; i < adBatch.length; i += CHUNK) {
+                await ctx.runMutation(internal.adAccounts.upsertAdsBatch, {
+                  accountId: account._id,
+                  ads: adBatch.slice(i, i + CHUNK),
+                });
+              }
+            } catch (err) {
+              console.error(`[syncBatch] upsertAdsBatch failed for "${account.name}":`, err);
+              try { await ctx.runMutation(internal.systemLogger.log, {
+                accountId: account._id, level: "warn", source: "syncMetrics",
+                message: `Auto-upsert ads batch failed: ${String(err).slice(0, 180)}`,
+              }); } catch { /* non-critical */ }
             }
           }
-        } catch (err) {
-          console.error(`[syncBatch] upsertAds failed for "${account.name}":`, err);
-          try { await ctx.runMutation(internal.systemLogger.log, {
-            accountId: account._id, level: "warn", source: "syncMetrics",
-            message: `Auto-upsert ads failed: ${String(err).slice(0, 180)}`,
-          }); } catch { /* non-critical */ }
         }
 
         // Auto-link videos to banners
@@ -1103,7 +1105,10 @@ async function syncSingleAccount(
           return;
         }
 
-        // Save metrics for each ad
+        // Save metrics for each ad — batched
+        const realtimeBatch: { adId: string; spent: number; leads: number; impressions: number; clicks: number }[] = [];
+        const dailyBatch: { adId: string; campaignId?: string; date: string; impressions: number; clicks: number; spent: number; leads: number; vkResult?: number; campaignType?: string; formEvents?: number; reach?: number }[] = [];
+
         for (const item of stats) {
           const adId = String(item.id);
           for (const row of item.rows) {
@@ -1132,19 +1137,36 @@ async function syncSingleAccount(
               `[syncBatch] Ad ${adId}: clicks=${clicks}, base.goals=${baseGoals}, vk.result=${vkResult}, vk.goals=${vkGoals}, events=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
             );
 
-            await ctx.runMutation(internal.metrics.saveRealtime, {
-              accountId: account._id, adId, spent, leads, impressions, clicks,
-            });
+            realtimeBatch.push({ adId, spent, leads, impressions, clicks });
 
             const adGroupId = bannerCampaignMap.get(adId);
-            await ctx.runMutation(internal.metrics.saveDaily, {
-              accountId: account._id, adId,
-              campaignId: adGroupId, date: row.date,
-              impressions, clicks, spent, leads,
+            dailyBatch.push({
+              adId, date: row.date, impressions, clicks, spent, leads,
+              campaignId: adGroupId,
               vkResult: vkResult > 0 ? vkResult : undefined,
               campaignType: adGroupId ? campaignTypeMap.get(adGroupId) : undefined,
               formEvents: eventsGoals > 0 ? eventsGoals : undefined,
               reach: base.reach,
+            });
+          }
+        }
+
+        // Flush metrics batches
+        if (realtimeBatch.length > 0) {
+          const CHUNK = 200;
+          for (let i = 0; i < realtimeBatch.length; i += CHUNK) {
+            await ctx.runMutation(internal.metrics.saveRealtimeBatch, {
+              accountId: account._id,
+              items: realtimeBatch.slice(i, i + CHUNK),
+            });
+          }
+        }
+        if (dailyBatch.length > 0) {
+          const CHUNK = 100;
+          for (let i = 0; i < dailyBatch.length; i += CHUNK) {
+            await ctx.runMutation(internal.metrics.saveDailyBatch, {
+              accountId: account._id,
+              items: dailyBatch.slice(i, i + CHUNK),
             });
           }
         }

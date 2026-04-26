@@ -101,6 +101,104 @@ export const saveDaily = internalMutation({
   },
 });
 
+/** Batch save realtime metrics — one mutation for all ads in an account */
+export const saveRealtimeBatch = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    items: v.array(v.object({
+      adId: v.string(),
+      spent: v.number(),
+      leads: v.number(),
+      impressions: v.number(),
+      clicks: v.number(),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    for (const item of args.items) {
+      await ctx.db.insert("metricsRealtime", {
+        accountId: args.accountId,
+        adId: item.adId,
+        timestamp: now,
+        spent: item.spent,
+        leads: item.leads,
+        impressions: item.impressions,
+        clicks: item.clicks,
+      });
+    }
+  },
+});
+
+/** Batch save daily metrics — one mutation for all ads in an account */
+export const saveDailyBatch = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    items: v.array(v.object({
+      adId: v.string(),
+      campaignId: v.optional(v.string()),
+      date: v.string(),
+      impressions: v.number(),
+      clicks: v.number(),
+      spent: v.number(),
+      leads: v.number(),
+      vkResult: v.optional(v.number()),
+      campaignType: v.optional(v.string()),
+      formEvents: v.optional(v.number()),
+      reach: v.optional(v.number()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    for (const item of args.items) {
+      const cpl = item.leads > 0 ? item.spent / item.leads : undefined;
+      const ctr = item.impressions > 0 ? (item.clicks / item.impressions) * 100 : undefined;
+      const cpc = item.clicks > 0 ? item.spent / item.clicks : undefined;
+
+      const existing = await ctx.db
+        .query("metricsDaily")
+        .withIndex("by_adId_date", (q) =>
+          q.eq("adId", item.adId).eq("date", item.date)
+        )
+        .first();
+
+      if (existing) {
+        const patch: Record<string, unknown> = {
+          impressions: item.impressions,
+          clicks: item.clicks,
+          spent: item.spent,
+          leads: item.leads,
+        };
+        if (item.vkResult !== undefined) patch.vkResult = item.vkResult;
+        if (item.campaignType !== undefined) patch.campaignType = item.campaignType;
+        if (item.formEvents !== undefined) patch.formEvents = item.formEvents;
+        if (item.campaignId !== undefined) patch.campaignId = item.campaignId;
+        if (item.reach !== undefined) patch.reach = item.reach;
+        if (cpl !== undefined) patch.cpl = cpl;
+        if (ctr !== undefined) patch.ctr = ctr;
+        if (cpc !== undefined) patch.cpc = cpc;
+        await ctx.db.patch(existing._id, patch);
+      } else {
+        await ctx.db.insert("metricsDaily", {
+          accountId: args.accountId,
+          adId: item.adId,
+          campaignId: item.campaignId,
+          date: item.date,
+          impressions: item.impressions,
+          clicks: item.clicks,
+          spent: item.spent,
+          leads: item.leads,
+          vkResult: item.vkResult,
+          campaignType: item.campaignType,
+          formEvents: item.formEvents,
+          reach: item.reach,
+          cpl,
+          ctr,
+          cpc,
+        });
+      }
+    }
+  },
+});
+
 // Public mutation wrappers for testing (delegate to internal)
 export const saveRealtimePublic = mutation({
   args: {
