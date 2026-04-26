@@ -508,6 +508,199 @@ describe("users", () => {
       const user = await t.query(api.users.get, { id: userId });
       expect(user).toBeNull();
     });
+
+    test("cascade deletes telegramLinks, payments, creatives, videos", async () => {
+      const t = convexTest(schema);
+
+      const userId = await t.mutation(api.users.create, {
+        email: "cascade@example.com",
+        vkId: "cascade_test",
+      });
+
+      // Create related records via raw DB insert
+      await t.run(async (ctx) => {
+        await ctx.db.insert("telegramLinks", {
+          userId,
+          token: "tg_token_123",
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("payments", {
+          userId,
+          tier: "start" as const,
+          orderId: "order_cascade",
+          token: "tok_cascade",
+          amount: 1290,
+          currency: "BYN",
+          status: "completed" as const,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("creatives", {
+          userId,
+          prompt: "test prompt",
+          style: "cinematic",
+          status: "completed" as const,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("videos", {
+          userId,
+          fileName: "test.mp4",
+          storageId: "storage_123" as any,
+          uploadStatus: "completed" as const,
+          createdAt: Date.now(),
+        });
+      });
+
+      // Verify records exist
+      const beforeLinks = await t.run(async (ctx) =>
+        ctx.db.query("telegramLinks").withIndex("by_userId", (q) => q.eq("userId", userId)).collect()
+      );
+      expect(beforeLinks).toHaveLength(1);
+
+      // Delete user
+      await t.mutation(api.users.deleteUser, { userId });
+
+      // Verify all cascade-deleted
+      const afterLinks = await t.run(async (ctx) =>
+        ctx.db.query("telegramLinks").withIndex("by_userId", (q) => q.eq("userId", userId)).collect()
+      );
+      const afterPayments = await t.run(async (ctx) =>
+        ctx.db.query("payments").withIndex("by_userId", (q) => q.eq("userId", userId)).collect()
+      );
+      const afterCreatives = await t.run(async (ctx) =>
+        ctx.db.query("creatives").withIndex("by_userId", (q) => q.eq("userId", userId)).collect()
+      );
+      const afterVideos = await t.run(async (ctx) =>
+        ctx.db.query("videos").withIndex("by_userId", (q) => q.eq("userId", userId)).collect()
+      );
+
+      expect(afterLinks).toHaveLength(0);
+      expect(afterPayments).toHaveLength(0);
+      expect(afterCreatives).toHaveLength(0);
+      expect(afterVideos).toHaveLength(0);
+    });
+
+    test("cascade deletes owned organization + members + invites", async () => {
+      const t = convexTest(schema);
+
+      const ownerId = await t.mutation(api.users.create, {
+        email: "owner@agency.com",
+        vkId: "owner_org",
+      });
+
+      // Create org + member + invite via raw DB
+      const orgId = await t.run(async (ctx) => {
+        const oid = await ctx.db.insert("organizations", {
+          name: "Test Agency",
+          ownerId,
+          subscriptionTier: "agency_m" as const,
+          maxLoadUnits: 60,
+          currentLoadUnits: 0,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("orgMembers", {
+          orgId: oid,
+          userId: ownerId,
+          role: "owner" as const,
+          permissions: [],
+          assignedAccountIds: [],
+          status: "active" as const,
+          createdAt: Date.now(),
+        });
+        await ctx.db.insert("orgInvites", {
+          orgId: oid,
+          email: "manager@agency.com",
+          permissions: ["rules", "reports"],
+          assignedAccountIds: [],
+          invitedBy: ownerId,
+          token: "invite_token_123",
+          status: "pending" as const,
+          createdAt: Date.now(),
+          expiresAt: Date.now() + 7 * 24 * 60 * 60 * 1000,
+        });
+        await ctx.db.insert("loadUnitsHistory", {
+          orgId: oid,
+          date: "2026-04-26",
+          loadUnits: 5,
+          activeGroupsByAccount: [],
+          capturedAt: Date.now(),
+        });
+        return oid;
+      });
+
+      // Delete owner
+      await t.mutation(api.users.deleteUser, { userId: ownerId });
+
+      // Verify org + members + invites + loadHistory all deleted
+      const afterOrg = await t.run(async (ctx) => ctx.db.get(orgId));
+      const afterMembers = await t.run(async (ctx) =>
+        ctx.db.query("orgMembers").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect()
+      );
+      const afterInvites = await t.run(async (ctx) =>
+        ctx.db.query("orgInvites").withIndex("by_orgId", (q) => q.eq("orgId", orgId)).collect()
+      );
+      const afterLoad = await t.run(async (ctx) =>
+        ctx.db.query("loadUnitsHistory").withIndex("by_orgId_date", (q) => q.eq("orgId", orgId)).collect()
+      );
+
+      expect(afterOrg).toBeNull();
+      expect(afterMembers).toHaveLength(0);
+      expect(afterInvites).toHaveLength(0);
+      expect(afterLoad).toHaveLength(0);
+    });
+
+    test("cascade deletes aiCampaigns + aiBanners + aiRecommendations", async () => {
+      const t = convexTest(schema);
+
+      const userId = await t.mutation(api.users.create, {
+        email: "ai@example.com",
+        vkId: "ai_cascade",
+      });
+
+      const accountId = await t.mutation(api.adAccounts.connect, {
+        userId,
+        vkAccountId: "AI_ACC",
+        name: "AI Cabinet",
+        accessToken: "tok_ai",
+      });
+
+      // Create aiCampaign → aiBanner + aiRecommendation
+      await t.run(async (ctx) => {
+        const campaignId = await ctx.db.insert("aiCampaigns", {
+          userId,
+          accountId,
+          name: "AI Campaign",
+          targetUrl: "https://example.com",
+          objective: "traffic" as const,
+          status: "draft" as const,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        await ctx.db.insert("aiBanners", {
+          campaignId,
+          title: "Banner",
+          text: "Text",
+          isSelected: true,
+          status: "draft" as const,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+        await ctx.db.insert("aiRecommendations", {
+          campaignId,
+          type: "increase_budget",
+          message: "Increase budget",
+          status: "pending" as const,
+          createdAt: Date.now(),
+        });
+      });
+
+      await t.mutation(api.users.deleteUser, { userId });
+
+      // All should be gone
+      const campaigns = await t.run(async (ctx) =>
+        ctx.db.query("aiCampaigns").withIndex("by_userId", (q) => q.eq("userId", userId)).collect()
+      );
+      expect(campaigns).toHaveLength(0);
+    });
   });
 
   describe("upsertFromVk (VK token storage)", () => {

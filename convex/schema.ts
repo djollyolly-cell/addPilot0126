@@ -1005,7 +1005,7 @@ export default defineSchema({
     orgId: v.optional(v.id("organizations")),    // null = available to all agency tiers
     availableTiers: v.array(v.string()),         // ["agency_m", "agency_l", "agency_xl"]
     requiredMetrics: v.array(v.string()),
-    configSchema: v.any(),                       // JSON Schema for UI form
+    configSchema: v.string(),                     // JSON Schema stringified (validated at write time)
     createdAt: v.number(),
   })
     .index("by_code", ["code"])

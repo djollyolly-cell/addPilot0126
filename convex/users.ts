@@ -669,6 +669,171 @@ export const deleteUser = mutation({
       await ctx.db.delete(tmpl._id);
     }
 
+    // Delete telegram links
+    const telegramLinks = await ctx.db
+      .query("telegramLinks")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const link of telegramLinks) {
+      await ctx.db.delete(link._id);
+    }
+
+    // Delete payments
+    const payments = await ctx.db
+      .query("payments")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const payment of payments) {
+      await ctx.db.delete(payment._id);
+    }
+
+    // Delete creatives
+    const creatives = await ctx.db
+      .query("creatives")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const creative of creatives) {
+      await ctx.db.delete(creative._id);
+    }
+
+    // Delete videos
+    const videos = await ctx.db
+      .query("videos")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const video of videos) {
+      await ctx.db.delete(video._id);
+    }
+
+    // Delete AI generations
+    const aiGenerations = await ctx.db
+      .query("aiGenerations")
+      .withIndex("by_userId_type", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const gen of aiGenerations) {
+      await ctx.db.delete(gen._id);
+    }
+
+    // Delete AI campaigns + cascade aiBanners + aiRecommendations
+    const aiCampaigns = await ctx.db
+      .query("aiCampaigns")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const campaign of aiCampaigns) {
+      const banners = await ctx.db
+        .query("aiBanners")
+        .withIndex("by_campaignId", (q) => q.eq("campaignId", campaign._id))
+        .collect();
+      for (const banner of banners) {
+        await ctx.db.delete(banner._id);
+      }
+      const recommendations = await ctx.db
+        .query("aiRecommendations")
+        .withIndex("by_campaignId", (q) => q.eq("campaignId", campaign._id))
+        .collect();
+      for (const rec of recommendations) {
+        await ctx.db.delete(rec._id);
+      }
+      await ctx.db.delete(campaign._id);
+    }
+
+    // Delete user notifications
+    const userNotifications = await ctx.db
+      .query("userNotifications")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const notif of userNotifications) {
+      await ctx.db.delete(notif._id);
+    }
+
+    // Delete agency credentials
+    const agencyCredentials = await ctx.db
+      .query("agencyCredentials")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const cred of agencyCredentials) {
+      await ctx.db.delete(cred._id);
+    }
+
+    // Delete audit log entries
+    const auditLogs = await ctx.db
+      .query("auditLog")
+      .withIndex("by_userId_createdAt", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const entry of auditLogs) {
+      await ctx.db.delete(entry._id);
+    }
+
+    // Delete admin alert settings
+    const alertSettings = await ctx.db
+      .query("adminAlertSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .first();
+    if (alertSettings) {
+      await ctx.db.delete(alertSettings._id);
+    }
+
+    // Delete referrals (both as referrer and referred)
+    const referralsAsReferrer = await ctx.db
+      .query("referrals")
+      .withIndex("by_referrerId", (q) => q.eq("referrerId", args.userId))
+      .collect();
+    for (const ref of referralsAsReferrer) {
+      await ctx.db.delete(ref._id);
+    }
+    const referralsAsReferred = await ctx.db
+      .query("referrals")
+      .withIndex("by_referredId", (q) => q.eq("referredId", args.userId))
+      .collect();
+    for (const ref of referralsAsReferred) {
+      await ctx.db.delete(ref._id);
+    }
+
+    // Delete org memberships
+    const orgMemberships = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const membership of orgMemberships) {
+      await ctx.db.delete(membership._id);
+    }
+
+    // If user owns an organization — delete org + all members + invites
+    const ownedOrgs = await ctx.db
+      .query("organizations")
+      .withIndex("by_ownerId", (q) => q.eq("ownerId", args.userId))
+      .collect();
+    for (const org of ownedOrgs) {
+      // Delete remaining org members (user's own membership already deleted above)
+      const members = await ctx.db
+        .query("orgMembers")
+        .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+        .collect();
+      for (const member of members) {
+        if (member.userId !== args.userId) {
+          await ctx.db.delete(member._id);
+        }
+      }
+      // Delete all org invites
+      const invites = await ctx.db
+        .query("orgInvites")
+        .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+        .collect();
+      for (const invite of invites) {
+        await ctx.db.delete(invite._id);
+      }
+      // Delete load units history
+      const loadHistory = await ctx.db
+        .query("loadUnitsHistory")
+        .withIndex("by_orgId_date", (q) => q.eq("orgId", org._id))
+        .collect();
+      for (const entry of loadHistory) {
+        await ctx.db.delete(entry._id);
+      }
+      // Delete the organization itself
+      await ctx.db.delete(org._id);
+    }
+
     // Finally delete the user
     await ctx.db.delete(args.userId);
 
