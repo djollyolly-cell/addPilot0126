@@ -24,7 +24,7 @@ export function CommunityProfileModal({
 }: {
   userId: Id<"users">;
   existingProfileId?: Id<"communityProfiles">;
-  existingProfile?: { vkGroupId: number; vkGroupName: string; vkGroupAvatarUrl?: string };
+  existingProfile?: { vkGroupId: number; vkGroupName: string; vkGroupAvatarUrl?: string; hasSenlerKey?: boolean };
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -33,7 +33,7 @@ export function CommunityProfileModal({
   const [step, setStep] = useState<Step>(isEditing ? "senler" : "vk_token");
   const [vkToken, setVkToken] = useState("");
   const [senlerKey, setSenlerKey] = useState("");
-  const [skipSenler, setSkipSenler] = useState(true);
+  const [skipSenler, setSkipSenler] = useState(isEditing ? !existingProfile?.hasSenlerKey : true);
   const [validated, setValidated] = useState<ValidatedGroup | null>(
     isEditing && existingProfile
       ? { vkGroupId: existingProfile.vkGroupId, vkGroupName: existingProfile.vkGroupName, vkGroupAvatarUrl: existingProfile.vkGroupAvatarUrl }
