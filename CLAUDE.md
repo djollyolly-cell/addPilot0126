@@ -60,6 +60,7 @@ Detailed rules are in `.claude/rules/`:
 - After adding/renaming files in `convex/` — `_generated/api.ts` must be in sync; typecheck catches missing `internal.*` references.
 - Check source files for encoding issues (broken UTF-8 characters like `Но��еров`).
 - **ОБЯЗАТЕЛЬНО: `npm run test` перед каждым коммитом.** Все тесты должны проходить. Если тест падает — не коммитить, а починить. Если изменение затрагивает UI-компонент с несколькими сценариями (create/edit, разные роли, разные состояния) — проверить что существующие тесты покрывают все сценарии, при отсутствии — написать недостающие тесты ДО коммита.
+- **Companion-sync check при мутациях:** При изменении/создании мутации на сущность с companion-таблицей (rules→rotationState, rules→budgetManageState) — перечислить ВСЕ мутации этой сущности (create/update/toggle/delete) и убедиться что каждая синхронизирует companion. Верификация: `grep -n "scheduler.runAfter.*videoRotation" convex/rules.ts` — количество вызовов должно покрывать все мутации. Если мутация не вызывает companion — обосновать почему.
 
 ## Feature Implementation Checks
 
