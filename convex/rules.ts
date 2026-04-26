@@ -557,6 +557,13 @@ export const update = mutation({
     resetDaily: v.optional(v.boolean()),
     // cpc_limit specific
     minSpent: v.optional(v.number()),
+    // video_rotation specific
+    slotDurationHours: v.optional(v.number()),
+    rotationDailyBudget: v.optional(v.number()),
+    rotationQuietHoursEnabled: v.optional(v.boolean()),
+    rotationQuietHoursStart: v.optional(v.string()),
+    rotationQuietHoursEnd: v.optional(v.string()),
+    campaignOrder: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args) => {
     const rule = await ctx.db.get(args.ruleId);
@@ -657,6 +664,36 @@ export const update = mutation({
       }
       if (args.resetDaily !== undefined) {
         currentConditions.resetDaily = args.resetDaily;
+      }
+      patch.conditions = currentConditions;
+    }
+
+    // Update video_rotation fields
+    if (rule.type === "video_rotation") {
+      const currentConditions = (patch.conditions as Record<string, unknown>) || { ...rule.conditions };
+      if (args.slotDurationHours !== undefined) {
+        if (args.slotDurationHours < 1 || args.slotDurationHours > 24 || !Number.isInteger(args.slotDurationHours)) {
+          throw new Error("Время слота должно быть целым числом от 1 до 24 часов");
+        }
+        currentConditions.slotDurationHours = args.slotDurationHours;
+      }
+      if (args.rotationDailyBudget !== undefined) {
+        if (args.rotationDailyBudget <= 0) {
+          throw new Error("Бюджет на сутки должен быть больше 0");
+        }
+        currentConditions.dailyBudget = args.rotationDailyBudget;
+      }
+      if (args.rotationQuietHoursEnabled !== undefined) {
+        currentConditions.quietHoursEnabled = args.rotationQuietHoursEnabled;
+      }
+      if (args.rotationQuietHoursStart !== undefined) {
+        currentConditions.quietHoursStart = args.rotationQuietHoursStart;
+      }
+      if (args.rotationQuietHoursEnd !== undefined) {
+        currentConditions.quietHoursEnd = args.rotationQuietHoursEnd;
+      }
+      if (args.campaignOrder !== undefined) {
+        currentConditions.campaignOrder = args.campaignOrder;
       }
       patch.conditions = currentConditions;
     }

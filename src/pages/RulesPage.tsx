@@ -419,6 +419,11 @@ export function RulesPage() {
                 maxDailyBudget: editingRule.conditions.maxDailyBudget,
                 resetDaily: editingRule.conditions.resetDaily,
                 minSpent: editingRule.conditions.minSpent,
+                slotDurationHours: editingRule.conditions.slotDurationHours,
+                rotationDailyBudget: editingRule.conditions.dailyBudget,
+                rotationQuietHoursEnabled: editingRule.conditions.quietHoursEnabled,
+                rotationQuietHoursStart: editingRule.conditions.quietHoursStart,
+                rotationQuietHoursEnd: editingRule.conditions.quietHoursEnd,
               }) : undefined}
               onSubmit={async (data) => {
                 setError(null);
@@ -441,6 +446,12 @@ export function RulesPage() {
                       ...(data.maxDailyBudget !== undefined ? { maxDailyBudget: data.maxDailyBudget } : {}),
                       ...(data.resetDaily !== undefined ? { resetDaily: data.resetDaily } : {}),
                       ...(data.minSpent !== undefined ? { minSpent: data.minSpent } : {}),
+                      ...(data.slotDurationHours !== undefined ? { slotDurationHours: data.slotDurationHours } : {}),
+                      ...(data.rotationDailyBudget !== undefined ? { rotationDailyBudget: data.rotationDailyBudget } : {}),
+                      ...(data.rotationQuietHoursEnabled !== undefined ? { rotationQuietHoursEnabled: data.rotationQuietHoursEnabled } : {}),
+                      ...(data.rotationQuietHoursStart !== undefined ? { rotationQuietHoursStart: data.rotationQuietHoursStart } : {}),
+                      ...(data.rotationQuietHoursEnd !== undefined ? { rotationQuietHoursEnd: data.rotationQuietHoursEnd } : {}),
+                      ...(data.campaignOrder ? { campaignOrder: data.campaignOrder } : {}),
                     });
                     // For UZ rules: re-initialize budgets if initialBudget changed
                     if (data.type === 'uz_budget_manage' && data.initialBudget !== undefined) {
@@ -548,6 +559,12 @@ interface ExistingRuleData {
   resetDaily?: boolean;
   // cpc_limit
   minSpent?: number;
+  // video_rotation
+  slotDurationHours?: number;
+  rotationDailyBudget?: number;
+  rotationQuietHoursEnabled?: boolean;
+  rotationQuietHoursStart?: string;
+  rotationQuietHoursEnd?: string;
 }
 
 interface RuleFormSubmitData {
@@ -622,11 +639,11 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
   // cpc_limit state
   const [minSpent, setMinSpent] = useState(existingRule?.minSpent ? String(existingRule.minSpent) : '100');
   // video_rotation state
-  const [slotDurationHours, setSlotDurationHours] = useState('4');
-  const [rotationDailyBudget, setRotationDailyBudget] = useState('');
-  const [rotationQuietHoursEnabled, setRotationQuietHoursEnabled] = useState(false);
-  const [rotationQuietHoursStart, setRotationQuietHoursStart] = useState('23:00');
-  const [rotationQuietHoursEnd, setRotationQuietHoursEnd] = useState('07:00');
+  const [slotDurationHours, setSlotDurationHours] = useState(existingRule?.slotDurationHours ? String(existingRule.slotDurationHours) : '4');
+  const [rotationDailyBudget, setRotationDailyBudget] = useState(existingRule?.rotationDailyBudget ? String(existingRule.rotationDailyBudget) : '');
+  const [rotationQuietHoursEnabled, setRotationQuietHoursEnabled] = useState(existingRule?.rotationQuietHoursEnabled ?? false);
+  const [rotationQuietHoursStart, setRotationQuietHoursStart] = useState(existingRule?.rotationQuietHoursStart ?? '23:00');
+  const [rotationQuietHoursEnd, setRotationQuietHoursEnd] = useState(existingRule?.rotationQuietHoursEnd ?? '07:00');
 
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
