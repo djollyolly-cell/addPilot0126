@@ -1597,6 +1597,56 @@ export const upsertCampaign = mutation({
   },
 });
 
+/** Batch upsert campaigns — one mutation instead of N individual calls */
+export const upsertCampaignsBatch = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    campaigns: v.array(v.object({
+      vkCampaignId: v.string(),
+      adPlanId: v.optional(v.string()),
+      name: v.string(),
+      status: v.string(),
+      dailyLimit: v.optional(v.number()),
+      allLimit: v.optional(v.number()),
+    })),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    for (const c of args.campaigns) {
+      const existing = await ctx.db
+        .query("campaigns")
+        .withIndex("by_accountId_vkCampaignId", (q) =>
+          q.eq("accountId", args.accountId).eq("vkCampaignId", c.vkCampaignId)
+        )
+        .first();
+
+      if (existing) {
+        const patch: Record<string, unknown> = {
+          name: c.name,
+          status: c.status,
+          updatedAt: now,
+        };
+        if (c.adPlanId !== undefined) patch.adPlanId = c.adPlanId;
+        if (c.dailyLimit !== undefined) patch.dailyLimit = c.dailyLimit;
+        if (c.allLimit !== undefined) patch.allLimit = c.allLimit;
+        await ctx.db.patch(existing._id, patch);
+      } else {
+        await ctx.db.insert("campaigns", {
+          accountId: args.accountId,
+          vkCampaignId: c.vkCampaignId,
+          adPlanId: c.adPlanId,
+          name: c.name,
+          status: c.status,
+          dailyLimit: c.dailyLimit,
+          allLimit: c.allLimit,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+  },
+});
+
 export const getCampaignByVkId = query({
   args: {
     accountId: v.id("adAccounts"),

@@ -230,46 +230,44 @@ export const syncAll = internalAction({
           console.log(`[syncAll] Live campaign map: ${adCampaignMap.length} ads, ${vkCampaigns.length} campaigns for «${account.name}»`);
         }
 
-        // Auto-upsert campaigns (ad groups) from VK API data
-        if (vkCampaigns.length > 0) {
-          try {
-            for (const c of vkCampaigns) {
-              await ctx.runMutation(api.adAccounts.upsertCampaign, {
-                accountId: account._id,
-                vkCampaignId: String(c.id),
-                adPlanId: c.ad_plan_id ? String(c.ad_plan_id) : undefined,
-                name: c.name || `Кампания ${c.id}`,
-                status: c.status,
-                dailyLimit: Number(c.budget_limit_day || "0") || undefined,
-                allLimit: Number(c.budget_limit || "0") || undefined,
-              });
-            }
-          } catch (err) {
-            console.error(`[syncAll] upsertCampaigns failed for «${account.name}»:`, err);
-            try { await ctx.runMutation(internal.systemLogger.log, {
-              accountId: account._id,
-              level: "warn",
-              source: "syncMetrics",
-              message: `Auto-upsert campaigns failed: ${String(err).slice(0, 180)}`,
-            }); } catch { /* non-critical */ }
+        // Auto-upsert campaigns (ad groups) + ad_plans — batched
+        {
+          const campaignBatch: { vkCampaignId: string; adPlanId?: string; name: string; status: string; dailyLimit?: number; allLimit?: number }[] = [];
+          for (const c of vkCampaigns) {
+            campaignBatch.push({
+              vkCampaignId: String(c.id),
+              adPlanId: c.ad_plan_id ? String(c.ad_plan_id) : undefined,
+              name: c.name || `Кампания ${c.id}`,
+              status: c.status,
+              dailyLimit: Number(c.budget_limit_day || "0") || undefined,
+              allLimit: Number(c.budget_limit || "0") || undefined,
+            });
           }
-        }
-
-        // Auto-upsert ad_plans (campaigns) — needed for budget cascade in getCampaignDailyLimit
-        if (fetchedAdPlans.length > 0) {
-          try {
-            for (const plan of fetchedAdPlans) {
-              await ctx.runMutation(api.adAccounts.upsertCampaign, {
-                accountId: account._id,
-                vkCampaignId: String(plan.id),
-                name: plan.name || `Кампания ${plan.id}`,
-                status: plan.status,
-                dailyLimit: plan.budget_limit_day && plan.budget_limit_day > 0 ? plan.budget_limit_day : undefined,
-                allLimit: plan.budget_limit && plan.budget_limit > 0 ? plan.budget_limit : undefined,
-              });
+          for (const plan of fetchedAdPlans) {
+            campaignBatch.push({
+              vkCampaignId: String(plan.id),
+              name: plan.name || `Кампания ${plan.id}`,
+              status: plan.status,
+              dailyLimit: plan.budget_limit_day && plan.budget_limit_day > 0 ? plan.budget_limit_day : undefined,
+              allLimit: plan.budget_limit && plan.budget_limit > 0 ? plan.budget_limit : undefined,
+            });
+          }
+          if (campaignBatch.length > 0) {
+            try {
+              const CHUNK = 200;
+              for (let i = 0; i < campaignBatch.length; i += CHUNK) {
+                await ctx.runMutation(internal.adAccounts.upsertCampaignsBatch, {
+                  accountId: account._id,
+                  campaigns: campaignBatch.slice(i, i + CHUNK),
+                });
+              }
+            } catch (err) {
+              console.error(`[syncAll] upsertCampaignsBatch failed for «${account.name}»:`, err);
+              try { await ctx.runMutation(internal.systemLogger.log, {
+                accountId: account._id, level: "warn", source: "syncMetrics",
+                message: `Auto-upsert campaigns batch failed: ${String(err).slice(0, 180)}`,
+              }); } catch { /* non-critical */ }
             }
-          } catch (err) {
-            console.warn(`[syncAll] upsert ad_plans failed for «${account.name}»: ${err}`);
           }
         }
 
@@ -996,44 +994,45 @@ async function syncSingleAccount(
           console.log(`[syncBatch] Live campaign map: ${adCampaignMap.length} ads, ${vkCampaigns.length} campaigns for "${account.name}"`);
         }
 
-        // Auto-upsert campaigns (ad groups)
-        if (vkCampaigns.length > 0) {
-          try {
-            for (const c of vkCampaigns) {
-              await ctx.runMutation(api.adAccounts.upsertCampaign, {
-                accountId: account._id,
-                vkCampaignId: String(c.id),
-                adPlanId: c.ad_plan_id ? String(c.ad_plan_id) : undefined,
-                name: c.name || `Кампания ${c.id}`,
-                status: c.status,
-                dailyLimit: Number(c.budget_limit_day || "0") || undefined,
-                allLimit: Number(c.budget_limit || "0") || undefined,
-              });
-            }
-          } catch (err) {
-            console.error(`[syncBatch] upsertCampaigns failed for "${account.name}":`, err);
-            try { await ctx.runMutation(internal.systemLogger.log, {
-              accountId: account._id, level: "warn", source: "syncMetrics",
-              message: `Auto-upsert campaigns failed: ${String(err).slice(0, 180)}`,
-            }); } catch { /* non-critical */ }
+        // Auto-upsert campaigns (ad groups) + ad_plans — batched into single mutation
+        {
+          const campaignBatch: { vkCampaignId: string; adPlanId?: string; name: string; status: string; dailyLimit?: number; allLimit?: number }[] = [];
+          for (const c of vkCampaigns) {
+            campaignBatch.push({
+              vkCampaignId: String(c.id),
+              adPlanId: c.ad_plan_id ? String(c.ad_plan_id) : undefined,
+              name: c.name || `Кампания ${c.id}`,
+              status: c.status,
+              dailyLimit: Number(c.budget_limit_day || "0") || undefined,
+              allLimit: Number(c.budget_limit || "0") || undefined,
+            });
           }
-        }
-
-        // Auto-upsert ad_plans
-        if (fetchedAdPlans.length > 0) {
-          try {
-            for (const plan of fetchedAdPlans) {
-              await ctx.runMutation(api.adAccounts.upsertCampaign, {
-                accountId: account._id,
-                vkCampaignId: String(plan.id),
-                name: plan.name || `Кампания ${plan.id}`,
-                status: plan.status,
-                dailyLimit: plan.budget_limit_day && plan.budget_limit_day > 0 ? plan.budget_limit_day : undefined,
-                allLimit: plan.budget_limit && plan.budget_limit > 0 ? plan.budget_limit : undefined,
-              });
+          for (const plan of fetchedAdPlans) {
+            campaignBatch.push({
+              vkCampaignId: String(plan.id),
+              name: plan.name || `Кампания ${plan.id}`,
+              status: plan.status,
+              dailyLimit: plan.budget_limit_day && plan.budget_limit_day > 0 ? plan.budget_limit_day : undefined,
+              allLimit: plan.budget_limit && plan.budget_limit > 0 ? plan.budget_limit : undefined,
+            });
+          }
+          if (campaignBatch.length > 0) {
+            try {
+              // Chunk into batches of 200 to stay within Convex mutation size limits
+              const CHUNK = 200;
+              for (let i = 0; i < campaignBatch.length; i += CHUNK) {
+                await ctx.runMutation(internal.adAccounts.upsertCampaignsBatch, {
+                  accountId: account._id,
+                  campaigns: campaignBatch.slice(i, i + CHUNK),
+                });
+              }
+            } catch (err) {
+              console.error(`[syncBatch] upsertCampaignsBatch failed for "${account.name}":`, err);
+              try { await ctx.runMutation(internal.systemLogger.log, {
+                accountId: account._id, level: "warn", source: "syncMetrics",
+                message: `Auto-upsert campaigns batch failed: ${String(err).slice(0, 180)}`,
+              }); } catch { /* non-critical */ }
             }
-          } catch (err) {
-            console.warn(`[syncBatch] upsert ad_plans failed for "${account.name}": ${err}`);
           }
         }
 
