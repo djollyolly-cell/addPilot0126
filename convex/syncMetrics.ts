@@ -5,8 +5,10 @@ import type { MtVideoStats, MtCampaign, MtStatItem } from "./vkApi";
 import { withTimeout } from "./vkApi";
 import { quickTokenCheck } from "./tokenRecovery";
 
-const ACCOUNT_TIMEOUT_MS = 400_000; // 400s per account (heavy accounts with 2000+ campaigns need more time)
+const ACCOUNT_TIMEOUT_MS = 400_000; // 400s default per account
+const ACCOUNT_TIMEOUT_RETRY_MS = 540_000; // 540s for accounts that previously timed out (9min, within 10min Convex action limit)
 const TRANSIENT_ERROR_THRESHOLD = 3; // error status only after 3 consecutive transient failures
+const ERROR_ESCALATION_MS = 2 * 60 * 60 * 1000; // 2 hours — escalate if account stuck in error
 
 /** Permanent errors → immediate error status. Everything else is transient. */
 function isPermanentError(msg: string): boolean {
@@ -790,6 +792,22 @@ export const syncOneAccount = internalAction({
       return;
     }
 
+    // Escalation: if account stuck in error for >2h, notify admin
+    if (
+      account.status === "error" &&
+      account.lastSyncAt &&
+      Date.now() - account.lastSyncAt > ERROR_ESCALATION_MS
+    ) {
+      try {
+        await ctx.runMutation(internal.systemLogger.log, {
+          accountId: account._id,
+          level: "error",
+          source: "escalation",
+          message: `Кабинет "${account.name}" в ошибке более 2ч. Ошибка: ${(account.lastError || "неизвестно").slice(0, 150)}`,
+        });
+      } catch { /* non-critical */ }
+    }
+
     // Double-check SKIP_IF_SYNCED_WITHIN_MS (another worker may have synced it)
     if (account.lastSyncAt && Date.now() - account.lastSyncAt < SKIP_IF_SYNCED_WITHIN_MS) {
       return;
@@ -1163,7 +1181,8 @@ export const syncOneAccount = internalAction({
             message: `checkRulesForAccount failed: ${String(err).slice(0, 180)}`,
           }); } catch { /* non-critical */ }
         }
-      })(), ACCOUNT_TIMEOUT_MS, `syncOne account ${account._id}`);
+      })(), account.lastError?.includes("TIMEOUT") ? ACCOUNT_TIMEOUT_RETRY_MS : ACCOUNT_TIMEOUT_MS,
+        `syncOne account ${account._id}`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error(`[syncOne] Error syncing account ${account._id}: ${msg}`);

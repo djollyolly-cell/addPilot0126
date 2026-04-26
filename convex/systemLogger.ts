@@ -37,7 +37,7 @@ export const log = internalMutation({
     if (args.level === "error") {
       try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
         category: "criticalErrors",
-        dedupKey: `${args.source}:${args.message.slice(0, 50)}`,
+        dedupKey: `${args.source}:${args.accountId ?? "global"}:${args.message.slice(0, 50)}`,
         text: [
           `🚨 <b>Ошибка</b>`,
           ``,
