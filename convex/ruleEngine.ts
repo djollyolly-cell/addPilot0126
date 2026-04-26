@@ -21,6 +21,11 @@ import {
 
 const ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account
 
+// Batch worker constants
+const UZ_WORKER_COUNT = 6;
+const UZ_WORKER_TIMEOUT_MS = 540_000; // 9 min
+const UZ_BATCH_ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account (same as current)
+
 // ═══════════════════════════════════════════════════════════
 // Pure functions — exported for direct unit testing
 // ═══════════════════════════════════════════════════════════
@@ -2863,31 +2868,34 @@ export const checkUzBudgetRules = internalAction({
 
 // ─── Fan-Out: UZ Budget Dispatch + Worker ────────────────────────
 
-/** Schedule uzBudgetOneAccount workers. Must be mutation for ctx.scheduler. */
-export const dispatchUzBatch = internalMutation({
+/** Split UZ accounts into chunks and schedule batch workers. */
+export const dispatchUzBatches = internalMutation({
   args: { accountIds: v.array(v.id("adAccounts")) },
   handler: async (ctx, args) => {
-    const STAGGER_BATCH = 8;
-    const STAGGER_DELAY_MS = 3_000;
-    for (let i = 0; i < args.accountIds.length; i++) {
-      const delayMs = i < 16 ? 0 : (Math.floor((i - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
-      await ctx.scheduler.runAfter(delayMs, internal.ruleEngine.uzBudgetOneAccount, {
-        accountId: args.accountIds[i],
+    const chunkSize = Math.ceil(args.accountIds.length / UZ_WORKER_COUNT);
+    for (let i = 0; i < UZ_WORKER_COUNT; i++) {
+      const chunk = args.accountIds.slice(i * chunkSize, (i + 1) * chunkSize);
+      if (chunk.length === 0) break;
+      await ctx.scheduler.runAfter(0, internal.ruleEngine.uzBudgetBatchWorker, {
+        accountIds: chunk,
+        workerIndex: i,
       });
     }
   },
 });
 
 /**
- * Process UZ budget rules for ONE account. Scheduled by uzBudgetDispatch.
+ * Per-account UZ budget logic extracted from the former uzBudgetOneAccount.
+ * Called sequentially by uzBudgetBatchWorker for each account in its chunk.
  */
-export const uzBudgetOneAccount = internalAction({
-  args: { accountId: v.id("adAccounts") },
-  handler: async (ctx, args) => {
+async function processUzBudgetForAccount(
+  ctx: { runQuery: any; runMutation: any; runAction: any },
+  accountId: Id<"adAccounts">
+): Promise<void> {
     // Re-fetch UZ rules for this account (lightweight query)
     const allUzRules = await ctx.runQuery(internal.ruleEngine.getActiveUzRules);
     const rulesByAccount = groupRulesByAccount(allUzRules as UzRule[]);
-    const accountRules = rulesByAccount.get(args.accountId as string);
+    const accountRules = rulesByAccount.get(accountId as string);
     if (!accountRules || accountRules.length === 0) return;
 
     let totalActions = 0;
@@ -2900,18 +2908,18 @@ export const uzBudgetOneAccount = internalAction({
         try {
           accessToken = await ctx.runAction(
             internal.auth.getValidTokenForAccount,
-            { accountId: args.accountId }
+            { accountId }
           );
         } catch (tokenErr) {
           const tokenMsg = tokenErr instanceof Error ? tokenErr.message : String(tokenErr);
-          console.error(`[uz_budget] Cannot get token for account ${args.accountId}: ${tokenMsg}`);
+          console.error(`[uz_budget] Cannot get token for account ${accountId}: ${tokenMsg}`);
           if (tokenMsg.includes("TOKEN_EXPIRED")) {
             try {
               await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
-                accountId: args.accountId,
+                accountId,
               });
             } catch (handleErr) {
-              console.log(`[uz_budget] handleTokenExpired for ${args.accountId} failed: ${handleErr}`);
+              console.log(`[uz_budget] handleTokenExpired for ${accountId} failed: ${handleErr}`);
             }
           }
           skipped.tokenErr++;
@@ -2925,7 +2933,7 @@ export const uzBudgetOneAccount = internalAction({
             internal.vkApi.getCampaignsForAccount, { accessToken }
           ) as VkCampaign[];
         } catch (apiErr) {
-          console.error(`[uz_budget] Failed to fetch campaigns for account ${args.accountId}:`, apiErr);
+          console.error(`[uz_budget] Failed to fetch campaigns for account ${accountId}:`, apiErr);
           return;
         }
 
@@ -2957,7 +2965,7 @@ export const uzBudgetOneAccount = internalAction({
               spentCache.set(cid, spent);
             }
           } catch (err) {
-            console.error(`[uz_budget] Batch spent fetch failed for account ${args.accountId}:`, err);
+            console.error(`[uz_budget] Batch spent fetch failed for account ${accountId}:`, err);
           }
         }
 
@@ -3013,7 +3021,7 @@ export const uzBudgetOneAccount = internalAction({
                   });
                   const stoppedBannerIds = await ctx.runQuery(
                     internal.ruleEngine.getStoppedBannerIdsForAccount,
-                    { accountId: args.accountId }
+                    { accountId }
                   );
                   await ctx.runAction(internal.vkApi.resumeCampaign, {
                     accessToken, campaignId: campaign.id,
@@ -3021,7 +3029,7 @@ export const uzBudgetOneAccount = internalAction({
                   });
                   await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
                     userId: rule.userId, ruleId: rule._id,
-                    accountId: args.accountId,
+                    accountId,
                     campaignId: campaignIdStr, campaignName: campaign.name,
                     actionType: "budget_increased" as const,
                     oldBudget: dailyLimitRubles, newBudget: cappedBudget,
@@ -3079,7 +3087,7 @@ export const uzBudgetOneAccount = internalAction({
                   try {
                     const stoppedBannerIds = await ctx.runQuery(
                       internal.ruleEngine.getStoppedBannerIdsForAccount,
-                      { accountId: args.accountId }
+                      { accountId }
                     );
                     await ctx.runAction(internal.vkApi.resumeCampaign, {
                       accessToken, campaignId: campaign.id,
@@ -3103,7 +3111,7 @@ export const uzBudgetOneAccount = internalAction({
 
                 await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
                   userId: rule.userId, ruleId: rule._id,
-                  accountId: args.accountId,
+                  accountId,
                   campaignId: campaignIdStr, campaignName: campaign.name,
                   actionType: "budget_increased" as const,
                   oldBudget: dailyLimitRubles, newBudget: newLimit,
@@ -3130,7 +3138,7 @@ export const uzBudgetOneAccount = internalAction({
                 console.error(`[uz_budget] Failed to increase budget for campaign ${campaign.id}:`, err);
                 await ctx.runMutation(internal.ruleEngine.logBudgetAction, {
                   userId: rule.userId, ruleId: rule._id,
-                  accountId: args.accountId,
+                  accountId,
                   campaignId: campaignIdStr, campaignName: campaign.name,
                   actionType: "budget_increased" as const,
                   oldBudget: dailyLimitRubles, newBudget: newLimit,
@@ -3143,26 +3151,57 @@ export const uzBudgetOneAccount = internalAction({
             console.error(`[uz_budget] Error processing rule ${rule._id}:`, err);
           }
         }
-      })(), ACCOUNT_TIMEOUT_MS, `uz_budget account ${args.accountId}`);
+      })(), UZ_BATCH_ACCOUNT_TIMEOUT_MS, `uz_budget account ${accountId}`);
     } catch (accountErr) {
-      console.error(`[uz_budget] Account ${args.accountId} timed out or failed:`, accountErr);
+      console.error(`[uz_budget] Account ${accountId} timed out or failed:`, accountErr);
     }
 
     // Summary log
     const skipTotal = Object.values(skipped).reduce((a, b) => a + b, 0);
     if (totalActions > 0 || skipTotal > 0) {
       console.log(
-        `[uz_budget] Account ${args.accountId}: ${totalActions} increased` +
+        `[uz_budget] Account ${accountId}: ${totalActions} increased` +
         (skipTotal > 0
           ? ` | skipped: ${skipped.delivering} delivering, ${skipped.dedup} dedup, ${skipped.blocked} blocked, ${skipped.maxReached} max, ${skipped.noBudget} no-budget, ${skipped.tokenErr} token-err`
           : "")
       );
     }
+}
+
+/**
+ * Batch worker for UZ budget rules. Processes accounts sequentially.
+ */
+export const uzBudgetBatchWorker = internalAction({
+  args: {
+    accountIds: v.array(v.id("adAccounts")),
+    workerIndex: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const workerStart = Date.now();
+    let processed = 0;
+    let errors = 0;
+
+    for (const accountId of args.accountIds) {
+      if (Date.now() - workerStart > UZ_WORKER_TIMEOUT_MS) {
+        console.log(`[uzBatch#${args.workerIndex}] Worker timeout after ${processed} accounts`);
+        break;
+      }
+
+      try {
+        await processUzBudgetForAccount(ctx, accountId);
+        processed++;
+      } catch (err) {
+        errors++;
+        console.error(`[uzBatch#${args.workerIndex}] Account ${accountId} failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    console.log(`[uzBatch#${args.workerIndex}] Done: ${processed} processed, ${errors} errors out of ${args.accountIds.length}`);
   },
 });
 
 /**
- * Fan-out dispatcher for UZ budget rules. Replaces sequential checkUzBudgetRules.
+ * Batch dispatcher for UZ budget rules. Dispatches UZ_WORKER_COUNT batch workers.
  */
 export const uzBudgetDispatch = internalAction({
   args: {},
@@ -3184,8 +3223,8 @@ export const uzBudgetDispatch = internalAction({
       const accountIds = [...rulesByAccount.keys()] as Id<"adAccounts">[];
 
       // Dispatch workers
-      await ctx.runMutation(internal.ruleEngine.dispatchUzBatch, { accountIds });
-      console.log(`[uzBudgetDispatch] Dispatched ${accountIds.length} UZ budget workers for ${uzRules.length} rules`);
+      await ctx.runMutation(internal.ruleEngine.dispatchUzBatches, { accountIds });
+      console.log(`[uzBudgetDispatch] Dispatched ${Math.min(UZ_WORKER_COUNT, accountIds.length)} batch workers for ${accountIds.length} accounts (${uzRules.length} rules)`);
 
     } catch (err) {
       cronError = err instanceof Error ? err.message : "Unknown error";

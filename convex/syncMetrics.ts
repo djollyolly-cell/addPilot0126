@@ -1,4 +1,5 @@
 import { v } from "convex/values";
+import type { Id } from "./_generated/dataModel";
 import { internalAction } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { MtVideoStats, MtCampaign, MtStatItem } from "./vkApi";
@@ -9,6 +10,11 @@ const ACCOUNT_TIMEOUT_MS = 400_000; // 400s default per account
 const ACCOUNT_TIMEOUT_RETRY_MS = 540_000; // 540s for accounts that previously timed out (9min, within 10min Convex action limit)
 const TRANSIENT_ERROR_THRESHOLD = 3; // error status only after 3 consecutive transient failures
 const ERROR_ESCALATION_MS = 2 * 60 * 60 * 1000; // 2 hours — escalate if account stuck in error
+
+// Batch worker constants
+const WORKER_COUNT = 6;
+const WORKER_TIMEOUT_MS = 540_000; // 9 min total (Convex action limit = 10 min)
+const BATCH_ACCOUNT_TIMEOUT_MS = 60_000; // 60s per account within batch worker
 
 /** Permanent errors → immediate error status. Everything else is transient. */
 function isPermanentError(msg: string): boolean {
@@ -782,41 +788,34 @@ export const markCronAlertSent = internalMutation({
 const ALERT_COOLDOWN_MS = 30 * 60_000; // 30 min between same alert
 const SYNC_ADMIN_CHAT_ID = "325307765";
 
-/** Schedule syncOneAccount workers for each account. Must be mutation for ctx.scheduler.
- *  Staggers launches: first 32 immediately, then +2s per batch of 8 to avoid VK API overload.
- */
-export const dispatchSyncBatch = internalMutation({
+/** Split accounts into WORKER_COUNT chunks and schedule batch workers. */
+export const dispatchSyncBatches = internalMutation({
   args: { accountIds: v.array(v.id("adAccounts")) },
   handler: async (ctx, args) => {
-    const IMMEDIATE_BATCH = 16; // half of V8 slots — leave room for other actions (rules, tokens, crons)
-    const STAGGER_BATCH = 8;
-    const STAGGER_DELAY_MS = 3_000; // 3s between stagger batches
-
-    for (let i = 0; i < args.accountIds.length; i++) {
-      let delayMs = 0;
-      if (i >= IMMEDIATE_BATCH) {
-        // Stagger remaining: every 8 accounts get +2s delay
-        const staggerIndex = Math.floor((i - IMMEDIATE_BATCH) / STAGGER_BATCH);
-        delayMs = (staggerIndex + 1) * STAGGER_DELAY_MS;
-      }
-      await ctx.scheduler.runAfter(delayMs, internal.syncMetrics.syncOneAccount, {
-        accountId: args.accountIds[i],
+    const chunkSize = Math.ceil(args.accountIds.length / WORKER_COUNT);
+    for (let i = 0; i < WORKER_COUNT; i++) {
+      const chunk = args.accountIds.slice(i * chunkSize, (i + 1) * chunkSize);
+      if (chunk.length === 0) break;
+      await ctx.scheduler.runAfter(0, internal.syncMetrics.syncBatchWorker, {
+        accountIds: chunk,
+        workerIndex: i,
       });
     }
   },
 });
 
 /**
- * Sync metrics for ONE ad account. Scheduled by syncDispatch.
- * Contains the full per-account logic from the former syncAll loop.
+ * Per-account sync logic extracted from the former syncOneAccount.
+ * Called sequentially by syncBatchWorker for each account in its chunk.
  */
-export const syncOneAccount = internalAction({
-  args: { accountId: v.id("adAccounts") },
-  handler: async (ctx, args) => {
+async function syncSingleAccount(
+  ctx: { runQuery: any; runMutation: any; runAction: any },
+  accountId: Id<"adAccounts">
+): Promise<void> {
     // Load account
-    const account = await ctx.runQuery(internal.adAccounts.getInternal, { accountId: args.accountId });
+    const account = await ctx.runQuery(internal.adAccounts.getInternal, { accountId });
     if (!account) {
-      console.log(`[syncOne] Account ${args.accountId} not found, skipping`);
+      console.log(`[syncBatch] Account ${accountId} not found, skipping`);
       return;
     }
     if (account.status !== "active" && account.status !== "error") {
@@ -870,7 +869,7 @@ export const syncOneAccount = internalAction({
           try {
             const alive = await quickTokenCheck(account.accessToken);
             if (alive) {
-              console.log(`[syncOne] Auto-recovery: "${account.name}" token alive, restoring to active`);
+              console.log(`[syncBatch] Auto-recovery: "${account.name}" token alive, restoring to active`);
               await ctx.runMutation(api.adAccounts.updateStatus, {
                 accountId: account._id,
                 status: "active",
@@ -879,7 +878,7 @@ export const syncOneAccount = internalAction({
                 accountId: account._id,
               });
             } else {
-              console.log(`[syncOne] "${account.name}" in error, token dead -- skipping`);
+              console.log(`[syncBatch] "${account.name}" in error, token dead -- skipping`);
               return;
             }
           } catch {
@@ -926,14 +925,14 @@ export const syncOneAccount = internalAction({
             internal.vkApi.getCampaignsForAccount, { accessToken }
           );
         } catch (err) {
-          console.warn(`[syncOne] getCampaignsForAccount failed for "${account.name}": ${err}`);
+          console.warn(`[syncBatch] getCampaignsForAccount failed for "${account.name}": ${err}`);
           // Retry once
           try {
             vkCampaigns = await ctx.runAction(
               internal.vkApi.getCampaignsForAccount, { accessToken }
             );
           } catch (retryErr) {
-            console.error(`[syncOne] getCampaignsForAccount retry failed for "${account.name}": ${retryErr}`);
+            console.error(`[syncBatch] getCampaignsForAccount retry failed for "${account.name}": ${retryErr}`);
             try { await ctx.runMutation(internal.systemLogger.log, {
               accountId: account._id, level: "error", source: "syncMetrics",
               message: `getCampaignsForAccount failed after retry: ${String(retryErr).slice(0, 180)}`,
@@ -960,7 +959,7 @@ export const syncOneAccount = internalAction({
             campaignTypeMap.set(entry.adGroupId, entry.type);
           }
         } catch (err) {
-          console.warn(`[syncOne] getCampaignTypeMap failed for "${account.name}": ${err}`);
+          console.warn(`[syncBatch] getCampaignTypeMap failed for "${account.name}": ${err}`);
         }
 
         // Fetch ad_plan budgets for cascade fallback
@@ -974,7 +973,7 @@ export const syncOneAccount = internalAction({
             }
           }
         } catch (err) {
-          console.warn(`[syncOne] getMtAdPlans failed for "${account.name}": ${err}`);
+          console.warn(`[syncBatch] getMtAdPlans failed for "${account.name}": ${err}`);
         }
 
         // Build adCampaignMap with cascade: group budget -> ad_plan budget
@@ -993,7 +992,7 @@ export const syncOneAccount = internalAction({
         }
 
         if (adCampaignMap.length > 0) {
-          console.log(`[syncOne] Live campaign map: ${adCampaignMap.length} ads, ${vkCampaigns.length} campaigns for "${account.name}"`);
+          console.log(`[syncBatch] Live campaign map: ${adCampaignMap.length} ads, ${vkCampaigns.length} campaigns for "${account.name}"`);
         }
 
         // Auto-upsert campaigns (ad groups)
@@ -1011,7 +1010,7 @@ export const syncOneAccount = internalAction({
               });
             }
           } catch (err) {
-            console.error(`[syncOne] upsertCampaigns failed for "${account.name}":`, err);
+            console.error(`[syncBatch] upsertCampaigns failed for "${account.name}":`, err);
             try { await ctx.runMutation(internal.systemLogger.log, {
               accountId: account._id, level: "warn", source: "syncMetrics",
               message: `Auto-upsert campaigns failed: ${String(err).slice(0, 180)}`,
@@ -1033,7 +1032,7 @@ export const syncOneAccount = internalAction({
               });
             }
           } catch (err) {
-            console.warn(`[syncOne] upsert ad_plans failed for "${account.name}": ${err}`);
+            console.warn(`[syncBatch] upsert ad_plans failed for "${account.name}": ${err}`);
           }
         }
 
@@ -1054,7 +1053,7 @@ export const syncOneAccount = internalAction({
             }
           }
         } catch (err) {
-          console.error(`[syncOne] upsertAds failed for "${account.name}":`, err);
+          console.error(`[syncBatch] upsertAds failed for "${account.name}":`, err);
           try { await ctx.runMutation(internal.systemLogger.log, {
             accountId: account._id, level: "warn", source: "syncMetrics",
             message: `Auto-upsert ads failed: ${String(err).slice(0, 180)}`,
@@ -1072,7 +1071,7 @@ export const syncOneAccount = internalAction({
                 slot.type === "video" ||
                 (slot.variants &&
                   Object.values(slot.variants).some(
-                    (variant) => variant.media_type === "video"
+                    (variant: any) => variant.media_type === "video"
                   ));
               if (isVideo && slot.id) {
                 bannerVideoMap.push({
@@ -1090,7 +1089,7 @@ export const syncOneAccount = internalAction({
           }
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.error(`[syncOne] Auto-link error for account ${account._id}:`, errMsg);
+          console.error(`[syncBatch] Auto-link error for account ${account._id}:`, errMsg);
           try { await ctx.runMutation(internal.systemLogger.log, {
             accountId: account._id, level: "warn", source: "syncMetrics",
             message: `Auto-link videos failed: ${errMsg.slice(0, 180)}`,
@@ -1098,7 +1097,7 @@ export const syncOneAccount = internalAction({
         }
 
         if (!stats || stats.length === 0) {
-          console.log(`[syncOne] Empty stats for account ${account._id}, skipping`);
+          console.log(`[syncBatch] Empty stats for account ${account._id}, skipping`);
           await ctx.runMutation(internal.adAccounts.incrementEmptySyncs, { accountId: account._id });
           await ctx.runMutation(api.adAccounts.updateSyncTime, { accountId: account._id });
           return;
@@ -1130,7 +1129,7 @@ export const syncOneAccount = internalAction({
             const leads = Math.max(baseGoals, vkResult, vkGoals, eventsGoals, leadAdsCount);
 
             console.log(
-              `[syncOne] Ad ${adId}: clicks=${clicks}, base.goals=${baseGoals}, vk.result=${vkResult}, vk.goals=${vkGoals}, events=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
+              `[syncBatch] Ad ${adId}: clicks=${clicks}, base.goals=${baseGoals}, vk.result=${vkResult}, vk.goals=${vkGoals}, events=${eventsGoals}, leadAds=${leadAdsCount}, leads=${leads}`
             );
 
             await ctx.runMutation(internal.metrics.saveRealtime, {
@@ -1153,10 +1152,10 @@ export const syncOneAccount = internalAction({
         // Collect video stats for linked creatives
         try {
           const linkedVideos = await ctx.runQuery(internal.videos.listLinkedVideos, {});
-          const accountVideos = linkedVideos.filter((vid) => vid.accountId === account._id);
+          const accountVideos = linkedVideos.filter((vid: any) => vid.accountId === account._id);
           if (accountVideos.length > 0) {
             const videoAdIds = accountVideos
-              .map((vid) => vid.vkAdId)
+              .map((vid: any) => vid.vkAdId)
               .filter(Boolean)
               .join(",");
             if (videoAdIds) {
@@ -1165,7 +1164,7 @@ export const syncOneAccount = internalAction({
               });
               for (const item of videoStats) {
                 const adId = String(item.id);
-                const linkedVideo = accountVideos.find((vid) => vid.vkAdId === adId);
+                const linkedVideo = accountVideos.find((vid: any) => vid.vkAdId === adId);
                 for (const row of item.rows) {
                   const base = row.base;
                   const vid: MtVideoStats = row.video || {};
@@ -1192,13 +1191,13 @@ export const syncOneAccount = internalAction({
                 }
               }
               console.log(
-                `[syncOne] Account ${account._id}: ${accountVideos.length} video creatives stats synced`
+                `[syncBatch] Account ${account._id}: ${accountVideos.length} video creatives stats synced`
               );
             }
           }
         } catch (error) {
           const errMsg = error instanceof Error ? error.message : String(error);
-          console.error(`[syncOne] Error fetching video stats for account ${account._id}:`, errMsg);
+          console.error(`[syncBatch] Error fetching video stats for account ${account._id}:`, errMsg);
           try { await ctx.runMutation(internal.systemLogger.log, {
             accountId: account._id, level: "warn", source: "syncMetrics",
             message: `Video stats fetch failed: ${errMsg.slice(0, 180)}`,
@@ -1212,7 +1211,7 @@ export const syncOneAccount = internalAction({
             accountId: account._id, status: "active",
           });
         }
-        console.log(`[syncOne] Account ${account._id}: ${stats.length} ads synced`);
+        console.log(`[syncBatch] Account ${account._id}: ${stats.length} ads synced`);
 
         // Run rules for this account
         try {
@@ -1221,17 +1220,16 @@ export const syncOneAccount = internalAction({
             adCampaignMap: adCampaignMap.length > 0 ? adCampaignMap : undefined,
           });
         } catch (err) {
-          console.error(`[syncOne] checkRulesForAccount failed for "${account.name}":`, err);
+          console.error(`[syncBatch] checkRulesForAccount failed for "${account.name}":`, err);
           try { await ctx.runMutation(internal.systemLogger.log, {
             accountId: account._id, level: "error", source: "syncMetrics",
             message: `checkRulesForAccount failed: ${String(err).slice(0, 180)}`,
           }); } catch { /* non-critical */ }
         }
-      })(), account.lastError?.includes("TIMEOUT") ? ACCOUNT_TIMEOUT_RETRY_MS : ACCOUNT_TIMEOUT_MS,
-        `syncOne account ${account._id}`);
+      })(), BATCH_ACCOUNT_TIMEOUT_MS, `syncBatch account ${accountId}`);
     } catch (error) {
       const msg = error instanceof Error ? error.message : "Unknown error";
-      console.error(`[syncOne] Error syncing account ${account._id}: ${msg}`);
+      console.error(`[syncBatch] Error syncing account ${account._id}: ${msg}`);
 
       if (msg.includes("TOKEN_EXPIRED")) {
         // Try recovery — handleTokenExpired returns boolean (never throws)
@@ -1241,7 +1239,7 @@ export const syncOneAccount = internalAction({
             accountId: account._id,
           });
         } catch (handleErr) {
-          console.log(`[syncOne] handleTokenExpired for ${account._id} threw: ${handleErr}`);
+          console.log(`[syncBatch] handleTokenExpired for ${account._id} threw: ${handleErr}`);
         }
         if (!recovered) {
           await ctx.runMutation(api.adAccounts.updateStatus, {
@@ -1276,7 +1274,7 @@ export const syncOneAccount = internalAction({
           accountId: account._id, error: msg,
         });
         if (consecutive >= TRANSIENT_ERROR_THRESHOLD) {
-          console.warn(`[syncOne] "${account.name}" ${consecutive} consecutive transient errors -- marking as error`);
+          console.warn(`[syncBatch] "${account.name}" ${consecutive} consecutive transient errors -- marking as error`);
           await ctx.runMutation(api.adAccounts.updateStatus, {
             accountId: account._id, status: "error",
             lastError: `Sync failed (${consecutive}x): ${msg}`,
@@ -1286,16 +1284,50 @@ export const syncOneAccount = internalAction({
             message: `Sync failed (${consecutive}x transient): ${msg.slice(0, 180)}`,
           }); } catch { /* non-critical */ }
         } else {
-          console.log(`[syncOne] "${account.name}" transient error ${consecutive}/${TRANSIENT_ERROR_THRESHOLD} -- will retry next cycle`);
+          console.log(`[syncBatch] "${account.name}" transient error ${consecutive}/${TRANSIENT_ERROR_THRESHOLD} -- will retry next cycle`);
         }
       }
     }
+}
+
+/**
+ * Batch worker: processes an array of accounts sequentially.
+ * Each account uses syncSingleAccount (same logic as former syncOneAccount).
+ * Worker-level timeout ensures we stay within Convex 10-min action limit.
+ */
+export const syncBatchWorker = internalAction({
+  args: {
+    accountIds: v.array(v.id("adAccounts")),
+    workerIndex: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const workerStart = Date.now();
+    let synced = 0;
+    let errors = 0;
+
+    for (const accountId of args.accountIds) {
+      // Worker-level timeout check: stop if approaching 9 min
+      if (Date.now() - workerStart > WORKER_TIMEOUT_MS) {
+        console.log(`[syncBatch#${args.workerIndex}] Worker timeout reached after ${synced} accounts, ${args.accountIds.length - synced} remaining`);
+        break;
+      }
+
+      try {
+        await syncSingleAccount(ctx, accountId);
+        synced++;
+      } catch (err) {
+        errors++;
+        console.error(`[syncBatch#${args.workerIndex}] Account ${accountId} failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+
+    console.log(`[syncBatch#${args.workerIndex}] Done: ${synced} synced, ${errors} errors out of ${args.accountIds.length}`);
   },
 });
 
 /**
- * Fan-out dispatcher for metrics sync. Replaces sequential syncAll.
- * Runs every 5 min via cron. Dispatches syncOneAccount per account.
+ * Batch dispatcher for metrics sync. Replaces fan-out syncAll.
+ * Runs every 5 min via cron. Dispatches WORKER_COUNT batch workers.
  */
 export const syncDispatch = internalAction({
   args: {},
@@ -1341,8 +1373,8 @@ export const syncDispatch = internalAction({
 
       // Dispatch all workers
       const accountIds = accounts.map((a) => a._id);
-      await ctx.runMutation(internal.syncMetrics.dispatchSyncBatch, { accountIds });
-      console.log(`[syncDispatch] Dispatched ${accountIds.length} sync workers`);
+      await ctx.runMutation(internal.syncMetrics.dispatchSyncBatches, { accountIds });
+      console.log(`[syncDispatch] Dispatched ${Math.min(WORKER_COUNT, accountIds.length)} batch workers for ${accountIds.length} accounts`);
 
       // Poll AI banner moderation (separate from per-account sync)
       try {
