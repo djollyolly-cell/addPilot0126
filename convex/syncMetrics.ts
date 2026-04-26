@@ -538,19 +538,21 @@ export const syncAll = internalAction({
 
         if (msg.includes("TOKEN_EXPIRED")) {
           // TOKEN_EXPIRED — centralized handler owns the full flow:
-          // verify token → recover → set status. No updateStatus here to avoid double-write.
+          // verify token → recover → set status. handleTokenExpired returns boolean (never throws).
+          let recovered = false;
           try {
-            await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
+            recovered = await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
               accountId: account._id,
             });
           } catch (handleErr) {
-            // handleTokenExpired failed — ensure account is in error state
+            console.log(`[syncMetrics] handleTokenExpired for ${account._id} threw: ${handleErr}`);
+          }
+          if (!recovered) {
             await ctx.runMutation(api.adAccounts.updateStatus, {
               accountId: account._id,
               status: "error",
               lastError: `Sync failed: ${msg}`,
             });
-            console.log(`[syncMetrics] handleTokenExpired for ${account._id} failed: ${handleErr}`);
           }
           // Clear transient error counter so it doesn't carry over after recovery
           await ctx.runMutation(internal.adAccounts.clearSyncErrors, {
@@ -1232,19 +1234,20 @@ export const syncOneAccount = internalAction({
       console.error(`[syncOne] Error syncing account ${account._id}: ${msg}`);
 
       if (msg.includes("TOKEN_EXPIRED")) {
-        // Try recovery first — only alert if recovery fails
+        // Try recovery — handleTokenExpired returns boolean (never throws)
         let recovered = false;
         try {
-          await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
+          recovered = await ctx.runAction(internal.tokenRecovery.handleTokenExpired, {
             accountId: account._id,
           });
-          recovered = true;
         } catch (handleErr) {
+          console.log(`[syncOne] handleTokenExpired for ${account._id} threw: ${handleErr}`);
+        }
+        if (!recovered) {
           await ctx.runMutation(api.adAccounts.updateStatus, {
             accountId: account._id, status: "error",
             lastError: `Sync failed: ${msg}`,
           });
-          console.log(`[syncOne] handleTokenExpired for ${account._id} failed: ${handleErr}`);
         }
         await ctx.runMutation(internal.adAccounts.clearSyncErrors, {
           accountId: account._id,
