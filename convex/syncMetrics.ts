@@ -5,7 +5,7 @@ import type { MtVideoStats, MtCampaign, MtStatItem } from "./vkApi";
 import { withTimeout } from "./vkApi";
 import { quickTokenCheck } from "./tokenRecovery";
 
-const ACCOUNT_TIMEOUT_MS = 120_000; // 120s per account (includes getCampaigns + upsert + rule check)
+const ACCOUNT_TIMEOUT_MS = 180_000; // 180s per account (fan-out: each account is its own action, safe to give more time)
 const TRANSIENT_ERROR_THRESHOLD = 3; // error status only after 3 consecutive transient failures
 
 /** Permanent errors → immediate error status. Everything else is transient. */
