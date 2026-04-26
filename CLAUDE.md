@@ -91,6 +91,7 @@ When converting sequential processing to parallel/fan-out (e.g. `ctx.scheduler.r
 - **Monitoring thresholds:** Stale/freshness thresholds designed for sequential timing don't apply to parallel. Recalculate: `(total_items / concurrent_limit) × avg_time + stagger_delay`.
 - **Notification multiplication:** Trace the FULL alert chain before fan-out. If `systemLogger.log(level: "error")` → `adminAlerts.notify` → Telegram, then 1 sequential action = 1 alert max, but fan-out of 264 items = up to 264 Telegram messages. Either deduplicate alerts or adjust log levels for transient errors in workers.
 - **Convex scheduler limits:** `ctx.scheduler.runAfter` only works in mutations (not actions). Large batches need a separate `internalMutation` for dispatching. `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` env var controls concurrency ceiling.
+- **Rename ripple check:** When renaming a function or heartbeat name, grep for ALL references: health checks, admin dashboards, monitoring configs, alert handlers. `grep -rn '"oldName"' convex/ --include="*.ts"` — every hit must be updated.
 
 ## Debugging & Fix Discipline
 
