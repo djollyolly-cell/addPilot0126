@@ -58,12 +58,15 @@ Detailed rules are in `.claude/rules/`:
 - ALWAYS run `npx tsc --noEmit -p convex/tsconfig.json` before committing Convex changes. Must see clean output — no exceptions.
 - After adding/renaming files in `convex/` — `_generated/api.ts` must be in sync; typecheck catches missing `internal.*` references.
 - Check source files for encoding issues (broken UTF-8 characters like `Но��еров`).
+- **ОБЯЗАТЕЛЬНО: `npm run test` перед каждым коммитом.** Все тесты должны проходить. Если тест падает — не коммитить, а починить. Если изменение затрагивает UI-компонент с несколькими сценариями (create/edit, разные роли, разные состояния) — проверить что существующие тесты покрывают все сценарии, при отсутствии — написать недостающие тесты ДО коммита.
 
 ## Feature Implementation Checks
 
 - **Facts only, no assumptions.** Every claim about the codebase must be backed by reading the actual file or running the actual API call. If you haven't read the code — you don't know how it works. If you haven't called the API — you don't know what it returns. Never say "скорее всего", "наверное", "должно быть" about code behavior — open the file and verify.
 - **Numbers and data — query first, answer second.** When discussing specific metrics, counts, or statuses (подписки, лиды, ошибки, etc.) — FIRST query the database or API, THEN answer. Never state numbers from memory, context, or assumption. The sequence is: (1) identify what data is needed, (2) write and run a query/script to get real data, (3) present verified results. All access is provided — there is no excuse to guess instead of checking.
 - **Data chain first:** Before implementing a feature, trace DB schema → backend query → frontend display. If a field is missing in `schema.ts`, the feature **cannot work** — don't build UI for it.
+- **Full data pass-through check:** When adding new fields to a form or API call, trace the ENTIRE chain: TypeScript interface → form submit → callback/handler → mutation call → backend args. In this project, `RulesPage.tsx` has an intermediate `onSubmit` callback that **manually lists every field** (not `...data` spread) — any new field MUST be added in THREE places: (1) `RuleFormSubmitData` interface, (2) `RuleForm.handleSubmit` call to `onSubmit(data)`, (3) the `onSubmit` callback's call to `createRule({...})`. Missing any one link silently drops the field. After adding fields, grep for the field name and verify it appears at every layer.
+- **User flow walkthrough перед кодом:** Перед написанием/изменением любого UI-компонента — перечислить ВСЕ сценарии использования (создание, редактирование, частичное обновление одного поля, повторный вход) и для каждого ответить: (1) с какого шага/состояния пользователь начинает, (2) какие данные уже есть vs какие нужно ввести, (3) какие поля обязательны именно в этом сценарии. Если компонент обслуживает несколько сценариев — каждый должен быть спроектирован отдельно. При передаче `existingId` для редактирования — всегда передавать текущие данные сущности (одного ID недостаточно для отображения). Ключевой вопрос: "что увидит пользователь, если хочет изменить только ОДНО поле?"
 - **Happy path walkthrough:** After writing aggregation/grouping code, mentally walk 1 example through the full pipeline. Verify grouping keys produce unique values for distinct entities.
 - **Fresh data vs cache:** Client-facing reports (`clientReport.ts buildReport`) call VK API directly (`getMtStatistics` → `statistics/banners/day.json`) instead of reading from `metricsDaily` cache. Cache is for rule engine 5-min monitoring, not for accurate reports. VK adjusts stats retroactively for past dates — cache never re-fetches. Use `base.vk.result` from fresh API — matches VK cabinet "Результат" exactly.
 - **Leads context matters:** Rule engine uses `countLeadsFromRow()` with Math.max from 5 sources. Client report uses `vk.result` from fresh VK API, routed by `getCampaignTypeMap` classification into categories (subscribes/messages/lead_forms/other). Don't mix these approaches.
@@ -75,6 +78,16 @@ Detailed rules are in `.claude/rules/`:
 - **Never offer UI options the backend can't fulfill** (e.g. `day_group` granularity when the data source has no `groupId` field).
 - **NEVER write rules/docs about code without reading the actual current code first.** Verify every function name, every argument, every mechanic against the real file.
 - **Never claim data is available without verifying the source.** Don't say "дайджест уже считает подписки" or "эти данные уже есть" without finding the exact function/query that produces them. Trace the full chain: API call → parser → storage → query → UI. If you can't point to the line of code — don't claim it exists.
+
+## Parallelism & Fan-Out Checklist
+
+When converting sequential processing to parallel/fan-out (e.g. `ctx.scheduler.runAfter` per item):
+
+- **External API load:** N workers = N simultaneous API requests. ALWAYS stagger dispatches (`runAfter(delayMs, ...)`) — never `runAfter(0, ...)` for all items. First batch = `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` (32), then groups of 8 every 2s.
+- **Timeout recalibration:** Sequential model shares one action's time budget across all items. Fan-out gives each item its own action — timeouts can (and should) be more generous. Recalculate based on the new execution model.
+- **Monitoring thresholds:** Stale/freshness thresholds designed for sequential timing don't apply to parallel. Recalculate: `(total_items / concurrent_limit) × avg_time + stagger_delay`.
+- **Notification multiplication:** Trace the FULL alert chain before fan-out. If `systemLogger.log(level: "error")` → `adminAlerts.notify` → Telegram, then 1 sequential action = 1 alert max, but fan-out of 264 items = up to 264 Telegram messages. Either deduplicate alerts or adjust log levels for transient errors in workers.
+- **Convex scheduler limits:** `ctx.scheduler.runAfter` only works in mutations (not actions). Large batches need a separate `internalMutation` for dispatching. `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` env var controls concurrency ceiling.
 
 ## Debugging & Fix Discipline
 
@@ -94,6 +107,7 @@ Detailed rules are in `.claude/rules/`:
   - route → layout → page → hooks → API → backend
 - Prefer systemic fixes, but keep changes proportional.
 - If re-architecture is needed, define scope, safety, and rollout order.
+- **НИКОГДА не подгоняй решение под ожидаемый результат.** Если данные расходятся с ожиданиями (кабинет VK показывает одно, наш отчёт — другое), ЗАПРЕЩЕНО менять источник данных или метрику «чтобы совпало». Вместо этого: (1) написать диагностический скрипт, (2) проверить что реально приходит из API для каждого типа кампании, (3) сравнить с тем, что показывает кабинет VK, (4) найти конкретную причину расхождения (проблема в записи? в чтении? в агрегации?), (5) показать реальные данные пользователю, (6) только после подтверждения причины — вносить исправление. Менять код без диагностики = подгонка, не починка.
 
 ## Skills
 
