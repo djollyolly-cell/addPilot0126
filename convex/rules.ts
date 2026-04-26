@@ -45,7 +45,7 @@ function validateRuleValue(
   value: number
 ): string | null {
   // new_lead and uz_budget_manage don't use the generic threshold value
-  if (type === "new_lead" || type === "uz_budget_manage") return null;
+  if (type === "new_lead" || type === "uz_budget_manage" || type === "video_rotation") return null;
   if (value <= 0) {
     return "Значение должно быть больше 0";
   }
