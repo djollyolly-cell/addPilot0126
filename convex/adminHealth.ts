@@ -49,7 +49,7 @@ export const getSummary = query({
     // Последний синк
     const lastHeartbeat = await ctx.db
       .query("cronHeartbeats")
-      .withIndex("by_name", (q) => q.eq("name", "syncAll"))
+      .withIndex("by_name", (q) => q.eq("name", "syncDispatch"))
       .first();
 
     return {

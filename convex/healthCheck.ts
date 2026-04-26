@@ -76,14 +76,14 @@ export const checkCronHeartbeats = internalQuery({
       maxStaleMin?: number;
       maxRunningMin?: number;
     }> = [
-      { name: "syncAll", label: "sync-metrics", maxStaleMin: 10 },
-      { name: "checkUzBudgetRules", label: "uz-budget-increase", maxStaleMin: 15 },
+      { name: "syncDispatch", label: "sync-metrics", maxStaleMin: 10 },
+      { name: "uzBudgetDispatch", label: "uz-budget-increase", maxStaleMin: 15 },
       { name: "resetBudgets", label: "uz-budget-reset" },
       { name: "sendDailyDigest", label: "daily-digest" },
       { name: "sendWeeklyDigest", label: "weekly-digest" },
       { name: "sendMonthlyDigest", label: "monthly-digest" },
       { name: "checkAgencyTokenHealth", label: "agency-token-health" },
-      { name: "proactiveTokenRefresh", label: "proactive-token-refresh", maxStaleMin: 250 },
+      { name: "tokenRefreshDispatch", label: "proactive-token-refresh", maxStaleMin: 250 },
       { name: "cleanup-realtime-metrics", label: "cleanup-realtime", maxStaleMin: 25 * 60, maxRunningMin: 12 * 60 },
     ];
 
