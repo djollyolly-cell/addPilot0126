@@ -817,10 +817,11 @@ async function syncSingleAccount(
     }
 
     // Auto-abandon: error accounts with unrecoverable token errors for 7+ days
+    // Use tokenErrorSince (when account first entered error), NOT lastSyncAt (last successful sync)
     if (
       account.status === "error" &&
-      account.lastSyncAt &&
-      Date.now() - account.lastSyncAt > 7 * 24 * 60 * 60 * 1000 &&
+      account.tokenErrorSince &&
+      Date.now() - account.tokenErrorSince > 7 * 24 * 60 * 60 * 1000 &&
       (account.lastError?.includes("TOKEN_EXPIRED") ||
        account.lastError?.includes("Автовосстановление не удалось") ||
        account.lastError?.includes("refreshToken отсутствует"))
