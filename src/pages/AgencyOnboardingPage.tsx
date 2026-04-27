@@ -27,7 +27,7 @@ export default function AgencyOnboardingPage() {
 
   const isXL = searchParams.get("tier") === "agency_xl";
 
-  const [totalCabinets, setTotalCabinets] = useState(isXL ? 50 : 20);
+  const [totalCabinets, setTotalCabinets] = useState(isXL ? 50 : 10);
   const [niches, setNiches] = useState<string[]>(["beauty"]);
   const [distribution, setDistribution] = useState<Record<string, number>>({});
   const [units, setUnits] = useState(0);
