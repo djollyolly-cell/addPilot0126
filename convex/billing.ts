@@ -11,6 +11,8 @@ export const TIERS = {
     rulesLimit: 3,
     includedLoadUnits: 0,
     overagePrice: 0,
+    maxManagers: 0,
+    maxNiches: 0,
     features: ["1 рекламный кабинет", "3 правила автоматизации", "Telegram-уведомления"],
   },
   start: {
@@ -20,6 +22,8 @@ export const TIERS = {
     rulesLimit: 10,
     includedLoadUnits: 0,
     overagePrice: 0,
+    maxManagers: 0,
+    maxNiches: 0,
     features: ["3 рекламных кабинета", "10 правил автоматизации", "Telegram-уведомления", "Базовая аналитика"],
   },
   pro: {
@@ -29,6 +33,8 @@ export const TIERS = {
     rulesLimit: -1, // unlimited
     includedLoadUnits: 0,
     overagePrice: 0,
+    maxManagers: 0,
+    maxNiches: 0,
     features: ["До 20 кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
   },
   // Agency tiers — load-units based
@@ -40,7 +46,9 @@ export const TIERS = {
     rulesLimit: -1,
     includedLoadUnits: 30,
     overagePrice: 600,
-    features: ["До 30 ед. нагрузки", "Конструктор правил (L2)", "Команда менеджеров", "Приоритетная поддержка", "Мониторинг здоровья аккаунтов", "Месячный отчёт по нагрузке"],
+    maxManagers: 3,
+    maxNiches: 3,
+    features: ["До 30 ед. нагрузки", "Конструктор правил (L2)", "До 3 менеджеров", "До 3 ниш", "Приоритетная поддержка", "Мониторинг здоровья аккаунтов", "Месячный отчёт по нагрузке"],
   },
   agency_m: {
     name: "Agency M",
@@ -49,7 +57,9 @@ export const TIERS = {
     rulesLimit: -1,
     includedLoadUnits: 60,
     overagePrice: 500,
-    features: ["До 60 ед. нагрузки", "Конструктор правил (L2)", "Команда менеджеров", "Приоритетная поддержка", "Мониторинг здоровья аккаунтов", "Месячный отчёт по нагрузке"],
+    maxManagers: 10,
+    maxNiches: 6,
+    features: ["До 60 ед. нагрузки", "Конструктор правил (L2)", "До 10 менеджеров", "До 6 ниш", "Приоритетная поддержка", "Мониторинг здоровья аккаунтов", "Месячный отчёт по нагрузке"],
   },
   agency_l: {
     name: "Agency L",
@@ -58,7 +68,9 @@ export const TIERS = {
     rulesLimit: -1,
     includedLoadUnits: 120,
     overagePrice: 400,
-    features: ["До 120 ед. нагрузки", "Конструктор правил (L2)", "Команда менеджеров", "Приоритетная поддержка", "Мониторинг здоровья аккаунтов", "Месячный отчёт по нагрузке", "Выделенный IP", "Кастомные типы правил (L3)", "SLA на синхронизацию"],
+    maxManagers: 30,
+    maxNiches: -1,
+    features: ["До 120 ед. нагрузки", "Конструктор правил (L2)", "До 30 менеджеров", "Все ниши", "Приоритетная поддержка", "Мониторинг здоровья аккаунтов", "Месячный отчёт по нагрузке", "Выделенный IP", "Кастомные типы правил (L3)", "SLA на синхронизацию"],
   },
   // Agency XL — individual pricing, no fixed price. Used only for schema/type completeness.
   agency_xl: {
@@ -68,6 +80,8 @@ export const TIERS = {
     rulesLimit: -1,
     includedLoadUnits: 200,
     overagePrice: 0,
+    maxManagers: -1,
+    maxNiches: -1,
     features: ["От 200 ед. нагрузки", "Всё из Agency L", "Персональный менеджер", "Индивидуальная цена"],
   },
 } as const;

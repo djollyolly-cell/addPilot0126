@@ -3,6 +3,7 @@ import { action, mutation, query, internalQuery, internalMutation } from "./_gen
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { checkOrgWritable, checkFeaturesDisabled } from "./loadUnits";
+import { TIERS, type SubscriptionTier } from "./billing";
 
 
 const PERMISSIONS = ["rules", "budgets", "ads_control", "reports", "logs", "telegram", "add_accounts", "invite_members", "ai_cabinet"];
@@ -167,6 +168,29 @@ export const inviteManager = mutation({
     const featuresOff = await checkFeaturesDisabled(ctx, args.invitedBy);
     if (featuresOff) {
       throw new Error("Превышен лимит пакета. Приглашение менеджеров недоступно.");
+    }
+
+    // Manager limit check
+    const org = await ctx.db.get(args.orgId);
+    if (!org) throw new Error("Организация не найдена");
+    const tierConfig = TIERS[org.subscriptionTier as SubscriptionTier];
+    if (tierConfig && tierConfig.maxManagers !== -1) {
+      const activeManagers = (await ctx.db
+        .query("orgMembers")
+        .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+        .collect()
+      ).filter((m) => m.role === "manager" && m.status === "active");
+      const pendingInvites = (await ctx.db
+        .query("orgInvites")
+        .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+        .collect()
+      ).filter((i) => i.status === "pending");
+      const total = activeManagers.length + pendingInvites.length;
+      if (total >= tierConfig.maxManagers) {
+        throw new Error(
+          `Лимит менеджеров для тарифа ${tierConfig.name}: ${tierConfig.maxManagers}. Сейчас: ${activeManagers.length} активных + ${pendingInvites.length} приглашений.`
+        );
+      }
     }
 
     // Validate permissions list
