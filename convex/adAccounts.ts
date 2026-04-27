@@ -113,16 +113,64 @@ async function requestClientCredentials(clientId: string, clientSecret: string) 
   return data;
 }
 
-// List all ad accounts for a user
+// List all ad accounts accessible to a user (personal + org)
 export const list = query({
   args: {
     userId: v.id("users"),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const user = await ctx.db.get(args.userId);
+    if (!user) return [];
+
+    // Individual user — only personal accounts
+    if (!user.organizationId) {
+      return await ctx.db
+        .query("adAccounts")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .collect();
+    }
+
+    // Org member — org accounts + personal accounts without orgId
+    const membership = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId_userId", (q) =>
+        q.eq("orgId", user.organizationId!).eq("userId", args.userId)
+      )
+      .first();
+    if (!membership || membership.status !== "active") return [];
+
+    // 1. Org accounts
+    let orgAccounts;
+    if (membership.role === "owner") {
+      orgAccounts = await ctx.db
+        .query("adAccounts")
+        .withIndex("by_orgId", (q) => q.eq("orgId", user.organizationId!))
+        .collect();
+    } else {
+      // Manager: fetch only assigned accounts
+      orgAccounts = [];
+      for (const accId of membership.assignedAccountIds) {
+        const acc = await ctx.db.get(accId);
+        if (acc) orgAccounts.push(acc);
+      }
+    }
+
+    // 2. Personal accounts not transferred to org
+    const personalAccounts = await ctx.db
       .query("adAccounts")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .collect();
+    const personalOnly = personalAccounts.filter((a) => !a.orgId);
+
+    // 3. Union (deduplicate by _id)
+    const seen = new Set(orgAccounts.map((a) => a._id.toString()));
+    const result = [...orgAccounts];
+    for (const a of personalOnly) {
+      if (!seen.has(a._id.toString())) {
+        result.push(a);
+      }
+    }
+    return result;
   },
 });
 
@@ -263,22 +311,31 @@ export const connect = mutation({
     const user = await ctx.db.get(args.userId);
     if (!user) throw new Error("Пользователь не найден");
 
-    const accounts = await ctx.db
-      .query("adAccounts")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-      .collect();
+    // Agency tiers: unlimited accounts (limit checked via load units, not count)
+    const effectiveTier = user.organizationId
+      ? (await ctx.db.get(user.organizationId))?.subscriptionTier
+      : (user.subscriptionTier ?? "freemium");
 
-    const tier = user.subscriptionTier ?? "freemium";
-    let limit: number;
-    if (tier === "pro") {
-      limit = user.proAccountLimit ?? 20;
-    } else {
-      const tierLimits: Record<string, number> = { freemium: 1, start: 3 };
-      limit = tierLimits[tier] ?? 1;
-    }
+    const isAgency = effectiveTier?.startsWith("agency_");
 
-    if (accounts.length >= limit) {
-      throw new Error(`Лимит кабинетов для тарифа "${user.subscriptionTier}" исчерпан (${limit})`);
+    if (!isAgency) {
+      const accounts = await ctx.db
+        .query("adAccounts")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .collect();
+
+      const tier = user.subscriptionTier ?? "freemium";
+      let limit: number;
+      if (tier === "pro") {
+        limit = user.proAccountLimit ?? 20;
+      } else {
+        const tierLimits: Record<string, number> = { freemium: 1, start: 3 };
+        limit = tierLimits[tier] ?? 1;
+      }
+
+      if (accounts.length >= limit) {
+        throw new Error(`Лимит кабинетов для тарифа "${user.subscriptionTier}" исчерпан (${limit})`);
+      }
     }
 
     // If clientId/clientSecret not passed, try user-level credentials
@@ -293,6 +350,7 @@ export const connect = mutation({
 
     const accountId = await ctx.db.insert("adAccounts", {
       userId: args.userId,
+      orgId: user.organizationId,
       vkAccountId: args.vkAccountId,
       name: args.name,
       accessToken: args.accessToken,

@@ -3,6 +3,53 @@ import { mutation, query, action, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { checkOrgWritable } from "./loadUnits";
+import type { GenericDatabaseReader } from "convex/server";
+import type { DataModel, Doc } from "./_generated/dataModel";
+
+/**
+ * Check if caller can modify this rule (ownership or org membership with "rules" permission).
+ */
+async function checkRuleAccess(
+  db: GenericDatabaseReader<DataModel>,
+  rule: Doc<"rules">,
+  userId: Doc<"users">["_id"],
+): Promise<void> {
+  // Personal rule — original ownership check
+  if (!rule.orgId) {
+    if (rule.userId !== userId) {
+      throw new Error("Нет доступа к этому правилу");
+    }
+    return;
+  }
+  // Org rule — check active membership with "rules" permission
+  const membership = await db
+    .query("orgMembers")
+    .withIndex("by_orgId_userId", (q) =>
+      q.eq("orgId", rule.orgId!).eq("userId", userId)
+    )
+    .first();
+  if (!membership || membership.status !== "active") {
+    throw new Error("Нет доступа к этому правилу");
+  }
+  if (membership.role !== "owner" && !membership.permissions.includes("rules")) {
+    throw new Error("Нет прав на управление правилами");
+  }
+}
+
+/**
+ * Get effective subscription tier for rule limit checks.
+ * Org users get the org tier; individual users get their personal tier.
+ */
+async function getEffectiveTier(
+  db: GenericDatabaseReader<DataModel>,
+  user: Doc<"users">,
+): Promise<string> {
+  if (user.organizationId) {
+    const org = await db.get(user.organizationId);
+    if (org) return org.subscriptionTier;
+  }
+  return user.subscriptionTier ?? "freemium";
+}
 
 /**
  * Single source of truth for tier-based rule limits.
@@ -175,16 +222,63 @@ async function validateNotInRotation(
   return null;
 }
 
-// List rules for a user
+// List rules accessible to a user (personal + org)
 export const list = query({
   args: {
     userId: v.id("users"),
   },
   handler: async (ctx, args) => {
-    return await ctx.db
+    const user = await ctx.db.get(args.userId);
+    if (!user) return [];
+
+    // Individual user — only personal rules
+    if (!user.organizationId) {
+      return await ctx.db
+        .query("rules")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .collect();
+    }
+
+    // Org member — org rules + personal rules
+    const membership = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId_userId", (q) =>
+        q.eq("orgId", user.organizationId!).eq("userId", args.userId)
+      )
+      .first();
+    if (!membership || membership.status !== "active") return [];
+
+    // 1. Org rules (all members see all org rules)
+    const orgRules = await ctx.db
+      .query("rules")
+      .withIndex("by_orgId_active", (q) => q.eq("orgId", user.organizationId!))
+      .collect();
+
+    // 2. Manager: filter to rules targeting their assigned accounts only
+    let filteredOrgRules = orgRules;
+    if (membership.role === "manager" && membership.assignedAccountIds.length > 0) {
+      const assignedSet = new Set(membership.assignedAccountIds.map(String));
+      filteredOrgRules = orgRules.filter((r) =>
+        r.targetAccountIds.some((id: string) => assignedSet.has(id))
+      );
+    }
+
+    // 3. Personal rules without orgId (created before joining org)
+    const personalRules = await ctx.db
       .query("rules")
       .withIndex("by_userId", (q) => q.eq("userId", args.userId))
       .collect();
+    const personalOnly = personalRules.filter((r) => !r.orgId);
+
+    // 4. Union
+    const seen = new Set(filteredOrgRules.map((r) => r._id.toString()));
+    const result = [...filteredOrgRules];
+    for (const r of personalOnly) {
+      if (!seen.has(r._id.toString())) {
+        result.push(r);
+      }
+    }
+    return result;
   },
 });
 
@@ -381,11 +475,12 @@ export const create = mutation({
       .collect();
 
     const activeRules = existingRules.filter((r) => r.isActive);
-    const ruleLimit = TIER_RULE_LIMITS[user.subscriptionTier ?? "freemium"] ?? 3;
+    const effectiveTier = await getEffectiveTier(ctx.db, user);
+    const ruleLimit = TIER_RULE_LIMITS[effectiveTier] ?? 3;
 
     if (activeRules.length >= ruleLimit) {
       throw new Error(
-        `Лимит правил для тарифа "${user.subscriptionTier ?? "freemium"}" исчерпан (${ruleLimit})`
+        `Лимит правил для тарифа "${effectiveTier}" исчерпан (${ruleLimit})`
       );
     }
 
@@ -570,8 +665,12 @@ export const update = mutation({
     if (!rule) {
       throw new Error("Правило не найдено");
     }
-    if (rule.userId !== args.userId) {
-      throw new Error("Нет доступа к этому правилу");
+    await checkRuleAccess(ctx.db, rule, args.userId);
+
+    // Org grace check
+    const writable = await checkOrgWritable(ctx, args.userId);
+    if (!writable.writable) {
+      throw new Error(writable.reason ?? "Доступ запрещён");
     }
 
     const patch: Record<string, unknown> = {
@@ -583,11 +682,10 @@ export const update = mutation({
         throw new Error("Название правила не может быть пустым");
       }
 
-      // Check duplicate name
-      const existingRules = await ctx.db
-        .query("rules")
-        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-        .collect();
+      // Check duplicate name (within same scope: orgId or userId)
+      const existingRules = rule.orgId
+        ? await ctx.db.query("rules").withIndex("by_orgId_active", (q) => q.eq("orgId", rule.orgId!)).collect()
+        : await ctx.db.query("rules").withIndex("by_userId", (q) => q.eq("userId", args.userId)).collect();
 
       const duplicate = existingRules.find(
         (r) =>
@@ -767,13 +865,17 @@ export const toggleActive = mutation({
     if (!rule) {
       throw new Error("Правило не найдено");
     }
-    if (rule.userId !== args.userId) {
-      throw new Error("Нет доступа к этому правилу");
+    await checkRuleAccess(ctx.db, rule, args.userId);
+
+    // Org grace check
+    const writable = await checkOrgWritable(ctx, args.userId);
+    if (!writable.writable) {
+      throw new Error(writable.reason ?? "Доступ запрещён");
     }
 
     const newActive = !rule.isActive;
 
-    // If activating, check tier limit
+    // If activating, check tier limit (using effective tier: org or personal)
     if (newActive) {
       const user = await ctx.db.get(args.userId);
       if (!user) throw new Error("Пользователь не найден");
@@ -785,7 +887,8 @@ export const toggleActive = mutation({
         )
         .collect();
 
-      const ruleLimit = TIER_RULE_LIMITS[user.subscriptionTier ?? "freemium"] ?? 3;
+      const effectiveTier = await getEffectiveTier(ctx.db, user);
+      const ruleLimit = TIER_RULE_LIMITS[effectiveTier] ?? 3;
       if (activeRules.length >= ruleLimit) {
         throw new Error(
           `Лимит активных правил для тарифа "${user.subscriptionTier ?? "freemium"}" исчерпан`
@@ -841,8 +944,12 @@ export const remove = mutation({
     if (!rule) {
       throw new Error("Правило не найдено");
     }
-    if (rule.userId !== args.userId) {
-      throw new Error("Нет доступа к этому правилу");
+    await checkRuleAccess(ctx.db, rule, args.userId);
+
+    // Org grace check
+    const writable = await checkOrgWritable(ctx, args.userId);
+    if (!writable.writable) {
+      throw new Error(writable.reason ?? "Доступ запрещён");
     }
 
     // Audit log

@@ -1,49 +1,82 @@
 import { v } from "convex/values";
 import { internalQuery } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
+import type { GenericDatabaseReader } from "convex/server";
+import type { DataModel } from "./_generated/dataModel";
 
 /**
- * Get list of adAccount IDs the user can access.
+ * Shared helper: collect all account IDs a user can access.
+ * Returns union of org accounts + personal accounts (not transferred to org).
+ *
  * - Individual user (no org): own accounts via by_userId
- * - Owner: all accounts in org via by_orgId
- * - Manager: only assignedAccountIds in their orgMembers record
+ * - Org owner: all org accounts (by_orgId) + personal accounts without orgId
+ * - Org manager: assignedAccountIds + personal accounts without orgId
  */
+async function collectAccessibleAccountIds(
+  db: GenericDatabaseReader<DataModel>,
+  userId: Id<"users">,
+): Promise<Id<"adAccounts">[]> {
+  const user = await db.get(userId);
+  if (!user) return [];
+
+  // Individual user — only personal accounts
+  if (!user.organizationId) {
+    const own = await db
+      .query("adAccounts")
+      .withIndex("by_userId", (q) => q.eq("userId", userId))
+      .collect();
+    return own.map((a) => a._id);
+  }
+
+  // Org member — find role
+  const membership = await db
+    .query("orgMembers")
+    .withIndex("by_orgId_userId", (q) =>
+      q.eq("orgId", user.organizationId!).eq("userId", userId)
+    )
+    .first();
+  if (!membership || membership.status !== "active") {
+    return [];
+  }
+
+  // 1. Org accounts (owner sees all, manager sees assigned)
+  let orgAccountIds: Id<"adAccounts">[];
+  if (membership.role === "owner") {
+    const all = await db
+      .query("adAccounts")
+      .withIndex("by_orgId", (q) => q.eq("orgId", user.organizationId!))
+      .collect();
+    orgAccountIds = all.map((a) => a._id);
+  } else {
+    orgAccountIds = membership.assignedAccountIds;
+  }
+
+  // 2. Personal accounts not transferred to org (excludeFromOrgTransfer or connected after join)
+  const personalAccounts = await db
+    .query("adAccounts")
+    .withIndex("by_userId", (q) => q.eq("userId", userId))
+    .collect();
+  const personalIds = personalAccounts
+    .filter((a) => !a.orgId)
+    .map((a) => a._id);
+
+  // 3. Union (org accounts may overlap with personal if userId matches)
+  const seen = new Set<string>();
+  const result: Id<"adAccounts">[] = [];
+  for (const id of [...orgAccountIds, ...personalIds]) {
+    const key = id.toString();
+    if (!seen.has(key)) {
+      seen.add(key);
+      result.push(id);
+    }
+  }
+  return result;
+}
+
 export const getAccessibleAccountIds = internalQuery({
   args: { userId: v.id("users") },
   handler: async (ctx, args): Promise<Id<"adAccounts">[]> => {
-    const user = await ctx.db.get(args.userId);
-    if (!user) return [];
-
-    // Individual fallback
-    if (!user.organizationId) {
-      const own = await ctx.db
-        .query("adAccounts")
-        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-        .collect();
-      return own.map((a) => a._id);
-    }
-
-    // Org member — find role
-    const membership = await ctx.db
-      .query("orgMembers")
-      .withIndex("by_orgId_userId", (q) =>
-        q.eq("orgId", user.organizationId!).eq("userId", args.userId)
-      )
-      .first();
-    if (!membership || membership.status !== "active") {
-      return [];
-    }
-
-    if (membership.role === "owner") {
-      const all = await ctx.db
-        .query("adAccounts")
-        .withIndex("by_orgId", (q) => q.eq("orgId", user.organizationId!))
-        .collect();
-      return all.map((a) => a._id);
-    }
-
-    // Manager: only assigned
-    return membership.assignedAccountIds;
+    return collectAccessibleAccountIds(ctx.db, args.userId);
   },
 });
 
@@ -85,9 +118,6 @@ export const getOrgByUserId = internalQuery({
 });
 
 /**
- * Check if user is owner of any organization.
- */
-/**
  * Verify all targetAdPlanIds belong to accounts user can access.
  * B5: prevents manager from targeting ad plans in accounts they don't have access to.
  */
@@ -96,35 +126,9 @@ export const validateAdPlanIds = internalQuery({
   handler: async (ctx, args) => {
     if (args.adPlanIds.length === 0) return { ok: true as const, invalidIds: [] as string[] };
 
-    const user = await ctx.db.get(args.userId);
-    if (!user) return { ok: false as const, invalidIds: args.adPlanIds };
-
-    let accessibleAccountIds: Id<"adAccounts">[] = [];
-    if (!user.organizationId) {
-      const own = await ctx.db
-        .query("adAccounts")
-        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-        .collect();
-      accessibleAccountIds = own.map((a) => a._id);
-    } else {
-      const membership = await ctx.db
-        .query("orgMembers")
-        .withIndex("by_orgId_userId", (q) =>
-          q.eq("orgId", user.organizationId!).eq("userId", args.userId)
-        )
-        .first();
-      if (!membership || membership.status !== "active") {
-        return { ok: false as const, invalidIds: args.adPlanIds };
-      }
-      if (membership.role === "owner") {
-        const all = await ctx.db
-          .query("adAccounts")
-          .withIndex("by_orgId", (q) => q.eq("orgId", user.organizationId!))
-          .collect();
-        accessibleAccountIds = all.map((a) => a._id);
-      } else {
-        accessibleAccountIds = membership.assignedAccountIds;
-      }
+    const accessibleAccountIds = await collectAccessibleAccountIds(ctx.db, args.userId);
+    if (accessibleAccountIds.length === 0) {
+      return { ok: false as const, invalidIds: args.adPlanIds };
     }
 
     // For each ad_plan_id, find campaigns and check accountId is accessible
