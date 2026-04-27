@@ -33,8 +33,8 @@ export function AgencyTierCard({ name, price, includedLoadUnits, overagePerUnit,
         ) : (
           <div className="text-2xl font-bold text-foreground">Индивидуально</div>
         )}
-        <p className="text-sm text-muted-foreground">{Math.ceil(includedLoadUnits / 5)}–{includedLoadUnits} кабинетов</p>
-        <p className="text-xs text-muted-foreground">зависит от ниши{overagePerUnit ? ` · доп. единица ${overagePerUnit} ₽` : ""}</p>
+        <p className="text-sm text-muted-foreground">от {Math.round(includedLoadUnits / 3)} кабинетов</p>
+        <p className="text-xs text-muted-foreground">точное кол-во зависит от ниши{overagePerUnit ? ` · доп. ед. ${overagePerUnit} ₽` : ""}</p>
       </CardHeader>
       <CardContent className="flex-1">
         <ul className="space-y-2">
