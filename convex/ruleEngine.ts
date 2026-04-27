@@ -2321,12 +2321,13 @@ export const hasRecentBudgetIncrease = internalQuery({
 
     const logs = await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) =>
+        q.eq("ruleId", args.ruleId).gte("createdAt", dayStartUtc)
+      )
       .filter((q) =>
         q.and(
           q.eq(q.field("actionType"), "budget_increased"),
           q.eq(q.field("adId"), args.campaignId),
-          q.gte(q.field("createdAt"), dayStartUtc),
           q.eq(q.field("status"), "success")
         )
       )
