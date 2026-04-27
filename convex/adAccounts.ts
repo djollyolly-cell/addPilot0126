@@ -406,7 +406,23 @@ export const disconnect = mutation({
     if (!account) {
       throw new Error("Кабинет не найден");
     }
-    if (account.userId !== args.userId) {
+    // Allow: account owner OR org owner
+    let hasAccess = account.userId === args.userId;
+    if (!hasAccess && account.orgId) {
+      const user = await ctx.db.get(args.userId);
+      if (user?.organizationId?.toString() === account.orgId.toString()) {
+        const membership = await ctx.db
+          .query("orgMembers")
+          .withIndex("by_orgId_userId", (q) =>
+            q.eq("orgId", account.orgId!).eq("userId", args.userId)
+          )
+          .first();
+        if (membership?.role === "owner" && membership.status === "active") {
+          hasAccess = true;
+        }
+      }
+    }
+    if (!hasAccess) {
       throw new Error("Нет доступа к этому кабинету");
     }
     if (account.status === "deleting") {

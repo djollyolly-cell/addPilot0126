@@ -472,16 +472,40 @@ export function minutesUntilEndOfDay(now: Date = new Date()): number {
 
 /** Get all active rules for a user */
 export const listActiveRules = internalQuery({
-  args: { userId: v.id("users") },
+  args: {
+    userId: v.id("users"),
+    orgId: v.optional(v.id("organizations")),
+  },
   handler: async (ctx, args) => {
-    const rules = await ctx.db
+    // Personal rules for this user
+    const userRules = await ctx.db
       .query("rules")
       .withIndex("by_userId_active", (q) =>
         q.eq("userId", args.userId).eq("isActive", true)
       )
       .collect();
+
+    // Org rules (if account belongs to an org)
+    let orgRules: typeof userRules = [];
+    if (args.orgId) {
+      orgRules = await ctx.db
+        .query("rules")
+        .withIndex("by_orgId_active", (q) => q.eq("orgId", args.orgId!))
+        .collect();
+      orgRules = orgRules.filter((r) => r.isActive);
+    }
+
+    // Union (deduplicate — user's own org rules appear in both)
+    const seen = new Set(userRules.map((r) => r._id.toString()));
+    const combined = [...userRules];
+    for (const r of orgRules) {
+      if (!seen.has(r._id.toString())) {
+        combined.push(r);
+      }
+    }
+
     // uz_budget_manage handled separately by checkUzBudgetRules
-    return rules.filter((r) => r.type !== "uz_budget_manage");
+    return combined.filter((r) => r.type !== "uz_budget_manage");
   },
 });
 
@@ -1613,9 +1637,17 @@ export const checkRulesForAccount = internalAction({
     );
     if (!account) return;
 
-    // 2. Load active rules for this user, filter to rules targeting this account
+    // 1.5. Skip rule execution for frozen/read-only orgs
+    if (account.orgId) {
+      const org = await ctx.runQuery(internal.loadUnits.getOrgById, { orgId: account.orgId });
+      if (org?.expiredGracePhase === "read_only" || org?.expiredGracePhase === "deep_read_only" || org?.expiredGracePhase === "frozen") {
+        return;
+      }
+    }
+
+    // 2. Load active rules for this user (+ org rules if account has orgId)
     const allRules = await ctx.runQuery(
-      internal.ruleEngine.listActiveRules, { userId: account.userId }
+      internal.ruleEngine.listActiveRules, { userId: account.userId, orgId: account.orgId }
     );
     const rules = allRules.filter((r: { targetAccountIds: string[] }) =>
       r.targetAccountIds.includes(args.accountId as string)

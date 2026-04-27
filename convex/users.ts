@@ -748,6 +748,15 @@ export const deleteUser = mutation({
       await ctx.db.delete(cred._id);
     }
 
+    // Delete agency XL requests
+    const agencyRequests = await ctx.db
+      .query("agencyRequests")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const req of agencyRequests) {
+      await ctx.db.delete(req._id);
+    }
+
     // Delete audit log entries
     const auditLogs = await ctx.db
       .query("auditLog")

@@ -79,6 +79,14 @@ export const listAllOrganizations = internalQuery({
   },
 });
 
+/** Get a single organization by ID */
+export const getOrgById = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    return await ctx.db.get(args.orgId);
+  },
+});
+
 /** Get all adAccounts of an org (excludes archived) */
 export const listOrgAccounts = internalQuery({
   args: { orgId: v.id("organizations") },

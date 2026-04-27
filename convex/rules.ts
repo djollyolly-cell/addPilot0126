@@ -104,7 +104,8 @@ function validateRuleValue(
 
 // ---- Video rotation conflict checks ----
 
-/** Check if any campaigns overlap with an active video_rotation rule */
+/** Check if any campaigns overlap with an active video_rotation rule.
+ *  Scoped by orgId (if user is in org) to catch cross-manager conflicts. */
 async function validateRotationConflicts(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ctx: { db: any },
@@ -113,10 +114,11 @@ async function validateRotationConflicts(
   _targetAccountIds: Id<"adAccounts">[],
   excludeRuleId?: Id<"rules">
 ): Promise<string | null> {
-  const allRules = await ctx.db
-    .query("rules")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
-    .collect();
+  const user = await ctx.db.get(userId);
+  // Org user: check all org rules (catches cross-manager conflicts)
+  const allRules = user?.organizationId
+    ? await ctx.db.query("rules").withIndex("by_orgId_active", (q: any) => q.eq("orgId", user.organizationId)).collect()
+    : await ctx.db.query("rules").withIndex("by_userId", (q: any) => q.eq("userId", userId)).collect();
 
   const activeRules = allRules.filter(
     (r: any) => r.isActive && (!excludeRuleId || r._id !== excludeRuleId)
@@ -138,7 +140,8 @@ async function validateRotationConflicts(
   return null;
 }
 
-/** Check that rotation campaigns are not covered by any other rule on same accounts */
+/** Check that rotation campaigns are not covered by any other rule on same accounts.
+ *  Scoped by orgId (if user is in org) to catch cross-manager conflicts. */
 async function validateNoConflictingRules(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ctx: { db: any },
@@ -147,10 +150,10 @@ async function validateNoConflictingRules(
   targetCampaignIds: string[],
   excludeRuleId?: Id<"rules">
 ): Promise<string | null> {
-  const allRules = await ctx.db
-    .query("rules")
-    .withIndex("by_userId", (q: any) => q.eq("userId", userId))
-    .collect();
+  const user = await ctx.db.get(userId);
+  const allRules = user?.organizationId
+    ? await ctx.db.query("rules").withIndex("by_orgId_active", (q: any) => q.eq("orgId", user.organizationId)).collect()
+    : await ctx.db.query("rules").withIndex("by_userId", (q: any) => q.eq("userId", userId)).collect();
 
   const activeRules = allRules.filter(
     (r: any) => r.isActive && r.type !== "video_rotation" && (!excludeRuleId || r._id !== excludeRuleId)

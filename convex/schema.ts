@@ -1079,6 +1079,7 @@ export default defineSchema({
     notes: v.optional(v.string()),
     createdAt: v.number(),
   })
+    .index("by_userId", ["userId"])
     .index("by_status", ["status"])
     .index("by_createdAt", ["createdAt"]),
 
