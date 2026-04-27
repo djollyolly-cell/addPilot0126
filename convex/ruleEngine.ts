@@ -22,7 +22,7 @@ import {
 const ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account
 
 // Batch worker constants
-const UZ_WORKER_COUNT = 3;
+const UZ_WORKER_COUNT = 6;
 const UZ_WORKER_TIMEOUT_MS = 540_000; // 9 min
 const UZ_BATCH_ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account (same as current)
 
