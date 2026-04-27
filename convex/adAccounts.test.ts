@@ -204,15 +204,15 @@ describe("adAccounts", () => {
       ).rejects.toThrow("Лимит кабинетов");
     });
 
-    test("pro tier allows up to 20 accounts (default limit)", async () => {
+    test("pro tier allows up to 9 accounts (default limit)", async () => {
       const t = convexTest(schema);
       const userId = await createTestUser(t);
 
-      // Upgrade to pro (default limit = 20)
+      // Upgrade to pro (default limit = 9)
       await t.mutation(api.users.updateTier, { userId, tier: "pro" });
 
-      // Connect 20 accounts — all should succeed
-      for (let i = 1; i <= 20; i++) {
+      // Connect 9 accounts — all should succeed
+      for (let i = 1; i <= 9; i++) {
         const accountId = await t.mutation(api.adAccounts.connect, {
           userId,
           vkAccountId: `300${String(i).padStart(3, "0")}`,
@@ -223,15 +223,15 @@ describe("adAccounts", () => {
       }
 
       const accounts = await t.query(api.adAccounts.list, { userId });
-      expect(accounts).toHaveLength(20);
+      expect(accounts).toHaveLength(9);
 
-      // 21st should fail
+      // 10th should fail
       await expect(
         t.mutation(api.adAccounts.connect, {
           userId,
-          vkAccountId: "300021",
-          name: "Кабинет 21",
-          accessToken: "token_21",
+          vkAccountId: "300010",
+          name: "Кабинет 10",
+          accessToken: "token_10",
         })
       ).rejects.toThrow("Лимит кабинетов");
     });

@@ -230,7 +230,7 @@ export const updateUserTier = mutation({
     };
     // Set proAccountLimit when admin assigns Pro (keep existing if already set)
     if (args.tier === "pro" && !user.proAccountLimit) {
-      tierPatch.proAccountLimit = 20;
+      tierPatch.proAccountLimit = 9;
     }
     await ctx.db.patch(args.userId, tierPatch);
 

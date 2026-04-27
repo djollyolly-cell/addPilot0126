@@ -327,7 +327,7 @@ export const connect = mutation({
       const tier = user.subscriptionTier ?? "freemium";
       let limit: number;
       if (tier === "pro") {
-        limit = user.proAccountLimit ?? 20;
+        limit = user.proAccountLimit ?? 9;
       } else {
         const tierLimits: Record<string, number> = { freemium: 1, start: 3 };
         limit = tierLimits[tier] ?? 1;

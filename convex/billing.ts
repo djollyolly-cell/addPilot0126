@@ -593,7 +593,7 @@ export const handleBepaidWebhook = internalMutation({
 
         const proLimitPatch: Record<string, unknown> = {};
         if (payment.tier === "pro" && !paidUser?.proAccountLimit) {
-          proLimitPatch.proAccountLimit = 20;
+          proLimitPatch.proAccountLimit = 9;
         }
 
         await ctx.db.patch(payment.userId, {
@@ -727,7 +727,7 @@ export const processPayment = mutation({
     // Set proAccountLimit for new Pro subscribers (keep existing if re-subscribing)
     const proLimitPatch: Record<string, unknown> = {};
     if (args.tier === "pro" && !user.proAccountLimit) {
-      proLimitPatch.proAccountLimit = 20;
+      proLimitPatch.proAccountLimit = 9;
     }
 
     // Update user subscription

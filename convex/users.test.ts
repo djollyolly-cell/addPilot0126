@@ -385,7 +385,7 @@ describe("users", () => {
       const limits = await t.query(api.users.getLimits, { userId });
 
       expect(limits.tier).toBe("pro");
-      expect(limits.limits.accounts).toBe(20);
+      expect(limits.limits.accounts).toBe(9);
       expect(limits.limits.rules).toBe(Infinity);
       expect(limits.limits.autoStop).toBe(true);
     });

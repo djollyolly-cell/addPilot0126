@@ -6,7 +6,7 @@ import { internal } from "./_generated/api";
 
 // Subscription tier limits
 // Pro account limit is dynamic: 27 for grandfathered users, 20 for new
-export const PRO_ACCOUNTS_DEFAULT = 20;
+export const PRO_ACCOUNTS_DEFAULT = 9;
 export const PRO_ACCOUNTS_GRANDFATHERED = 27;
 
 export const TIER_LIMITS = {
@@ -159,7 +159,7 @@ export const updateTier = mutation({
 
     // Set proAccountLimit when upgrading to Pro (keep existing if re-subscribing)
     if (args.tier === "pro" && !user.proAccountLimit) {
-      patchData.proAccountLimit = 20;
+      patchData.proAccountLimit = PRO_ACCOUNTS_DEFAULT;
     }
 
     await ctx.db.patch(args.userId, patchData);
