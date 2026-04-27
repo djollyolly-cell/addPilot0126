@@ -1,5 +1,5 @@
 import { useState, memo } from 'react';
-import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Loader2, Trash2, ChevronDown, ChevronRight, Pencil, Check, X, XCircle } from 'lucide-react';
+import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Loader2, Trash2, ChevronDown, ChevronRight, Pencil, Check, X, XCircle, VolumeX, RotateCcw } from 'lucide-react';
 import { useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
@@ -24,6 +24,8 @@ interface AccountCardProps {
   userId: string;
   onSync: (accountId: string) => Promise<void>;
   onDisconnect: (accountId: string) => void;
+  isAdmin?: boolean;
+  sessionToken?: string;
 }
 
 const statusConfig = {
@@ -59,7 +61,7 @@ const statusConfig = {
   },
 };
 
-export const AccountCard = memo(function AccountCard({ account, userId, onSync, onDisconnect }: AccountCardProps) {
+export const AccountCard = memo(function AccountCard({ account, userId, onSync, onDisconnect, isAdmin, sessionToken }: AccountCardProps) {
   const [showCampaigns, setShowCampaigns] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
@@ -70,6 +72,9 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
   const [nameSaving, setNameSaving] = useState(false);
   const setAdvertiserId = useMutation(api.videos.setAdvertiserId);
   const renameAccount = useMutation(api.adAccounts.rename);
+  const abandonAccount = useMutation(api.admin.abandonAccount);
+  const reactivateAccount = useMutation(api.admin.reactivateAccount);
+  const [adminAction, setAdminAction] = useState(false);
 
   const handleSaveName = async () => {
     const trimmed = editName.trim();
@@ -217,6 +222,44 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
           {/* Actions */}
           {account.status !== 'deleting' && (
             <div className="flex items-center gap-1 shrink-0">
+              {/* Admin: Заглушить error → abandoned */}
+              {isAdmin && sessionToken && account.status === 'error' && (
+                <button
+                  type="button"
+                  disabled={adminAction}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setAdminAction(true);
+                    try {
+                      await abandonAccount({ sessionToken, accountId: account._id as Id<"adAccounts"> });
+                    } finally { setAdminAction(false); }
+                  }}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-orange-600 hover:bg-orange-50 transition-colors disabled:opacity-50"
+                  title="Заглушить (abandoned)"
+                  data-testid="abandon-button"
+                >
+                  <VolumeX className="w-4 h-4" />
+                </button>
+              )}
+              {/* Admin: Вернуть abandoned → error */}
+              {isAdmin && sessionToken && account.status === 'abandoned' && (
+                <button
+                  type="button"
+                  disabled={adminAction}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setAdminAction(true);
+                    try {
+                      await reactivateAccount({ sessionToken, accountId: account._id as Id<"adAccounts"> });
+                    } finally { setAdminAction(false); }
+                  }}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-green-600 hover:bg-green-50 transition-colors disabled:opacity-50"
+                  title="Вернуть в error"
+                  data-testid="reactivate-button"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setShowDisconnectConfirm(true)}

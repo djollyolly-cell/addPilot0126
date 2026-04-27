@@ -5,7 +5,7 @@ interface Account {
   _id: string;
   vkAccountId: string;
   name: string;
-  status: 'active' | 'paused' | 'error' | 'deleting';
+  status: 'active' | 'paused' | 'error' | 'deleting' | 'abandoned';
   lastSyncAt?: number;
   lastError?: string;
   mtAdvertiserId?: string;
@@ -16,9 +16,11 @@ interface AccountListProps {
   userId: string;
   onSync: (accountId: string) => Promise<void>;
   onDisconnect: (accountId: string) => void;
+  isAdmin?: boolean;
+  sessionToken?: string;
 }
 
-export function AccountList({ accounts, userId, onSync, onDisconnect }: AccountListProps) {
+export function AccountList({ accounts, userId, onSync, onDisconnect, isAdmin, sessionToken }: AccountListProps) {
   if (accounts.length === 0) {
     return (
       <div
@@ -45,6 +47,8 @@ export function AccountList({ accounts, userId, onSync, onDisconnect }: AccountL
           userId={userId}
           onSync={onSync}
           onDisconnect={onDisconnect}
+          isAdmin={isAdmin}
+          sessionToken={sessionToken}
         />
       ))}
     </div>

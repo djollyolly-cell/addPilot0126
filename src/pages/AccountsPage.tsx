@@ -13,7 +13,7 @@ import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
 
 export function AccountsPage() {
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -323,6 +323,8 @@ export function AccountsPage() {
               userId={user.userId}
               onSync={handleSync}
               onDisconnect={handleDisconnect}
+              isAdmin={isAdmin}
+              sessionToken={isAdmin ? (localStorage.getItem('adpilot_session') || undefined) : undefined}
             />
           )}
         </CardContent>
