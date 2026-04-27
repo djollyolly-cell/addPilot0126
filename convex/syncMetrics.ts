@@ -809,7 +809,7 @@ async function syncSingleAccount(
     // Load account
     const account = await ctx.runQuery(internal.adAccounts.getInternal, { accountId });
     if (!account) {
-      console.log(`[syncBatch] Account ${accountId} not found, skipping`);
+      // Account not found — skip silently
       return;
     }
     if (account.status !== "active" && account.status !== "error") {
@@ -863,7 +863,7 @@ async function syncSingleAccount(
           try {
             const alive = await quickTokenCheck(account.accessToken);
             if (alive) {
-              console.log(`[syncBatch] Auto-recovery: "${account.name}" token alive, restoring to active`);
+              // Auto-recovery: token alive, restoring to active
               await ctx.runMutation(api.adAccounts.updateStatus, {
                 accountId: account._id,
                 status: "active",
@@ -985,8 +985,9 @@ async function syncSingleAccount(
           });
         }
 
-        if (adCampaignMap.length > 0) {
-          console.log(`[syncBatch] Live campaign map: ${adCampaignMap.length} ads, ${vkCampaigns.length} campaigns for "${account.name}"`);
+        // Only log large campaign maps (debug outliers, not spam every account)
+        if (adCampaignMap.length > 200) {
+          console.log(`[syncBatch] Large campaign map: ${adCampaignMap.length} ads for "${account.name}"`);
         }
 
         // Auto-upsert campaigns (ad groups) + ad_plans — batched into single mutation

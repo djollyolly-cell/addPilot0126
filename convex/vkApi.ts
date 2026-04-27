@@ -920,11 +920,14 @@ export const getMtLeadCounts = action({
 
       console.log(`[vkApi] Lead counts: ${JSON.stringify(result)}`);
     } catch (err) {
-      // Lead Ads API might not be available for all accounts — don't fail the sync
-      // But log as ERROR so it's visible in monitoring
-      console.error(
-        `[vkApi] Lead Ads API error (non-fatal, leads may be undercounted!): ${err instanceof Error ? err.message : err}`
-      );
+      // Lead Ads 404 = account has no lead forms → skip silently (expected for most accounts)
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("404")) {
+        // Normal — most accounts don't use Lead Ads forms
+      } else {
+        // Unexpected error — log as warning (not error to avoid alert spam)
+        console.warn(`[vkApi] Lead Ads API warning: ${msg}`);
+      }
     }
 
     return result;

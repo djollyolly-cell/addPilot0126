@@ -22,7 +22,7 @@ import {
 const ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account
 
 // Batch worker constants
-const UZ_WORKER_COUNT = 6;
+const UZ_WORKER_COUNT = 3;
 const UZ_WORKER_TIMEOUT_MS = 540_000; // 9 min
 const UZ_BATCH_ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account (same as current)
 
@@ -2925,6 +2925,14 @@ async function processUzBudgetForAccount(
   ctx: { runQuery: any; runMutation: any; runAction: any },
   accountId: Id<"adAccounts">
 ): Promise<void> {
+    // Pre-check: skip accounts with known bad tokens — sync cron handles recovery
+    const account = await ctx.runQuery(internal.adAccounts.getInternal, { accountId });
+    if (!account) return;
+    if (account.status === "error" && account.lastError?.includes("TOKEN_EXPIRED")) {
+      return; // Token recovery is handled by syncBatchWorker, not UZ budget
+    }
+    if (account.status !== "active") return; // Only process active accounts
+
     // Re-fetch UZ rules for this account (lightweight query)
     const allUzRules = await ctx.runQuery(internal.ruleEngine.getActiveUzRules);
     const rulesByAccount = groupRulesByAccount(allUzRules as UzRule[]);

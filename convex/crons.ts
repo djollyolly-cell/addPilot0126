@@ -81,10 +81,10 @@ crons.interval(
 );
 
 // UZ budget increase — fan-out: dispatch + per-account workers
-// Runs every 5 min to catch budget-exhausted campaigns quickly
-crons.interval(
+// Offset +2 min from syncDispatch to avoid 12+ concurrent actions at t=0
+crons.cron(
   "uz-budget-increase",
-  { minutes: 5 },
+  "2-57/5 * * * *",
   internal.ruleEngine.uzBudgetDispatch
 );
 
