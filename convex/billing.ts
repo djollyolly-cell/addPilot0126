@@ -82,7 +82,7 @@ export const TIERS = {
     overagePrice: 0,
     maxManagers: -1,
     maxNiches: -1,
-    features: ["От 65 кабинетов", "Всё из Agency L", "Персональный менеджер", "Индивидуальная цена"],
+    features: ["От 50 кабинетов", "Всё из Agency L", "Персональный менеджер", "Индивидуальная цена"],
   },
 } as const;
 
