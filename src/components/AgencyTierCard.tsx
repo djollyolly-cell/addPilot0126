@@ -33,10 +33,8 @@ export function AgencyTierCard({ name, price, includedLoadUnits, overagePerUnit,
         ) : (
           <div className="text-2xl font-bold text-foreground">Индивидуально</div>
         )}
-        <p className="text-sm text-muted-foreground">{includedLoadUnits}+ ед. нагрузки</p>
-        {overagePerUnit && (
-          <p className="text-xs text-muted-foreground">Доп. единица: {overagePerUnit} ₽</p>
-        )}
+        <p className="text-sm text-muted-foreground">~{includedLoadUnits} кабинетов</p>
+        <p className="text-xs text-muted-foreground">{includedLoadUnits} ед. нагрузки{overagePerUnit ? ` · доп. единица ${overagePerUnit} ₽` : ""}</p>
       </CardHeader>
       <CardContent className="flex-1">
         <ul className="space-y-2">

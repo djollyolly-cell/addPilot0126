@@ -133,7 +133,7 @@ function LoadGauge({ current, max }: { current: number; max: number }) {
           style={{ width: `${Math.min(100, pct)}%` }}
         />
       </div>
-      <p className="text-xs text-muted-foreground">{pct}% использовано</p>
+      <p className="text-xs text-muted-foreground">{pct}% использовано · ~{current} кабинетов</p>
     </div>
   );
 }
