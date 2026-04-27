@@ -316,7 +316,7 @@ describe("Agency Lifecycle Integration", () => {
       expect(checks.invites).toBe(0);
       expect(checks.rules).toBe(0);
       expect(checks.accounts).toBe(0);
-      expect(checks.payments).toBe(0);
+      expect(checks.payments).toBe(1); // payments retained for accounting
       expect(checks.loadHistory).toBe(0);
       expect(checks.auditLogs).toBe(0);
       expect(checks.tgLinks).toBe(0);

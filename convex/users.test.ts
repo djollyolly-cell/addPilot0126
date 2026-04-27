@@ -509,7 +509,7 @@ describe("users", () => {
       expect(user).toBeNull();
     });
 
-    test("cascade deletes telegramLinks, payments, creatives, videos", async () => {
+    test("cascade deletes telegramLinks, creatives, videos but retains payments", async () => {
       const t = convexTest(schema);
 
       const userId = await t.mutation(api.users.create, {
@@ -574,7 +574,7 @@ describe("users", () => {
       );
 
       expect(afterLinks).toHaveLength(0);
-      expect(afterPayments).toHaveLength(0);
+      expect(afterPayments).toHaveLength(1); // payments retained for accounting
       expect(afterCreatives).toHaveLength(0);
       expect(afterVideos).toHaveLength(0);
     });

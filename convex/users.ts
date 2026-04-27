@@ -678,14 +678,7 @@ export const deleteUser = mutation({
       await ctx.db.delete(link._id);
     }
 
-    // Delete payments
-    const payments = await ctx.db
-      .query("payments")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
-      .collect();
-    for (const payment of payments) {
-      await ctx.db.delete(payment._id);
-    }
+    // NOTE: payments are NOT deleted — financial records must be retained for accounting/legal purposes
 
     // Delete creatives
     const creatives = await ctx.db
@@ -773,21 +766,7 @@ export const deleteUser = mutation({
       await ctx.db.delete(alertSettings._id);
     }
 
-    // Delete referrals (both as referrer and referred)
-    const referralsAsReferrer = await ctx.db
-      .query("referrals")
-      .withIndex("by_referrerId", (q) => q.eq("referrerId", args.userId))
-      .collect();
-    for (const ref of referralsAsReferrer) {
-      await ctx.db.delete(ref._id);
-    }
-    const referralsAsReferred = await ctx.db
-      .query("referrals")
-      .withIndex("by_referredId", (q) => q.eq("referredId", args.userId))
-      .collect();
-    for (const ref of referralsAsReferred) {
-      await ctx.db.delete(ref._id);
-    }
+    // NOTE: referrals are NOT deleted — financial records must be retained for accounting/legal purposes
 
     // Delete org memberships
     const orgMemberships = await ctx.db
