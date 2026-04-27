@@ -32,6 +32,7 @@ export const TIERS = {
     features: ["До 20 кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
   },
   // Agency tiers — load-units based
+  // Agency tiers (spec §3.2-3.4)
   agency_s: {
     name: "Agency S",
     price: 14900,
@@ -39,7 +40,7 @@ export const TIERS = {
     rulesLimit: -1,
     includedLoadUnits: 30,
     overagePrice: 600,
-    features: ["До 30 единиц нагрузки", "Конструктор правил", "Команда менеджеров", "Приоритетная поддержка"],
+    features: ["До 30 ед. нагрузки", "Конструктор правил (L2)", "Команда менеджеров", "Приоритетная поддержка", "Мониторинг здоровья аккаунтов", "Месячный отчёт по нагрузке"],
   },
   agency_m: {
     name: "Agency M",
@@ -48,7 +49,7 @@ export const TIERS = {
     rulesLimit: -1,
     includedLoadUnits: 60,
     overagePrice: 500,
-    features: ["До 60 единиц нагрузки", "Конструктор правил", "Команда менеджеров", "Приоритетная поддержка"],
+    features: ["До 60 ед. нагрузки", "Конструктор правил (L2)", "Команда менеджеров", "Приоритетная поддержка", "Мониторинг здоровья аккаунтов", "Месячный отчёт по нагрузке"],
   },
   agency_l: {
     name: "Agency L",
@@ -57,16 +58,17 @@ export const TIERS = {
     rulesLimit: -1,
     includedLoadUnits: 120,
     overagePrice: 400,
-    features: ["До 120 единиц нагрузки", "Кастомные типы правил", "Выделенный IP", "SLA"],
+    features: ["До 120 ед. нагрузки", "Конструктор правил (L2)", "Команда менеджеров", "Приоритетная поддержка", "Мониторинг здоровья аккаунтов", "Месячный отчёт по нагрузке", "Выделенный IP", "Кастомные типы правил (L3)", "SLA на синхронизацию"],
   },
+  // Agency XL — individual pricing, no fixed price. Used only for schema/type completeness.
   agency_xl: {
     name: "Agency XL",
-    price: 59900,
+    price: 0,
     accountsLimit: -1,
     rulesLimit: -1,
     includedLoadUnits: 200,
-    overagePrice: 350,
-    features: ["От 200 единиц нагрузки", "Кастомные типы", "Персональный менеджер", "Кастомная разработка"],
+    overagePrice: 0,
+    features: ["От 200 ед. нагрузки", "Всё из Agency L", "Персональный менеджер", "Индивидуальная цена"],
   },
 } as const;
 

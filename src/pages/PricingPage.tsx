@@ -47,15 +47,24 @@ const TIERS = {
 
 type TierKey = keyof typeof TIERS;
 
+const AGENCY_COMMON_FEATURES = [
+  "Все функции Pro",
+  "Конструктор правил (L2)",
+  "Команда менеджеров с правами",
+  "Приоритетная поддержка",
+  "Мониторинг здоровья аккаунтов",
+  "Месячный отчёт по нагрузке",
+];
+
 const AGENCY_TIERS = [
-  { code: "agency_s", name: "Agency S", price: 14900, includedLoadUnits: 30,
-    features: ["Конструктор правил", "Команда менеджеров", "Приоритетная поддержка"] },
-  { code: "agency_m", name: "Agency M", price: 24900, includedLoadUnits: 60,
-    features: ["+ Расширенная аналитика", "+ Месячный отчёт"] },
-  { code: "agency_l", name: "Agency L", price: 39900, includedLoadUnits: 120,
-    features: ["+ Кастомные типы правил", "+ Выделенный IP", "+ SLA"], recommended: true },
-  { code: "agency_xl", name: "Agency XL", price: 59900, includedLoadUnits: 200,
-    features: ["+ Персональный менеджер", "+ Кастомная разработка"] },
+  { code: "agency_s", name: "Agency S", price: 14900, includedLoadUnits: 30, overagePerUnit: 600,
+    features: [...AGENCY_COMMON_FEATURES] },
+  { code: "agency_m", name: "Agency M", price: 24900, includedLoadUnits: 60, overagePerUnit: 500,
+    features: [...AGENCY_COMMON_FEATURES] },
+  { code: "agency_l", name: "Agency L", price: 39900, includedLoadUnits: 120, overagePerUnit: 400,
+    features: [...AGENCY_COMMON_FEATURES, "Выделенный IP", "Кастомные типы правил (L3)", "SLA на синхронизацию"], recommended: true },
+  { code: "agency_xl", name: "Agency XL", includedLoadUnits: 200,
+    features: [...AGENCY_COMMON_FEATURES, "Выделенный IP", "Кастомные типы правил (L3)", "SLA на синхронизацию", "Персональный менеджер"] },
 ];
 
 export function PricingPage() {
@@ -246,6 +255,7 @@ export function PricingPage() {
               name={t.name}
               price={t.price}
               includedLoadUnits={t.includedLoadUnits}
+              overagePerUnit={t.overagePerUnit}
               features={t.features}
               recommended={t.recommended}
               onSelect={() => navigate(`/agency/onboarding?tier=${t.code}`)}

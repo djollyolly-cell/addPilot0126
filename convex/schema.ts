@@ -1062,4 +1062,24 @@ export default defineSchema({
     updatedAt: v.number(),
   }).index("by_userId", ["userId"]),
 
+  // Agency XL requests (individual pricing — saved + sent to owner via Telegram)
+  agencyRequests: defineTable({
+    userId: v.optional(v.id("users")),
+    contactName: v.string(),
+    contactPhone: v.string(),
+    contactEmail: v.optional(v.string()),
+    orgName: v.string(),
+    totalCabinets: v.number(),
+    nichesConfig: v.array(v.object({
+      niche: v.string(),
+      cabinetsCount: v.number(),
+    })),
+    estimatedLoadUnits: v.number(),
+    status: v.union(v.literal("new"), v.literal("contacted"), v.literal("closed")),
+    notes: v.optional(v.string()),
+    createdAt: v.number(),
+  })
+    .index("by_status", ["status"])
+    .index("by_createdAt", ["createdAt"]),
+
 }, { schemaValidation: false });

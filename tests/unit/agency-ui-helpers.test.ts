@@ -33,14 +33,15 @@ describe("LoadCalculator computeUnits", () => {
   });
 
   it("computes units for single niche", () => {
-    expect(computeUnits({ beauty: 10 })).toBeCloseTo(10 * 0.8);
-    expect(computeUnits({ measurement: 5 })).toBeCloseTo(5 * 1.2);
+    expect(computeUnits({ beauty: 10 })).toBe(10 * 1);
+    expect(computeUnits({ measurement: 5 })).toBe(5 * 2);
+    expect(computeUnits({ infobiz: 3 })).toBe(3 * 5);
   });
 
   it("computes units for multiple niches", () => {
     const dist = { beauty: 10, schools: 5, measurement: 3 };
-    const expected = 10 * 0.8 + 5 * 1.0 + 3 * 1.2;
-    expect(computeUnits(dist)).toBeCloseTo(expected);
+    const expected = 10 * 1 + 5 * 1 + 3 * 2;
+    expect(computeUnits(dist)).toBe(expected);
   });
 
   it("ignores unknown niches", () => {

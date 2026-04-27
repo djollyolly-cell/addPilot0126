@@ -1,12 +1,13 @@
 import { v } from "convex/values";
-import { mutation, query, internalQuery, internalMutation } from "./_generated/server";
+import { action, mutation, query, internalQuery, internalMutation } from "./_generated/server";
 import { internal } from "./_generated/api";
+import { Id } from "./_generated/dataModel";
 import { checkOrgWritable, checkFeaturesDisabled } from "./loadUnits";
 
 
 const PERMISSIONS = ["rules", "budgets", "ads_control", "reports", "logs", "telegram", "add_accounts", "invite_members", "ai_cabinet"];
 
-const AVAILABLE_NICHES = ["beauty", "schools", "realty", "auto", "medicine", "services"];
+const AVAILABLE_NICHES = ["beauty", "schools", "measurement", "sellers", "infobiz", "other"];
 
 /** Get current user's organization with members */
 export const getCurrent = query({
@@ -517,5 +518,79 @@ export const clearGraceFlags = internalMutation({
     );
 
     await ctx.db.replace(args.orgId, { ...clean, updatedAt: Date.now() } as never);
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
+// Agency XL request (individual pricing)
+// ═══════════════════════════════════════════════════════════
+
+const OWNER_CHAT_ID = "325307765";
+
+export const submitAgencyXLRequest = action({
+  args: {
+    userId: v.optional(v.id("users")),
+    contactName: v.string(),
+    contactPhone: v.string(),
+    contactEmail: v.optional(v.string()),
+    orgName: v.string(),
+    totalCabinets: v.number(),
+    nichesConfig: v.array(v.object({
+      niche: v.string(),
+      cabinetsCount: v.number(),
+    })),
+    estimatedLoadUnits: v.number(),
+  },
+  handler: async (ctx, args) => {
+    // Save to DB
+    const requestId: Id<"agencyRequests"> = await ctx.runMutation(internal.organizations.saveAgencyRequest, {
+      ...args,
+      status: "new" as const,
+      createdAt: Date.now(),
+    });
+
+    // Format niches for Telegram
+    const nicheLines = args.nichesConfig
+      .map((nc) => `  ${nc.niche}: ${nc.cabinetsCount} каб.`)
+      .join("\n");
+
+    const message =
+      `🏢 <b>Заявка Agency XL</b>\n\n` +
+      `<b>Контакт:</b> ${args.contactName}\n` +
+      `<b>Телефон:</b> ${args.contactPhone}\n` +
+      (args.contactEmail ? `<b>Email:</b> ${args.contactEmail}\n` : "") +
+      `<b>Организация:</b> ${args.orgName}\n` +
+      `<b>Кабинетов:</b> ${args.totalCabinets}\n` +
+      `<b>Ниши:</b>\n${nicheLines}\n` +
+      `<b>Ед. нагрузки:</b> ${args.estimatedLoadUnits}\n\n` +
+      `Свяжитесь в течение 2-3 часов.`;
+
+    await ctx.runAction(internal.telegram.sendMessage, {
+      chatId: OWNER_CHAT_ID,
+      text: message,
+    });
+
+    return { success: true, requestId };
+  },
+});
+
+export const saveAgencyRequest = internalMutation({
+  args: {
+    userId: v.optional(v.id("users")),
+    contactName: v.string(),
+    contactPhone: v.string(),
+    contactEmail: v.optional(v.string()),
+    orgName: v.string(),
+    totalCabinets: v.number(),
+    nichesConfig: v.array(v.object({
+      niche: v.string(),
+      cabinetsCount: v.number(),
+    })),
+    estimatedLoadUnits: v.number(),
+    status: v.literal("new"),
+    createdAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    return await ctx.db.insert("agencyRequests", args);
   },
 });

@@ -1,20 +1,26 @@
 import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 
+/**
+ * Niche coefficients from pricing spec (2026-04-15-agency-pricing-infrastructure-design.md §2.1).
+ * Used in load unit estimation at onboarding.
+ * Real load units are computed from actual activeGroups (ceil(groups/100)),
+ * but these coefficients predict load at signup before real data exists.
+ */
 export const NICHE_COEFS: Record<string, number> = {
-  beauty: 0.8,
-  schools: 1.0,
-  measurement: 1.2,
-  sellers: 1.0,
-  infobiz: 0.9,
-  other: 1.0,
+  beauty: 1,
+  schools: 1,
+  measurement: 2,
+  sellers: 4,
+  infobiz: 5,
+  other: 2,
 };
 
 const NICHE_LABELS: Record<string, string> = {
   beauty: "Бьюти / Красота",
-  schools: "Онлайн-школы",
-  measurement: "Замерные ниши",
-  sellers: "Товарный бизнес",
+  schools: "Офлайн-школы",
+  measurement: "Замерные ниши (окна, кухни, мебель)",
+  sellers: "Селлеры",
   infobiz: "Инфобизнес",
   other: "Другое",
 };
