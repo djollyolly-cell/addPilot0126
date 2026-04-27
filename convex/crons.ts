@@ -81,10 +81,10 @@ crons.interval(
 );
 
 // UZ budget increase — fan-out: dispatch + per-account workers
-// Offset +2 min from syncDispatch to avoid 12+ concurrent actions at t=0
-crons.cron(
+// Uses interval (not cron) so it naturally staggers with sync — starts after previous run finishes
+crons.interval(
   "uz-budget-increase",
-  "2-57/5 * * * *",
+  { minutes: 5 },
   internal.ruleEngine.uzBudgetDispatch
 );
 
