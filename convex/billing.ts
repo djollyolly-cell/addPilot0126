@@ -1034,7 +1034,7 @@ export const updateLimitsOnDowngrade = internalMutation({
       .collect();
 
     const activeAccounts = accounts
-      .filter((a) => a.status === "active")
+      .filter((a) => a.status === "active" || a.status === "abandoned")
       .sort((a, b) => a.createdAt - b.createdAt);
 
     // Deactivate excess accounts (keep oldest ones active)

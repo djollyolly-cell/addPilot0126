@@ -97,12 +97,18 @@ export const patchAccountToken = internalMutation({
         });
       }
     }
-    await ctx.db.patch(args.accountId, {
+    const patchFields: Record<string, unknown> = {
       accessToken: args.accessToken,
       tokenExpiresAt: args.tokenExpiresAt,
       status: "active",
       lastError: undefined,
-    });
+    };
+    if (account && account.status === "abandoned") {
+      patchFields.abandonedAt = undefined;
+      patchFields.tokenErrorSince = undefined;
+      patchFields.tokenRecoveryAttempts = undefined;
+    }
+    await ctx.db.patch(args.accountId, patchFields);
   },
 });
 

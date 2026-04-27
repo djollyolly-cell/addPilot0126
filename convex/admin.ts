@@ -464,6 +464,47 @@ export const toggleVideoRotation = mutation({
   },
 });
 
+/** Admin: manually move error account to abandoned (bypass 7-day wait) */
+export const abandonAccount = mutation({
+  args: {
+    sessionToken: v.string(),
+    accountId: v.id("adAccounts"),
+  },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+    const account = await ctx.db.get(args.accountId);
+    if (!account) throw new Error("Кабинет не найден");
+    if (account.status !== "error") throw new Error("Только error-кабинеты можно заглушить");
+    await ctx.db.patch(args.accountId, {
+      status: "abandoned",
+      abandonedAt: Date.now(),
+      tokenErrorSince: undefined,
+      tokenRecoveryAttempts: undefined,
+      consecutiveSyncErrors: undefined,
+    });
+    return { success: true };
+  },
+});
+
+/** Admin: move abandoned account back to error (retry recovery) */
+export const reactivateAccount = mutation({
+  args: {
+    sessionToken: v.string(),
+    accountId: v.id("adAccounts"),
+  },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+    const account = await ctx.db.get(args.accountId);
+    if (!account) throw new Error("Кабинет не найден");
+    if (account.status !== "abandoned") throw new Error("Только abandoned-кабинеты можно реактивировать");
+    await ctx.db.patch(args.accountId, {
+      status: "error",
+      abandonedAt: undefined,
+    });
+    return { success: true };
+  },
+});
+
 /** List all users with their module flags (for admin Modules tab) */
 export const listUsersModules = query({
   args: { sessionToken: v.string() },

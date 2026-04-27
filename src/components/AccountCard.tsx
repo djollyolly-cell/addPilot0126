@@ -1,5 +1,5 @@
 import { useState, memo } from 'react';
-import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Loader2, Trash2, ChevronDown, ChevronRight, Pencil, Check, X } from 'lucide-react';
+import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Loader2, Trash2, ChevronDown, ChevronRight, Pencil, Check, X, XCircle } from 'lucide-react';
 import { useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
@@ -15,7 +15,7 @@ interface AccountCardProps {
     _id: string;
     vkAccountId: string;
     name: string;
-    status: 'active' | 'paused' | 'error' | 'deleting';
+    status: 'active' | 'paused' | 'error' | 'deleting' | 'abandoned';
     lastSyncAt?: number;
     lastError?: string;
     mtAdvertiserId?: string;
@@ -48,6 +48,12 @@ const statusConfig = {
   deleting: {
     icon: Loader2,
     label: 'Удаляется...',
+    color: 'text-muted-foreground',
+    bg: 'bg-muted/50',
+  },
+  abandoned: {
+    icon: XCircle,
+    label: 'Требует переподключения',
     color: 'text-muted-foreground',
     bg: 'bg-muted/50',
   },
@@ -95,7 +101,7 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
   const StatusIcon = status.icon;
 
   return (
-    <Card data-testid="account-card" data-account-id={account.vkAccountId} className={cn(account.status === 'deleting' && 'opacity-60 pointer-events-none')}>
+    <Card data-testid="account-card" data-account-id={account.vkAccountId} className={cn(account.status === 'deleting' && 'opacity-60 pointer-events-none', account.status === 'abandoned' && 'opacity-75')}>
       <CardContent className="p-4">
         <div className="flex items-start justify-between gap-4">
           {/* Account info */}
@@ -200,6 +206,11 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
                   {account.lastError}
                 </p>
               )}
+              {account.status === 'abandoned' && (
+                <p className="text-xs text-muted-foreground mt-1" data-testid="account-abandoned-message">
+                  Токен недействителен более 7 дней. Переподключите кабинет.
+                </p>
+              )}
             </div>
           </div>
 
@@ -228,12 +239,14 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
         />
 
         {/* Sync */}
-        <div className="mt-3 pt-3 border-t">
-          <SyncButton
-            onSync={() => onSync(account._id)}
-            lastSyncAt={account.lastSyncAt}
-          />
-        </div>
+        {account.status !== 'abandoned' && (
+          <div className="mt-3 pt-3 border-t">
+            <SyncButton
+              onSync={() => onSync(account._id)}
+              lastSyncAt={account.lastSyncAt}
+            />
+          </div>
+        )}
 
         {/* Campaigns toggle */}
         <div className="mt-3 pt-3 border-t">

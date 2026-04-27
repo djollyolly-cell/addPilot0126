@@ -816,6 +816,50 @@ async function syncSingleAccount(
       return;
     }
 
+    // Auto-abandon: error accounts with unrecoverable token errors for 7+ days
+    if (
+      account.status === "error" &&
+      account.lastSyncAt &&
+      Date.now() - account.lastSyncAt > 7 * 24 * 60 * 60 * 1000 &&
+      (account.lastError?.includes("TOKEN_EXPIRED") ||
+       account.lastError?.includes("Автовосстановление не удалось") ||
+       account.lastError?.includes("refreshToken отсутствует"))
+    ) {
+      await ctx.runMutation(internal.adAccounts.markAbandoned, { accountId: account._id });
+
+      // One-time Telegram to user
+      try {
+        const user = await ctx.runQuery(internal.users.getById, { userId: account.userId });
+        if (user?.telegramChatId) {
+          await ctx.runAction(internal.telegram.sendMessage, {
+            chatId: user.telegramChatId,
+            text: [
+              `Кабинет «${account.name}» отключён от мониторинга`,
+              ``,
+              `Токен был недействителен более 7 дней, автовосстановление не удалось.`,
+              `Переподключите кабинет: https://aipilot.by/accounts`,
+            ].join("\n"),
+          });
+        }
+      } catch { /* non-critical */ }
+
+      // One-time admin alert
+      try {
+        await ctx.runMutation(internal.syncMetrics.scheduleEscalationAlert, {
+          accountId: account._id,
+          text: [
+            `<b>Кабинет переведён в abandoned</b>`,
+            ``,
+            `<b>Кабинет:</b> ${account.name}`,
+            `<b>Причина:</b> ${(account.lastError || "неизвестно").slice(0, 200)}`,
+          ].join("\n"),
+          dedupKey: `abandoned:${account._id}`,
+        });
+      } catch { /* non-critical */ }
+
+      return;
+    }
+
     // Escalation: if account stuck in error for >2h, notify admin (max once per 2h via time-slot dedup)
     if (
       account.status === "error" &&

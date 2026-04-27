@@ -120,12 +120,17 @@ export const checkCronSyncResults = internalQuery({
 
     const allAccounts = await ctx.db.query("adAccounts").collect();
     const activeAccounts = allAccounts.filter((a) => a.status === "active" || a.status === "error");
+    const abandonedCount = allAccounts.filter((a) => a.status === "abandoned").length;
     const now = Date.now();
     const syncedCount = activeAccounts.filter((a) => a.lastSyncAt && now - a.lastSyncAt < 20 * 60_000).length;
 
     if (activeAccounts.length > 0 && syncedCount < activeAccounts.length) {
       issues.push(`sync: ${syncedCount}/${activeAccounts.length} синхронизированы`);
       if (status === "ok") status = "warning";
+    }
+
+    if (abandonedCount > 0) {
+      issues.push(`abandoned: ${abandonedCount}`);
     }
 
     return { name: "Кроны (sync)", status, message: issues.length ? issues[0] : "ок", details: issues };

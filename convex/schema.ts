@@ -101,7 +101,8 @@ export default defineSchema({
       v.literal("paused"),
       v.literal("error"),
       v.literal("archived"),
-      v.literal("deleting")
+      v.literal("deleting"),
+      v.literal("abandoned")
     ),
     lastSyncAt: v.optional(v.number()),
     lastError: v.optional(v.string()),
@@ -111,6 +112,8 @@ export default defineSchema({
     // Transient sync error tracking (non-TOKEN_EXPIRED)
     consecutiveSyncErrors: v.optional(v.number()),
     lastSyncError: v.optional(v.string()),
+    // Abandoned: account silenced after 7+ days in error with unrecoverable token
+    abandonedAt: v.optional(v.number()),
     // Empty account throttling: after 3+ empty syncs, sync once per hour instead of 5 min
     consecutiveEmptySyncs: v.optional(v.number()),
     // Agency org membership
@@ -120,7 +123,8 @@ export default defineSchema({
     statusBeforeArchive: v.optional(v.union(
       v.literal("active"),
       v.literal("paused"),
-      v.literal("error")
+      v.literal("error"),
+      v.literal("abandoned")
     )),
     createdAt: v.number(),
   })

@@ -1499,12 +1499,18 @@ export const updateAccountToken = internalMutation({
       ? Date.now() + 86400 * 1000
       : new Date("2099-01-01").getTime();
 
-    await ctx.db.patch(args.accountId, {
+    const patchFields: Record<string, unknown> = {
       accessToken: args.accessToken,
       tokenExpiresAt,
       status: "active",
       lastError: undefined,
-    });
+    };
+    if (account?.status === "abandoned") {
+      patchFields.abandonedAt = undefined;
+      patchFields.tokenErrorSince = undefined;
+      patchFields.tokenRecoveryAttempts = undefined;
+    }
+    await ctx.db.patch(args.accountId, patchFields);
   },
 });
 
@@ -1545,11 +1551,19 @@ export const updateAccountTokens = internalMutation({
           });
         }
       }
-      await ctx.db.patch(account._id, {
+      const loopPatch: Record<string, unknown> = {
         accessToken: args.accessToken,
         refreshToken: args.refreshToken ?? account.refreshToken,
         tokenExpiresAt: tokenExpiresAt ?? account.tokenExpiresAt,
-      });
+      };
+      if (account.status === "abandoned") {
+        loopPatch.status = "active";
+        loopPatch.abandonedAt = undefined;
+        loopPatch.lastError = undefined;
+        loopPatch.tokenErrorSince = undefined;
+        loopPatch.tokenRecoveryAttempts = undefined;
+      }
+      await ctx.db.patch(account._id, loopPatch);
     }
 
     // If no accounts matched by clientId, update just this one
@@ -1573,11 +1587,19 @@ export const updateAccountTokens = internalMutation({
           }
         }
       }
-      await ctx.db.patch(args.accountId, {
+      const fallbackPatch: Record<string, unknown> = {
         accessToken: args.accessToken,
         refreshToken: args.refreshToken,
         tokenExpiresAt,
-      });
+      };
+      if (thisAccount?.status === "abandoned") {
+        fallbackPatch.status = "active";
+        fallbackPatch.abandonedAt = undefined;
+        fallbackPatch.lastError = undefined;
+        fallbackPatch.tokenErrorSince = undefined;
+        fallbackPatch.tokenRecoveryAttempts = undefined;
+      }
+      await ctx.db.patch(args.accountId, fallbackPatch);
     }
   },
 });

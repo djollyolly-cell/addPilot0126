@@ -1436,13 +1436,29 @@ export const incrementEmptySyncs = internalMutation({
 export const updateStatus = mutation({
   args: {
     accountId: v.id("adAccounts"),
-    status: v.union(v.literal("active"), v.literal("paused"), v.literal("error"), v.literal("archived")),
+    status: v.union(v.literal("active"), v.literal("paused"), v.literal("error"), v.literal("archived"), v.literal("abandoned")),
     lastError: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     await ctx.db.patch(args.accountId, {
       status: args.status,
       lastError: args.lastError,
+    });
+  },
+});
+
+/** Mark an error account as abandoned — stops all sync, alerts, recovery */
+export const markAbandoned = internalMutation({
+  args: { accountId: v.id("adAccounts") },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) return;
+    await ctx.db.patch(args.accountId, {
+      status: "abandoned",
+      abandonedAt: Date.now(),
+      tokenErrorSince: undefined,
+      tokenRecoveryAttempts: undefined,
+      consecutiveSyncErrors: undefined,
     });
   },
 });
@@ -1934,7 +1950,7 @@ export const getVkApiStatus = query({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
     const user = await ctx.db.get(args.userId);
-    if (!user) return { connected: false, expired: false };
+    if (!user) return { connected: false, expired: false, abandonedCount: 0 };
 
     // Check account-level tokens (these are what sync actually uses)
     const accounts = await ctx.db
@@ -1945,6 +1961,7 @@ export const getVkApiStatus = query({
     if (accounts.length > 0) {
       const activeAccounts = accounts.filter((a) => a.status === "active");
       const hasErrors = accounts.some((a) => a.status === "error");
+      const abandonedCount = accounts.filter((a) => a.status === "abandoned").length;
       const lastSync = accounts.reduce(
         (max, a) => Math.max(max, a.lastSyncAt ?? 0),
         0
@@ -1955,6 +1972,7 @@ export const getVkApiStatus = query({
         expired: activeAccounts.length === 0 && hasErrors,
         tokenExpiresAt: user.vkAdsTokenExpiresAt,
         lastSyncAt: lastSync || undefined,
+        abandonedCount,
       };
     }
 
@@ -1969,6 +1987,7 @@ export const getVkApiStatus = query({
       expired: hasToken && expired,
       tokenExpiresAt: user.vkAdsTokenExpiresAt,
       lastSyncAt: undefined as number | undefined,
+      abandonedCount: 0,
     };
   },
 });
