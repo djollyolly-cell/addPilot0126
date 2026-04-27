@@ -71,7 +71,10 @@ export function Layout() {
 
   const navItems = [
     ...navigation,
-    ...(isInOrg ? [{ name: 'Команда', href: '/team', icon: Users }] : []),
+    ...(isInOrg ? [
+      { name: 'Орган��зация', href: '/org', icon: Building2 },
+      { name: 'Команда', href: '/team', icon: Users },
+    ] : []),
     ...(isAdmin ? [{ name: 'Админ', href: '/admin', icon: Shield }] : []),
   ];
 

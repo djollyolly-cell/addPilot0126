@@ -30,6 +30,7 @@ const AICabinetDetailPage = lazy(() => import('./pages/AICabinetDetailPage'));
 const InviteAcceptPage = lazy(() => import('./pages/InviteAcceptPage'));
 const TeamPage = lazy(() => import('./pages/TeamPage'));
 const AgencyOnboardingPage = lazy(() => import('./pages/AgencyOnboardingPage'));
+const OrgDashboardPage = lazy(() => import('./pages/OrgDashboardPage'));
 
 // Loading spinner component
 function PageLoader() {
@@ -150,6 +151,7 @@ function App() {
         <Route path="/support" element={<SupportPage />} />
         <Route path="/team" element={<TeamPage />} />
         <Route path="/agency/onboarding" element={<AgencyOnboardingPage />} />
+        <Route path="/org" element={<OrgDashboardPage />} />
         <Route path="/admin" element={<AdminGate><AdminPage /></AdminGate>} />
       </Route>
 

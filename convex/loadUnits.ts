@@ -286,6 +286,18 @@ export const clearOverageFlags = internalMutation({
 
 const FOURTEEN_DAYS_MS = 14 * 24 * 60 * 60 * 1000;
 
+/** Resolve org owner's email for email notifications */
+export const getOrgOwnerEmail = internalQuery({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const org = await ctx.db.get(args.orgId);
+    if (!org) return null;
+    const owner = await ctx.db.get(org.ownerId);
+    if (!owner?.email) return null;
+    return { email: owner.email, orgName: org.name };
+  },
+});
+
 /**
  * Check overage for candidate orgs daily.
  * - 7+ days consecutive overage → set overageNotifiedAt + overageGraceStartedAt → notify owner
@@ -312,6 +324,13 @@ export const checkOverage = internalAction({
           await ctx.scheduler.runAfter(0, internal.telegram.sendOverageRecoveryNotification, {
             orgId: org._id,
           });
+          // Email fallback
+          const ownerInfo = await ctx.runQuery(internal.loadUnits.getOrgOwnerEmail, { orgId: org._id });
+          if (ownerInfo) {
+            await ctx.scheduler.runAfter(0, internal.email.sendOverageRecoveryEmail, {
+              to: ownerInfo.email, orgName: ownerInfo.orgName,
+            });
+          }
         }
         continue;
       }
@@ -333,6 +352,14 @@ export const checkOverage = internalAction({
         await ctx.scheduler.runAfter(0, internal.telegram.sendOverageStartNotification, {
           orgId: org._id,
         });
+        // Email fallback
+        const ownerInfo2 = await ctx.runQuery(internal.loadUnits.getOrgOwnerEmail, { orgId: org._id });
+        if (ownerInfo2) {
+          await ctx.scheduler.runAfter(0, internal.email.sendOverageStartEmail, {
+            to: ownerInfo2.email, orgName: ownerInfo2.orgName,
+            currentUnits: org.currentLoadUnits, maxUnits: org.maxLoadUnits,
+          });
+        }
       }
 
       // Check 14-day grace expiry
@@ -349,6 +376,13 @@ export const checkOverage = internalAction({
         await ctx.scheduler.runAfter(0, internal.telegram.sendFeaturesDisabledNotification, {
           orgId: org._id,
         });
+        // Email fallback
+        const ownerInfo3 = await ctx.runQuery(internal.loadUnits.getOrgOwnerEmail, { orgId: org._id });
+        if (ownerInfo3) {
+          await ctx.scheduler.runAfter(0, internal.email.sendFeaturesDisabledEmail, {
+            to: ownerInfo3.email, orgName: ownerInfo3.orgName,
+          });
+        }
       }
     }
 
@@ -533,6 +567,13 @@ export const progressExpiredGrace = internalAction({
         await ctx.scheduler.runAfter(0, internal.telegram.sendExpiredWarningNotification, {
           orgId: org._id, phase: "warnings",
         });
+        // Email fallback
+        const ownerWarnings = await ctx.runQuery(internal.loadUnits.getOrgOwnerEmail, { orgId: org._id });
+        if (ownerWarnings) {
+          await ctx.scheduler.runAfter(0, internal.email.sendExpiredWarningEmail, {
+            to: ownerWarnings.email, orgName: ownerWarnings.orgName, phase: "warnings",
+          });
+        }
         progressed++;
         continue;
       }
@@ -560,6 +601,13 @@ export const progressExpiredGrace = internalAction({
         await ctx.scheduler.runAfter(0, internal.telegram.sendExpiredWarningNotification, {
           orgId: org._id, phase: nextPhase,
         });
+        // Email fallback
+        const ownerPhase = await ctx.runQuery(internal.loadUnits.getOrgOwnerEmail, { orgId: org._id });
+        if (ownerPhase) {
+          await ctx.scheduler.runAfter(0, internal.email.sendExpiredWarningEmail, {
+            to: ownerPhase.email, orgName: ownerPhase.orgName, phase: nextPhase,
+          });
+        }
       }
     }
 
@@ -721,6 +769,22 @@ export const getCurrentLoadStatus = query({
       expiredGraceStartedAt: org.expiredGraceStartedAt,
       subscriptionExpiresAt: org.subscriptionExpiresAt,
     };
+  },
+});
+
+/** Get load history for current month (public, for OrgDashboardPage) */
+export const getLoadHistory = query({
+  args: { userId: v.id("users"), yearMonth: v.string() },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user || !user.organizationId) return [];
+    const all = await ctx.db
+      .query("loadUnitsHistory")
+      .withIndex("by_orgId_date", (q) => q.eq("orgId", user.organizationId!))
+      .collect();
+    return all
+      .filter((h) => h.date.startsWith(args.yearMonth))
+      .map((h) => ({ date: h.date, loadUnits: h.loadUnits }));
   },
 });
 

@@ -500,6 +500,126 @@ export const sendMonthlyOrgReportEmail = internalAction({
   },
 });
 
+// ─── Org Lifecycle Email Notifications ───────────────────────────────
+
+/** Overage detected — org exceeds load units for 7+ days */
+export const sendOverageStartEmail = internalAction({
+  args: { to: v.string(), orgName: v.string(), currentUnits: v.number(), maxUnits: v.number() },
+  handler: async (_ctx, args) => {
+    const transporter = createTransporter();
+    const fromEmail = process.env.YANDEX_EMAIL;
+    if (!transporter || !fromEmail) return;
+    try {
+      await transporter.sendMail({
+        from: `AddPilot <${fromEmail}>`,
+        to: args.to,
+        subject: `${args.orgName} — превышение лимита нагрузки`,
+        html: `
+<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif; padding:20px; max-width:600px; margin:0 auto;">
+  <h2 style="color:#f59e0b;">Превышение лимита нагрузки</h2>
+  <p>Организация <strong>${args.orgName}</strong> использует <strong>${args.currentUnits}</strong> из <strong>${args.maxUnits}</strong> единиц нагрузки уже более 7 дней.</p>
+  <p>У вас есть 14 дней для перехода на пакет выше. После этого конструктор правил и добавление кабинетов будут отключены.</p>
+  <p><a href="https://aipilot.by/pricing" style="display:inline-block; padding:12px 24px; background:#3b82f6; color:#fff; text-decoration:none; border-radius:6px;">Обновить тариф</a></p>
+</body></html>`.trim(),
+      });
+      console.log(`[email] Overage start email sent to ${args.to}`);
+    } catch (err) {
+      console.error("[email] Error sending overage start:", err);
+    }
+  },
+});
+
+/** Features disabled — 14-day grace expired while over limit */
+export const sendFeaturesDisabledEmail = internalAction({
+  args: { to: v.string(), orgName: v.string() },
+  handler: async (_ctx, args) => {
+    const transporter = createTransporter();
+    const fromEmail = process.env.YANDEX_EMAIL;
+    if (!transporter || !fromEmail) return;
+    try {
+      await transporter.sendMail({
+        from: `AddPilot <${fromEmail}>`,
+        to: args.to,
+        subject: `${args.orgName} — функции ограничены`,
+        html: `
+<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif; padding:20px; max-width:600px; margin:0 auto;">
+  <h2 style="color:#dc2626;">Функции ограничены</h2>
+  <p>Организация <strong>${args.orgName}</strong> превышала лимит нагрузки более 14 дней.</p>
+  <p>Конструктор правил и добавление кабинетов отключены. Существующие правила продолжают работать.</p>
+  <p>Обновите тариф для восстановления полного доступа.</p>
+  <p><a href="https://aipilot.by/pricing" style="display:inline-block; padding:12px 24px; background:#3b82f6; color:#fff; text-decoration:none; border-radius:6px;">Обновить тариф</a></p>
+</body></html>`.trim(),
+      });
+      console.log(`[email] Features disabled email sent to ${args.to}`);
+    } catch (err) {
+      console.error("[email] Error sending features disabled:", err);
+    }
+  },
+});
+
+/** Overage recovered — org back within limits */
+export const sendOverageRecoveryEmail = internalAction({
+  args: { to: v.string(), orgName: v.string() },
+  handler: async (_ctx, args) => {
+    const transporter = createTransporter();
+    const fromEmail = process.env.YANDEX_EMAIL;
+    if (!transporter || !fromEmail) return;
+    try {
+      await transporter.sendMail({
+        from: `AddPilot <${fromEmail}>`,
+        to: args.to,
+        subject: `${args.orgName} — нагрузка в норме`,
+        html: `
+<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif; padding:20px; max-width:600px; margin:0 auto;">
+  <h2 style="color:#22c55e;">Нагрузка вернулась в норму</h2>
+  <p>Организация <strong>${args.orgName}</strong> снова в рамках лимита. Все функции доступны.</p>
+</body></html>`.trim(),
+      });
+      console.log(`[email] Overage recovery email sent to ${args.to}`);
+    } catch (err) {
+      console.error("[email] Error sending recovery:", err);
+    }
+  },
+});
+
+/** Expired subscription phase change notification */
+export const sendExpiredWarningEmail = internalAction({
+  args: { to: v.string(), orgName: v.string(), phase: v.string() },
+  handler: async (_ctx, args) => {
+    const transporter = createTransporter();
+    const fromEmail = process.env.YANDEX_EMAIL;
+    if (!transporter || !fromEmail) return;
+    const phaseDescriptions: Record<string, { title: string; desc: string }> = {
+      warnings: { title: "Подписка истекла", desc: "У вас есть 14 дней для продления. После этого доступ будет ограничен до режима чтения." },
+      read_only: { title: "Режим только для чтения", desc: "Создание и редактирование правил заблокировано. Кабинеты заархивированы. Продлите подписку для восстановления." },
+      deep_read_only: { title: "Правила приостановлены", desc: "Все правила автоматизации отключены. Продлите подписку немедленно." },
+      frozen: { title: "Организация заморожена", desc: "Все кабинеты и данные заморожены. Через 90 дней данные будут удалены." },
+    };
+    const info = phaseDescriptions[args.phase] ?? { title: "Уведомление", desc: "" };
+    try {
+      await transporter.sendMail({
+        from: `AddPilot <${fromEmail}>`,
+        to: args.to,
+        subject: `${args.orgName} — ${info.title}`,
+        html: `
+<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif; padding:20px; max-width:600px; margin:0 auto;">
+  <h2 style="color:#dc2626;">${info.title}</h2>
+  <p>Организация: <strong>${args.orgName}</strong></p>
+  <p>${info.desc}</p>
+  <p><a href="https://aipilot.by/pricing" style="display:inline-block; padding:12px 24px; background:#3b82f6; color:#fff; text-decoration:none; border-radius:6px;">Восстановить подписку</a></p>
+</body></html>`.trim(),
+      });
+      console.log(`[email] Expired warning (${args.phase}) sent to ${args.to}`);
+    } catch (err) {
+      console.error("[email] Error sending expired warning:", err);
+    }
+  },
+});
+
 // Test email sending (for debugging)
 export const sendTestEmail = action({
   args: {

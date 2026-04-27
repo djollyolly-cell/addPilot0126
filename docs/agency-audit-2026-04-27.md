@@ -273,9 +273,9 @@ Phase 3 — Limits + docs ✅ DONE
   #12 update plan docs with real pricing                 [P3] ✅ plan-3-billing.md aligned
   #14 manager limits + niche limits enforce              [P3] ✅ maxManagers/maxNiches in TIERS + inviteManager check
 
-Phase 4 — UI + notifications (Plan 6)
-  #16 OrgDashboardPage + LoadUtilizationBadge            [P4]
-  #17 Email notifications for org lifecycle              [P4]
+Phase 4 — UI + notifications (Plan 6) ✅ DONE
+  #16 OrgDashboardPage + LoadUtilizationBadge            [P4] ✅ page + route + nav
+  #17 Email notifications for org lifecycle              [P4] ✅ 4 email templates + dispatch
 ```
 
 ---
