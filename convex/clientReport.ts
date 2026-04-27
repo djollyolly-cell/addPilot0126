@@ -186,6 +186,15 @@ export const buildReport = action({
     dateTo: v.string(),
   },
   handler: async (ctx, args): Promise<ReportResult> => {
+    // Access control: verify user can access this account
+    const accessibleIds = await ctx.runQuery(
+      internal.accessControl.getAccessibleAccountIds,
+      { userId: args.userId }
+    );
+    if (!accessibleIds.includes(args.accountId)) {
+      throw new Error("Нет доступа к этому рекламному кабинету");
+    }
+
     const partialErrors: string[] = [];
     const rowMap = new Map<string, ReportRow>();
 
@@ -444,6 +453,15 @@ export const buildCommunityReport = action({
     dateTo: v.string(),
   },
   handler: async (ctx, args): Promise<CommunityReportResult> => {
+    // Access control: verify user can access this account
+    const accessibleIds = await ctx.runQuery(
+      internal.accessControl.getAccessibleAccountIds,
+      { userId: args.userId }
+    );
+    if (!accessibleIds.includes(args.accountId)) {
+      throw new Error("Нет доступа к этому рекламному кабинету");
+    }
+
     const partialErrors: string[] = [];
     const messageStartsByDate: Record<string, number> = {};
     const senlerSubsByDate: Record<string, number> = {};
