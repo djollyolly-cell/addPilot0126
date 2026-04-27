@@ -29,13 +29,13 @@ export const TIERS = {
   pro: {
     name: "Pro",
     price: 2990,
-    accountsLimit: 20, // grandfathered users get 27 via proAccountLimit field
+    accountsLimit: 9, // grandfathered users get 27 via proAccountLimit field
     rulesLimit: -1, // unlimited
     includedLoadUnits: 0,
     overagePrice: 0,
     maxManagers: 0,
     maxNiches: 0,
-    features: ["До 20 кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
+    features: ["До 9 кабинетов", "Неограниченные правила", "Приоритетная поддержка", "Расширенная аналитика"],
   },
   // Agency tiers — load-units based
   // Agency tiers (spec §3.2-3.4)
@@ -82,7 +82,7 @@ export const TIERS = {
     overagePrice: 0,
     maxManagers: -1,
     maxNiches: -1,
-    features: ["От 67 кабинетов", "Всё из Agency L", "Персональный менеджер", "Индивидуальная цена"],
+    features: ["От 65 кабинетов", "Всё из Agency L", "Персональный менеджер", "Индивидуальная цена"],
   },
 } as const;
 
