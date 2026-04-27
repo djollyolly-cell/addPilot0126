@@ -330,6 +330,9 @@ export function AccountsPage() {
         </CardContent>
       </Card>
 
+      {/* Admin: problem accounts from all users */}
+      {isAdmin && <AdminProblemAccounts sessionToken={localStorage.getItem('adpilot_session') || ''} />}
+
       {/* Wizard modal */}
       {showWizard && (
         <VkAdsConnectWizard
@@ -366,5 +369,95 @@ export function AccountsPage() {
         />
       )}
     </div>
+  );
+}
+
+/** Admin-only section: all error + abandoned accounts across all users */
+function AdminProblemAccounts({ sessionToken }: { sessionToken: string }) {
+  const problemAccounts = useQuery(api.admin.listProblemAccounts, { sessionToken });
+  const abandonAccount = useMutation(api.admin.abandonAccount);
+  const reactivateAccount = useMutation(api.admin.reactivateAccount);
+  const [loading, setLoading] = useState<string | null>(null);
+
+  if (!problemAccounts || problemAccounts.length === 0) return null;
+
+  const formatTime = (ts?: number) =>
+    ts ? new Date(ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2">
+          <AlertCircle className="w-5 h-5 text-destructive" />
+          Проблемные кабинеты (все пользователи)
+        </CardTitle>
+        <CardDescription>
+          {problemAccounts.length} {problemAccounts.length === 1 ? 'кабинет' : 'кабинетов'} в error/abandoned
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-2">
+          {problemAccounts.map((a) => (
+            <div
+              key={a._id}
+              className={cn(
+                'flex items-center justify-between gap-3 p-3 rounded-lg border',
+                a.status === 'abandoned' ? 'bg-muted/50 border-muted' : 'bg-destructive/5 border-destructive/20'
+              )}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm truncate">{a.name}</span>
+                  <span className={cn(
+                    'text-xs px-1.5 py-0.5 rounded',
+                    a.status === 'abandoned' ? 'bg-muted text-muted-foreground' : 'bg-destructive/10 text-destructive'
+                  )}>
+                    {a.status}
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {a.userName} &middot; ID: {a.vkAccountId} &middot; sync: {formatTime(a.lastSyncAt)}
+                </p>
+                {a.lastError && (
+                  <p className="text-xs text-destructive/80 mt-0.5 truncate">{a.lastError}</p>
+                )}
+              </div>
+              <div className="flex items-center gap-1 shrink-0">
+                {a.status === 'error' && (
+                  <button
+                    type="button"
+                    disabled={loading === a._id}
+                    onClick={async () => {
+                      setLoading(a._id);
+                      try { await abandonAccount({ sessionToken, accountId: a._id as Id<"adAccounts"> }); }
+                      finally { setLoading(null); }
+                    }}
+                    className="px-2 py-1 text-xs rounded bg-muted hover:bg-orange-100 text-muted-foreground hover:text-orange-700 transition-colors disabled:opacity-50"
+                    title="Заглушить"
+                  >
+                    Заглушить
+                  </button>
+                )}
+                {a.status === 'abandoned' && (
+                  <button
+                    type="button"
+                    disabled={loading === a._id}
+                    onClick={async () => {
+                      setLoading(a._id);
+                      try { await reactivateAccount({ sessionToken, accountId: a._id as Id<"adAccounts"> }); }
+                      finally { setLoading(null); }
+                    }}
+                    className="px-2 py-1 text-xs rounded bg-muted hover:bg-green-100 text-muted-foreground hover:text-green-700 transition-colors disabled:opacity-50"
+                    title="Вернуть в error"
+                  >
+                    Вернуть
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

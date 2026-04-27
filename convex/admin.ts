@@ -31,6 +31,35 @@ async function assertAdmin(ctx: any, sessionToken: string) {
   return user;
 }
 
+/** Admin: list all error + abandoned accounts with user name */
+export const listProblemAccounts = query({
+  args: { sessionToken: v.string() },
+  handler: async (ctx, args) => {
+    await assertAdmin(ctx, args.sessionToken);
+    const allAccounts = await ctx.db.query("adAccounts").collect();
+    const problems = allAccounts.filter(
+      (a) => a.status === "error" || a.status === "abandoned"
+    );
+    const result = await Promise.all(
+      problems.map(async (a) => {
+        const user = await ctx.db.get(a.userId);
+        return {
+          _id: a._id,
+          vkAccountId: a.vkAccountId,
+          name: a.name,
+          status: a.status,
+          lastSyncAt: a.lastSyncAt,
+          lastError: a.lastError,
+          abandonedAt: a.abandonedAt,
+          userName: user?.name || user?.email || "?",
+          userId: a.userId,
+        };
+      })
+    );
+    return result;
+  },
+});
+
 // List all users with joined data
 export const listUsers = query({
   args: {
