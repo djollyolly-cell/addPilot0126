@@ -792,7 +792,7 @@ export const deleteUser = mutation({
       .withIndex("by_ownerId", (q) => q.eq("ownerId", args.userId))
       .collect();
     for (const org of ownedOrgs) {
-      // Delete remaining org members (user's own membership already deleted above)
+      // Delete remaining org members + clear organizationId on ex-managers
       const members = await ctx.db
         .query("orgMembers")
         .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
@@ -800,7 +800,22 @@ export const deleteUser = mutation({
       for (const member of members) {
         if (member.userId !== args.userId) {
           await ctx.db.delete(member._id);
+          // Clear organizationId so ex-manager doesn't point to deleted org
+          const memberUser = await ctx.db.get(member.userId);
+          if (memberUser?.organizationId === org._id) {
+            const { organizationId: _removed, ...rest } = memberUser;
+            void _removed;
+            await ctx.db.replace(member.userId, rest);
+          }
         }
+      }
+      // Delete custom rule types owned by this org
+      const customRuleTypes = await ctx.db
+        .query("customRuleTypes")
+        .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+        .collect();
+      for (const crt of customRuleTypes) {
+        await ctx.db.delete(crt._id);
       }
       // Delete all org invites
       const invites = await ctx.db

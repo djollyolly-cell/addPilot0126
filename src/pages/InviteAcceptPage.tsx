@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Link } from "react-router-dom";
 import { useQuery, useMutation, useAction } from "convex/react";
 import { api } from "../../convex/_generated/api";
 import { useAuth } from "@/lib/useAuth";
@@ -210,6 +210,9 @@ export default function InviteAcceptPage() {
                   Назад
                 </Button>
               </div>
+              <Link to="/reset-password" className="text-sm text-primary hover:underline">
+                Забыли пароль?
+              </Link>
             </div>
           )}
 

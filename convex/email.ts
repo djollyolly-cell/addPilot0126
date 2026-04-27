@@ -653,3 +653,43 @@ export const sendTestEmail = action({
     }
   },
 });
+
+// ─── Password Reset ─────────────────────────────────────────────────
+
+/** Send password reset email */
+export const sendPasswordResetEmail = internalAction({
+  args: {
+    to: v.string(),
+    resetToken: v.string(),
+    userName: v.string(),
+  },
+  handler: async (_ctx, args) => {
+    const transporter = createTransporter();
+    const fromEmail = process.env.YANDEX_EMAIL;
+    if (!transporter || !fromEmail) {
+      console.log("[email] SMTP not configured, skipping password reset email");
+      return;
+    }
+    const siteUrl = process.env.SITE_URL ?? "https://aipilot.by";
+    const resetUrl = `${siteUrl}/reset-password?token=${args.resetToken}`;
+    try {
+      await transporter.sendMail({
+        from: `AddPilot <${fromEmail}>`,
+        to: args.to,
+        subject: "Сброс пароля — AddPilot",
+        html: `
+<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif; padding:20px; max-width:600px; margin:0 auto;">
+  <h2>Сброс пароля</h2>
+  <p>Здравствуйте, ${args.userName}!</p>
+  <p>Вы запросили сброс пароля для вашего аккаунта в AddPilot.</p>
+  <p><a href="${resetUrl}" style="display:inline-block; padding:12px 24px; background:#3b82f6; color:#fff; text-decoration:none; border-radius:6px;">Сбросить пароль</a></p>
+  <p style="color:#666; font-size:13px;">Ссылка действительна 1 час. Если вы не запрашивали сброс пароля, проигнорируйте это письмо.</p>
+</body></html>`.trim(),
+      });
+      console.log(`[email] Password reset email sent to ${args.to}`);
+    } catch (err) {
+      console.error("[email] Error sending password reset:", err);
+    }
+  },
+});

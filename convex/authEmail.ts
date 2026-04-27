@@ -438,3 +438,165 @@ export const findUserByEmail = internalQuery({
       .first();
   },
 });
+
+// ═══════════════════════════════════════════════════════════
+// Password Reset (for org-users with bcrypt accounts)
+// ═══════════════════════════════════════════════════════════
+
+const RESET_TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+const RESET_COOLDOWN_MS = 60 * 1000; // 1 min between requests
+
+/** Generate a secure random token */
+function generateResetToken(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Save a password reset token */
+export const saveResetToken = internalMutation({
+  args: { email: v.string(), token: v.string(), expiresAt: v.number() },
+  handler: async (ctx, args) => {
+    await ctx.db.insert("passwordResetTokens", {
+      email: args.email,
+      token: args.token,
+      expiresAt: args.expiresAt,
+      createdAt: Date.now(),
+    });
+  },
+});
+
+/** Request password reset — sends email with reset link */
+export const requestPasswordReset = action({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    const email = args.email.trim().toLowerCase();
+    if (!validateEmail(email)) {
+      throw new Error("Некорректный email");
+    }
+
+    const user = await ctx.runQuery(internal.authEmail.findUserByEmail, { email });
+    // Always return success to prevent email enumeration
+    if (!user || !user.passwordHash) {
+      return { success: true };
+    }
+
+    // Rate limit: check recent tokens for this email
+    const recentTokens = await ctx.runQuery(internal.authEmail.getRecentResetTokens, { email });
+    if (recentTokens.length > 0) {
+      const lastCreated = recentTokens[0].createdAt;
+      if (Date.now() - lastCreated < RESET_COOLDOWN_MS) {
+        return { success: true }; // silently ignore, don't reveal rate limit
+      }
+    }
+
+    const token = generateResetToken();
+    const expiresAt = Date.now() + RESET_TOKEN_EXPIRY_MS;
+
+    await ctx.runMutation(internal.authEmail.saveResetToken, { email, token, expiresAt });
+
+    // Send email
+    await ctx.runAction(internal.email.sendPasswordResetEmail, {
+      to: email,
+      resetToken: token,
+      userName: user.name ?? email,
+    });
+
+    return { success: true };
+  },
+});
+
+/** Get recent reset tokens for rate limiting */
+export const getRecentResetTokens = internalQuery({
+  args: { email: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("passwordResetTokens")
+      .withIndex("by_email", (q) => q.eq("email", args.email))
+      .order("desc")
+      .take(3);
+  },
+});
+
+/** Validate reset token and return email */
+export const validateResetToken = query({
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    const record = await ctx.db
+      .query("passwordResetTokens")
+      .withIndex("by_token", (q) => q.eq("token", args.token))
+      .first();
+    if (!record) return { valid: false, email: null };
+    if (record.usedAt) return { valid: false, email: null };
+    if (Date.now() > record.expiresAt) return { valid: false, email: null };
+    return { valid: true, email: record.email };
+  },
+});
+
+/** Mark token as used */
+export const markTokenUsed = internalMutation({
+  args: { token: v.string() },
+  handler: async (ctx, args) => {
+    const record = await ctx.db
+      .query("passwordResetTokens")
+      .withIndex("by_token", (q) => q.eq("token", args.token))
+      .first();
+    if (record) {
+      await ctx.db.patch(record._id, { usedAt: Date.now() });
+    }
+  },
+});
+
+/** Reset password with token */
+export const resetPassword = action({
+  args: { token: v.string(), newPassword: v.string() },
+  handler: async (ctx, args) => {
+    if (args.newPassword.length < 8) {
+      throw new Error("Пароль должен быть не менее 8 символов");
+    }
+
+    const tokenRecord = await ctx.runQuery(api.authEmail.validateResetToken, {
+      token: args.token,
+    });
+    if (!tokenRecord.valid || !tokenRecord.email) {
+      throw new Error("Ссылка для сброса пароля недействительна или истекла");
+    }
+
+    const user = await ctx.runQuery(internal.authEmail.findUserByEmail, {
+      email: tokenRecord.email,
+    });
+    if (!user || !user.passwordHash) {
+      throw new Error("Пользователь не найден");
+    }
+
+    const bcrypt = await import("bcryptjs");
+    const hash = await bcrypt.hash(args.newPassword, 10);
+
+    await ctx.runMutation(internal.authEmail.updatePasswordHash, {
+      userId: user._id,
+      passwordHash: hash,
+    });
+    await ctx.runMutation(internal.authEmail.markTokenUsed, { token: args.token });
+
+    return { success: true };
+  },
+});
+
+/** Update user's passwordHash */
+export const updatePasswordHash = internalMutation({
+  args: { userId: v.id("users"), passwordHash: v.string() },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.userId, {
+      passwordHash: args.passwordHash,
+      updatedAt: Date.now(),
+    });
+    // Revoke all sessions for security
+    const sessions = await ctx.db
+      .query("sessions")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    for (const s of sessions) {
+      await ctx.db.delete(s._id);
+    }
+  },
+});

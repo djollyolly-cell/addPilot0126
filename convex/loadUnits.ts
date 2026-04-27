@@ -648,12 +648,36 @@ export const coldDeleteOneAccount = internalMutation({
       await ctx.db.delete(c._id);
       deletedCampaigns++;
     }
+    // metricsRealtime (small — 2-day retention cron keeps it small)
+    const realtime = await ctx.db
+      .query("metricsRealtime")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .collect();
+    for (const r of realtime) await ctx.db.delete(r._id);
+    // rotationState by account
+    const rotStates = await ctx.db
+      .query("rotationState")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .collect();
+    for (const rs of rotStates) await ctx.db.delete(rs._id);
+    // credentialHistory
+    const credHistory = await ctx.db
+      .query("credentialHistory")
+      .withIndex("by_accountId", (q) => q.eq("accountId", args.accountId))
+      .collect();
+    for (const ch of credHistory) await ctx.db.delete(ch._id);
+    // creativeStats
+    const creativeStats = await ctx.db
+      .query("creativeStats")
+      .withIndex("by_accountId_date", (q) => q.eq("accountId", args.accountId))
+      .collect();
+    for (const cs of creativeStats) await ctx.db.delete(cs._id);
     await ctx.db.delete(args.accountId);
     return { deletedCampaigns, deletedAds };
   },
 });
 
-/** Delete rules of an org (separate mutation for batching) */
+/** Delete rules of an org + their rotationState companions */
 export const coldDeleteOrgRules = internalMutation({
   args: { orgId: v.id("organizations") },
   handler: async (ctx, args) => {
@@ -661,8 +685,130 @@ export const coldDeleteOrgRules = internalMutation({
       .query("rules")
       .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
       .collect();
-    for (const r of rules) await ctx.db.delete(r._id);
+    for (const r of rules) {
+      const rotState = await ctx.db
+        .query("rotationState")
+        .withIndex("by_ruleId", (q) => q.eq("ruleId", r._id))
+        .first();
+      if (rotState) await ctx.db.delete(rotState._id);
+      await ctx.db.delete(r._id);
+    }
     return { deleted: rules.length };
+  },
+});
+
+/** Delete org-level orphan data: actionLogs, creatives, videos, aiGenerations, aiCampaigns+cascade, customRuleTypes */
+export const coldDeleteOrgData = internalMutation({
+  args: { orgId: v.id("organizations") },
+  handler: async (ctx, args) => {
+    const counts: Record<string, number> = {};
+
+    // actionLogs
+    const logs = await ctx.db
+      .query("actionLogs")
+      .withIndex("by_orgId_date", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const l of logs) await ctx.db.delete(l._id);
+    counts.actionLogs = logs.length;
+
+    // creatives
+    const creatives = await ctx.db
+      .query("creatives")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const c of creatives) await ctx.db.delete(c._id);
+    counts.creatives = creatives.length;
+
+    // videos
+    const videos = await ctx.db
+      .query("videos")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const vid of videos) await ctx.db.delete(vid._id);
+    counts.videos = videos.length;
+
+    // aiGenerations
+    const aiGens = await ctx.db
+      .query("aiGenerations")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const g of aiGens) await ctx.db.delete(g._id);
+    counts.aiGenerations = aiGens.length;
+
+    // aiCampaigns + cascade aiBanners + aiRecommendations
+    const aiCampaigns = await ctx.db
+      .query("aiCampaigns")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const ac of aiCampaigns) {
+      const banners = await ctx.db
+        .query("aiBanners")
+        .withIndex("by_campaignId", (q) => q.eq("campaignId", ac._id))
+        .collect();
+      for (const b of banners) await ctx.db.delete(b._id);
+      const recs = await ctx.db
+        .query("aiRecommendations")
+        .withIndex("by_campaignId", (q) => q.eq("campaignId", ac._id))
+        .collect();
+      for (const rec of recs) await ctx.db.delete(rec._id);
+      await ctx.db.delete(ac._id);
+    }
+    counts.aiCampaigns = aiCampaigns.length;
+
+    // customRuleTypes
+    const customTypes = await ctx.db
+      .query("customRuleTypes")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const ct of customTypes) await ctx.db.delete(ct._id);
+    counts.customRuleTypes = customTypes.length;
+
+    // orgMembers (clear organizationId on users + delete memberships)
+    const members = await ctx.db
+      .query("orgMembers")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const m of members) {
+      const memberUser = await ctx.db.get(m.userId);
+      if (memberUser?.organizationId === args.orgId) {
+        const { organizationId: _removed, ...rest } = memberUser;
+        void _removed;
+        await ctx.db.replace(m.userId, rest);
+      }
+      await ctx.db.delete(m._id);
+    }
+    counts.orgMembers = members.length;
+
+    // orgInvites
+    const invites = await ctx.db
+      .query("orgInvites")
+      .withIndex("by_orgId", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const inv of invites) await ctx.db.delete(inv._id);
+    counts.orgInvites = invites.length;
+
+    // loadUnitsHistory
+    const loadHistory = await ctx.db
+      .query("loadUnitsHistory")
+      .withIndex("by_orgId_date", (q) => q.eq("orgId", args.orgId))
+      .collect();
+    for (const lh of loadHistory) await ctx.db.delete(lh._id);
+    counts.loadUnitsHistory = loadHistory.length;
+
+    return counts;
+  },
+});
+
+/** Delete metricsDaily for one account in batches (can be large). Returns remaining count. */
+export const coldDeleteAccountMetrics = internalMutation({
+  args: { accountId: v.id("adAccounts"), batchSize: v.number() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db
+      .query("metricsDaily")
+      .withIndex("by_accountId_date", (q) => q.eq("accountId", args.accountId))
+      .take(args.batchSize);
+    for (const row of rows) await ctx.db.delete(row._id);
+    return { deleted: rows.length };
   },
 });
 
@@ -713,10 +859,22 @@ export const coldDeleteArchived = internalAction({
         continue;
       }
 
-      // Delete accounts one by one (batched)
+      // Delete metricsDaily per account in batches (can be large)
       const allAccounts = await ctx.runQuery(internal.loadUnits.listAllOrgAccounts, {
         orgId: org._id,
       });
+      for (const acc of allAccounts) {
+        let remaining = true;
+        while (remaining) {
+          const result = await ctx.runMutation(internal.loadUnits.coldDeleteAccountMetrics, {
+            accountId: acc._id,
+            batchSize: 5000,
+          });
+          remaining = result.deleted === 5000;
+        }
+      }
+
+      // Delete accounts one by one (campaigns + ads + realtime + rotationState + credHistory)
       let totalCampaigns = 0;
       let totalAds = 0;
       for (const acc of allAccounts) {
@@ -727,8 +885,13 @@ export const coldDeleteArchived = internalAction({
         totalAds += result.deletedAds;
       }
 
-      // Delete rules (usually few — safe in one mutation)
+      // Delete rules + rotationState companions
       const rulesResult = await ctx.runMutation(internal.loadUnits.coldDeleteOrgRules, {
+        orgId: org._id,
+      });
+
+      // Delete org-level data (actionLogs, creatives, videos, aiGenerations, aiCampaigns, customRuleTypes)
+      const orgDataResult = await ctx.runMutation(internal.loadUnits.coldDeleteOrgData, {
         orgId: org._id,
       });
 
@@ -736,7 +899,7 @@ export const coldDeleteArchived = internalAction({
       await ctx.runMutation(internal.loadUnits.markOrgDeleted, { orgId: org._id });
 
       deleted++;
-      console.log(`[cold-delete] org ${org._id}: accounts=${allAccounts.length}, campaigns=${totalCampaigns}, ads=${totalAds}, rules=${rulesResult.deleted}`);
+      console.log(`[cold-delete] org ${org._id}: accounts=${allAccounts.length}, campaigns=${totalCampaigns}, ads=${totalAds}, rules=${rulesResult.deleted}, orgData=${JSON.stringify(orgDataResult)}`);
     }
 
     return { deleted };

@@ -31,6 +31,7 @@ const InviteAcceptPage = lazy(() => import('./pages/InviteAcceptPage'));
 const TeamPage = lazy(() => import('./pages/TeamPage'));
 const AgencyOnboardingPage = lazy(() => import('./pages/AgencyOnboardingPage'));
 const OrgDashboardPage = lazy(() => import('./pages/OrgDashboardPage'));
+const PasswordResetPage = lazy(() => import('./pages/PasswordResetPage'));
 
 // Loading spinner component
 function PageLoader() {
@@ -122,6 +123,7 @@ function App() {
       <Route path="/auth/ads-callback" element={<AdsCallback />} />
       <Route path="/auth/getuniq-callback" element={<GetUniqCallback />} />
       <Route path="/invite/:token" element={<InviteAcceptPage />} />
+      <Route path="/reset-password" element={<PasswordResetPage />} />
       <Route path="/privacy" element={<PrivacyPage />} />
       <Route path="/terms" element={<TermsPage />} />
 

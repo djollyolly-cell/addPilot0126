@@ -280,7 +280,96 @@ Phase 4 — UI + notifications (Plan 6) ✅ DONE
 
 ---
 
-## Тестовый чеклист после исправлений
+## P5 — Найдено при повторном аудите (2026-04-27, вечер)
+
+### 18. deleteUser cascade — не чистит organizationId у менеджеров удалённой org
+
+- **Файл:** `convex/users.ts:794-823`
+- **Проблема:** Когда owner удаляется и его организация удаляется, код удаляет `orgMembers` записи (line 800-803), но **не очищает `organizationId`** на user-записях менеджеров. Менеджеры остаются с `organizationId`, указывающим на удалённый документ.
+- **Последствия:** `accessControl.getAccessibleAccountIds` для такого менеджера: `db.get(user.organizationId)` → null → membership not found → returns `[]`. Менеджер теряет доступ ко ВСЕМ своим аккаунтам (и org, и личным).
+- **Сравнение:** `removeMember` (organizations.ts:295-349) корректно чистит `organizationId` через `db.replace()`. `deleteUser` — нет.
+- **Исправление:** После удаления `orgMembers` в цикле (line 800-803) добавить очистку `organizationId`:
+  ```typescript
+  for (const member of members) {
+    if (member.userId !== args.userId) {
+      await ctx.db.delete(member._id);
+      // Clear organizationId so ex-manager doesn't point to deleted org
+      const memberUser = await ctx.db.get(member.userId);
+      if (memberUser?.organizationId === org._id) {
+        const { organizationId: _removed, ...rest } = memberUser;
+        void _removed;
+        await ctx.db.replace(member.userId, rest);
+      }
+    }
+  }
+  ```
+- **Критичность:** P0 — менеджеры полностью теряют доступ.
+
+### 19. deleteUser cascade — не удаляет customRuleTypes организации
+
+- **Файл:** `convex/users.ts:794-823`, `convex/schema.ts:1000-1012`
+- **Проблема:** Таблица `customRuleTypes` имеет `orgId` поле и `by_orgId` индекс. При удалении организации (в блоке deleteUser) `customRuleTypes` не чистятся.
+- **Последствия:** Orphaned записи в БД. Если L3 rule ссылается на `customRuleTypeCode` из удалённой org → `CUSTOM_RULE_HANDLERS` найдёт handler, но `customRuleTypes` запись останется сиротой.
+- **Масштаб:** Низкий — пока нет production L3 handlers. Но при масштабировании agency станет проблемой.
+- **Исправление:** В блок удаления owned orgs (после loadHistory, перед `ctx.db.delete(org._id)`) добавить:
+  ```typescript
+  const customRuleTypes = await ctx.db
+    .query("customRuleTypes")
+    .withIndex("by_orgId", (q) => q.eq("orgId", org._id))
+    .collect();
+  for (const crt of customRuleTypes) {
+    await ctx.db.delete(crt._id);
+  }
+  ```
+- **Критичность:** P3 — orphaned data, не влияет на работу пока нет L3 в production.
+
+### 20. coldDeleteArchived — неполная очистка связанных данных
+
+- **Файл:** `convex/loadUnits.ts`
+- **Проблема (уточнённая):** `coldDeleteArchived` уже чистил: metricsDaily (batched), metricsRealtime, actionLogs, creatives, videos, aiGenerations, aiCampaigns, rotationState, credentialHistory. **Не чистил:** `creativeStats` (per account), `orgMembers` (оставались сироты), `orgInvites`, `loadUnitsHistory`.
+- **Исправление (done):**
+  - `coldDeleteOneAccount`: добавлена очистка `creativeStats` по `by_accountId_date`
+  - `coldDeleteOrgData`: добавлена очистка `orgMembers` (+ clear `organizationId` на users), `orgInvites`, `loadUnitsHistory`
+- **Критичность:** P4 — БД bloat, не влияет на функциональность.
+
+### 21. OrgDashboardPage — ниши отображаются на английском
+
+- **Файл:** `src/pages/OrgDashboardPage.tsx:338`
+- **Проблема:** `{n.niche}` выводит raw значение из БД: "beauty", "schools", "measurement" и т.д. Нет маппинга на русские названия.
+- **Исправление:** Добавить маппинг:
+  ```typescript
+  const NICHE_NAMES_RU: Record<string, string> = {
+    beauty: "Красота", schools: "Школы", measurement: "Замеры",
+    sellers: "Продавцы", infobiz: "Инфобизнес", other: "Другое",
+  };
+  // В JSX: {NICHE_NAMES_RU[n.niche] ?? n.niche}
+  ```
+- **Критичность:** P4 — UI косметика.
+
+### 22. Нет RegisterOrganizationPage и PasswordResetPage (Plan 6 gap)
+
+- **Проблема:** План 6 предусматривает `RegisterOrganizationPage` (email/password signup для org-users) и `PasswordResetPage`. В коде отсутствуют — `src/pages/` не содержит таких файлов.
+- **Workaround:** Org-users регистрируются через `InviteAcceptPage` → `acceptInviteAsNewUser` (bcrypt). Сброс пароля отсутствует полностью.
+- **Масштаб:** Если все org-users приходят только через invite — регистрация не нужна. Но сброс пароля нужен для менеджеров с bcrypt-аккаунтами.
+- **Критичность:** P3 — менеджеры не могут восстановить пароль.
+
+---
+
+## Обновлённый порядок исправлений
+
+```
+Phase 5 — Новые находки (2026-04-27)
+  #18 deleteUser — clear organizationId на менеджерах    [P0] ✅
+  #19 deleteUser — удалить customRuleTypes               [P3] ✅
+  #20 coldDeleteArchived — полная очистка                 [P4] ✅ creativeStats + orgMembers/invites/loadHistory
+  #21 OrgDashboardPage — русские ниши                    [P4] ✅
+  #22 PasswordResetPage для org-users                    [P3] ✅ schema + backend + email + UI + route
+  #23 OrgDashboardPage — TS error useLoadStatus          [P4] ✅ replaced with interface
+```
+
+---
+
+## Тестовый чеклист пос��е исправлений
 
 - [ ] Owner org видит org-кабинеты + личные (excludeFromOrgTransfer) одновременно
 - [ ] Manager видит assignedAccountIds + свои личные кабинеты (до вступления в org) одновременно

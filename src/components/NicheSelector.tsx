@@ -16,7 +16,7 @@ export const NICHE_COEFS: Record<string, number> = {
   other: 2,
 };
 
-const NICHE_LABELS: Record<string, string> = {
+export const NICHE_LABELS: Record<string, string> = {
   beauty: "Бьюти / Красота",
   schools: "Офлайн-школы",
   measurement: "Замерные ниши (окна, кухни, мебель)",

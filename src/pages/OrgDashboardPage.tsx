@@ -16,6 +16,7 @@ import {
   Crown,
 } from "lucide-react";
 import { Link } from "react-router-dom";
+import { NICHE_LABELS } from "@/components/NicheSelector";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,21 @@ function getYearMonth(date: Date): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function GracePhaseStatus({ status }: { status: NonNullable<ReturnType<typeof useLoadStatus>> }) {
+interface LoadStatus {
+  orgId: Id<"organizations">;
+  currentLoadUnits: number;
+  maxLoadUnits: number;
+  utilizationPct: number;
+  isOverLimit: boolean;
+  overageNotifiedAt?: number;
+  overageGraceStartedAt?: number;
+  featuresDisabledAt?: number;
+  expiredGracePhase?: string;
+  expiredGraceStartedAt?: number;
+  subscriptionExpiresAt?: number;
+}
+
+function GracePhaseStatus({ status }: { status: LoadStatus }) {
   if (status.expiredGracePhase === "frozen") {
     return (
       <div className="flex items-center gap-3 p-4 rounded-lg bg-destructive/10 border border-destructive/30">
@@ -336,7 +351,7 @@ export function OrgDashboardPage() {
             <div className="flex flex-wrap gap-2">
               {org.nichesConfig.map((n) => (
                 <Badge key={n.niche} variant="outline">
-                  {n.niche}: {n.cabinetsCount} каб.
+                  {NICHE_LABELS[n.niche] ?? n.niche}: {n.cabinetsCount} каб.
                 </Badge>
               ))}
             </div>
