@@ -135,3 +135,46 @@ export const setDigestEnabled = mutation({
     return { success: true };
   },
 });
+
+// Update image generation settings
+export const updateImageSettings = mutation({
+  args: {
+    userId: v.id("users"),
+    imageProvider: v.union(v.literal("gpt-image-2"), v.literal("flux")),
+    imageTextOverlay: v.union(v.literal("none"), v.literal("pillow"), v.literal("native")),
+  },
+  handler: async (ctx, args) => {
+    if (args.imageTextOverlay === "native" && args.imageProvider === "flux") {
+      throw new Error("Встроенный текст доступен только для GPT Image 2");
+    }
+
+    const settings = await ctx.db
+      .query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .first();
+
+    if (!settings) {
+      await ctx.db.insert("userSettings", {
+        userId: args.userId,
+        quietHoursEnabled: false,
+        timezone: "Europe/Moscow",
+        digestEnabled: true,
+        digestTime: "09:00",
+        language: "ru",
+        imageProvider: args.imageProvider,
+        imageTextOverlay: args.imageTextOverlay,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      return { success: true };
+    }
+
+    await ctx.db.patch(settings._id, {
+      imageProvider: args.imageProvider,
+      imageTextOverlay: args.imageTextOverlay,
+      updatedAt: Date.now(),
+    });
+
+    return { success: true };
+  },
+});

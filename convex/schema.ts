@@ -438,6 +438,8 @@ export default defineSchema({
     digestTime: v.string(),
     language: v.string(),
     activeAccountId: v.optional(v.id("adAccounts")),
+    imageProvider: v.optional(v.union(v.literal("gpt-image-2"), v.literal("flux"))),
+    imageTextOverlay: v.optional(v.union(v.literal("none"), v.literal("pillow"), v.literal("native"))),
     createdAt: v.number(),
     updatedAt: v.number(),
   })
@@ -527,6 +529,7 @@ export default defineSchema({
       v.literal("failed")
     ),
     errorMessage: v.optional(v.string()),
+    imageProvider: v.optional(v.union(v.literal("gpt-image-2"), v.literal("flux"))),
     orgId: v.optional(v.id("organizations")),
     createdAt: v.number(),
     expiresAt: v.number(),       // createdAt + 2 days, for cron cleanup

@@ -34,6 +34,7 @@ import {
   AlertCircle,
   Gift,
   Users,
+  Sparkles,
 } from 'lucide-react';
 import { CommunityProfilesSection } from "@/components/CommunityProfilesSection";
 import { cn } from '../lib/utils';
@@ -57,7 +58,7 @@ export function SettingsPage() {
   const { user } = useAuth();
   const location = useLocation();
   const initialTab = (location.state as { tab?: string })?.tab || 'profile';
-  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral' | 'communities'>(initialTab as 'profile' | 'telegram' | 'api' | 'business' | 'referral' | 'communities');
+  const [activeTab, setActiveTab] = useState<'profile' | 'telegram' | 'api' | 'business' | 'referral' | 'communities' | 'ai'>(initialTab as 'profile' | 'telegram' | 'api' | 'business' | 'referral' | 'communities' | 'ai');
 
   if (!user) {
     return (
@@ -155,6 +156,19 @@ export function SettingsPage() {
             <Users className="w-4 h-4" />
             Сообщества
           </button>
+          <button
+            data-testid="tab-ai"
+            onClick={() => setActiveTab('ai')}
+            className={cn(
+              'pb-3 px-1 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5',
+              activeTab === 'ai'
+                ? 'border-primary text-primary'
+                : 'border-transparent text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Sparkles className="w-4 h-4" />
+            AI
+          </button>
         </nav>
       </div>
 
@@ -169,6 +183,8 @@ export function SettingsPage() {
         <ReferralTab userId={user.userId} />
       ) : activeTab === 'communities' ? (
         <CommunityProfilesSection />
+      ) : activeTab === 'ai' ? (
+        <AiSettingsTab userId={user.userId as Id<'users'>} />
       ) : (
         <BusinessTab userId={user.userId} />
       )}
@@ -1312,6 +1328,174 @@ function ReferralTab({ userId }: { userId: string }) {
           </CardContent>
         </Card>
       )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   AI Settings Tab
+   ═══════════════════════════════════════════════════════════ */
+
+function AiSettingsTab({ userId }: { userId: Id<'users'> }) {
+  const settings = useQuery(api.userSettings.get, { userId });
+  const updateImageSettings = useMutation(api.userSettings.updateImageSettings);
+  const [saving, setSaving] = useState(false);
+  const [success, setSuccess] = useState(false);
+
+  const [provider, setProvider] = useState<'gpt-image-2' | 'flux'>('gpt-image-2');
+  const [textOverlay, setTextOverlay] = useState<'none' | 'pillow' | 'native'>('pillow');
+
+  useEffect(() => {
+    if (settings) {
+      setProvider((settings.imageProvider as 'gpt-image-2' | 'flux') || 'gpt-image-2');
+      setTextOverlay((settings.imageTextOverlay as 'none' | 'pillow' | 'native') || 'pillow');
+    }
+  }, [settings]);
+
+  const handleProviderChange = (val: 'gpt-image-2' | 'flux') => {
+    setProvider(val);
+    if (val === 'flux' && textOverlay === 'native') {
+      setTextOverlay('pillow');
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await updateImageSettings({ userId, imageProvider: provider, imageTextOverlay: textOverlay });
+      setSuccess(true);
+      setTimeout(() => setSuccess(false), 3000);
+    } catch {
+      // Error shown by Convex
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (settings === undefined) {
+    return (
+      <div className="flex justify-center py-12">
+        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
+
+  return (
+    <div data-testid="ai-settings-tab" className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Sparkles className="w-5 h-5" />
+            Генерация изображений
+          </CardTitle>
+          <CardDescription>
+            Выберите модель и режим наложения текста для генерации баннеров
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Provider selection */}
+          <div className="space-y-2">
+            <Label>Модель генерации</Label>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                type="button"
+                onClick={() => handleProviderChange('gpt-image-2')}
+                className={cn(
+                  'p-3 rounded-lg border text-left transition-colors',
+                  provider === 'gpt-image-2'
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-muted-foreground/50'
+                )}
+              >
+                <p className="font-medium text-sm">GPT Image 2</p>
+                <p className="text-xs text-muted-foreground mt-1">OpenAI, быстрая генерация</p>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleProviderChange('flux')}
+                className={cn(
+                  'p-3 rounded-lg border text-left transition-colors',
+                  provider === 'flux'
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-muted-foreground/50'
+                )}
+              >
+                <p className="font-medium text-sm">FLUX Ultra</p>
+                <p className="text-xs text-muted-foreground mt-1">BFL, детальная фотография</p>
+              </button>
+            </div>
+          </div>
+
+          {/* Text overlay selection */}
+          <div className="space-y-2">
+            <Label>Текст на баннере</Label>
+            <div className="space-y-2">
+              <label className="flex items-start gap-3 p-3 rounded-lg border border-border hover:border-muted-foreground/50 cursor-pointer transition-colors">
+                <input
+                  type="radio"
+                  name="textOverlay"
+                  checked={textOverlay === 'none'}
+                  onChange={() => setTextOverlay('none')}
+                  className="mt-0.5"
+                />
+                <div>
+                  <p className="text-sm font-medium">Без текста</p>
+                  <p className="text-xs text-muted-foreground">Чистое изображение без надписей</p>
+                </div>
+              </label>
+              <label className="flex items-start gap-3 p-3 rounded-lg border border-border hover:border-muted-foreground/50 cursor-pointer transition-colors">
+                <input
+                  type="radio"
+                  name="textOverlay"
+                  checked={textOverlay === 'pillow'}
+                  onChange={() => setTextOverlay('pillow')}
+                  className="mt-0.5"
+                />
+                <div>
+                  <p className="text-sm font-medium">Наложение текста</p>
+                  <p className="text-xs text-muted-foreground">Текст накладывается поверх изображения программно</p>
+                </div>
+              </label>
+              <label className={cn(
+                "flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-colors",
+                provider === 'flux'
+                  ? 'border-border opacity-50 cursor-not-allowed'
+                  : 'border-border hover:border-muted-foreground/50'
+              )}>
+                <input
+                  type="radio"
+                  name="textOverlay"
+                  checked={textOverlay === 'native'}
+                  onChange={() => setTextOverlay('native')}
+                  disabled={provider === 'flux'}
+                  className="mt-0.5"
+                />
+                <div>
+                  <p className="text-sm font-medium">Встроенный в изображение</p>
+                  <p className="text-xs text-muted-foreground">
+                    GPT Image 2 рендерит текст прямо на картинке
+                    {provider === 'flux' && ' (недоступно для FLUX)'}
+                  </p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {/* Save button */}
+          <div className="flex items-center gap-3">
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? (
+                <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Сохранение...</>
+              ) : (
+                'Сохранить'
+              )}
+            </Button>
+            {success && (
+              <span className="text-sm text-green-600 dark:text-green-400">Настройки сохранены</span>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

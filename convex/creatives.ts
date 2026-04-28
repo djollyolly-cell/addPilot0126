@@ -94,11 +94,12 @@ export const deleteCreative = mutation({
   },
 });
 
-// Save generated image (called internally after DALL-E generation)
+// Save generated image (called internally after image generation)
 export const saveGeneratedImage = internalMutation({
   args: {
     id: v.id("creatives"),
     storageId: v.id("_storage"),
+    imageProvider: v.optional(v.union(v.literal("gpt-image-2"), v.literal("flux"))),
   },
   handler: async (ctx, args) => {
     const url = await ctx.storage.getUrl(args.storageId);
@@ -106,6 +107,7 @@ export const saveGeneratedImage = internalMutation({
       storageId: args.storageId,
       imageUrl: url ?? undefined,
       status: "ready" as const,
+      imageProvider: args.imageProvider,
     });
   },
 });
@@ -221,7 +223,7 @@ export const generateText = action({
   },
 });
 
-// Generate banner image using Haiku (style prompt) + FLUX Ultra
+// Generate banner image using selected provider (GPT Image 2 or FLUX Ultra)
 export const generateImage = action({
   args: {
     creativeId: v.id("creatives"),
@@ -245,11 +247,15 @@ export const generateImage = action({
       throw new Error("Лимит генераций изображений исчерпан. Обновите тариф.");
     }
 
+    // Get user settings for provider choice
+    const settings = await ctx.runQuery(internal.userSettings.getInternal, {
+      userId: args.userId,
+    });
+    const provider = (settings?.imageProvider as "gpt-image-2" | "flux") || "gpt-image-2";
+    const textOverlay = (settings?.imageTextOverlay as "none" | "pillow" | "native") || "pillow";
+
     // Set status to generating
     await ctx.runMutation(internal.creatives.markGenerating, { id: args.creativeId });
-
-    const bflApiKey = process.env.BFL_API_KEY;
-    if (!bflApiKey) throw new Error("BFL_API_KEY не настроен");
 
     try {
       const anthropicKey = process.env.ANTHROPIC_API_KEY;
@@ -259,7 +265,18 @@ export const generateImage = action({
       // Step 1: Select style based on business context
       const style = selectStyle(args.businessContext || args.offer);
 
-      // Step 2: Generate FLUX prompt via Haiku with style system prompt
+      // Step 2: Generate prompt via Haiku (different system prompt per provider)
+      const systemPrompt = provider === "gpt-image-2"
+        ? style.systemPromptGpt
+        : style.systemPrompt;
+
+      const userContent = [
+        args.offer,
+        args.bullets,
+        args.benefit,
+        args.businessContext || "",
+      ].filter(Boolean).join(". ");
+
       const translateResp = await fetch(anthropicBase + "/v1/messages", {
         method: "POST",
         headers: {
@@ -269,76 +286,59 @@ export const generateImage = action({
         },
         body: JSON.stringify({
           model: "claude-haiku-4-5-20251001",
-          max_tokens: 300,
-          system: style.systemPrompt,
-          messages: [{ role: "user", content: args.offer + ". " + args.bullets + ". " + args.benefit + ". " + (args.businessContext || "") }],
+          max_tokens: 500,
+          system: systemPrompt,
+          messages: [{ role: "user", content: userContent }],
         }),
       });
 
-      let visualKeywords = "Professional commercial photography scene";
+      let generatedPrompt = "Professional commercial photography scene";
       if (translateResp.ok) {
         const trData = await translateResp.json();
-        visualKeywords = trData.content?.[0]?.text || visualKeywords;
+        generatedPrompt = trData.content?.[0]?.text || generatedPrompt;
       }
 
-      const prompt = visualKeywords + " " + style.suffix;
-
-      // Step 3: Submit to FLUX Ultra (square, raw)
-      const submitResp = await fetch("https://api.bfl.ai/v1/flux-pro-1.1-ultra", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-key": bflApiKey,
-        },
-        body: JSON.stringify({
-          prompt,
-          aspect_ratio: "1:1",
-          raw: true,
-        }),
-      });
-
-      if (!submitResp.ok) {
-        const text = await submitResp.text();
-        throw new Error("FLUX Ultra API error: " + submitResp.status + " " + text);
-      }
-
-      const submitData = await submitResp.json();
-      const taskId = submitData.id;
-
-      // Step 4: Poll for result (Ultra ~90 sec, max 60 × 3 sec = 3 min)
-      let imageUrl: string | null = null;
-      for (let i = 0; i < 60; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const pollResp = await fetch("https://api.bfl.ai/v1/get_result?id=" + taskId, {
-          headers: { "x-key": bflApiKey },
-        });
-        if (!pollResp.ok) continue;
-        const pollData = await pollResp.json();
-        if (pollData.status === "Ready") {
-          imageUrl = pollData.result?.sample;
-          break;
-        }
-        if (pollData.status === "Error" || pollData.status === "Failed") {
-          throw new Error("FLUX генерация не удалась: " + pollData.status);
+      // Step 3: Build final prompt
+      let finalPrompt: string;
+      if (provider === "flux") {
+        finalPrompt = generatedPrompt + " " + style.suffix;
+      } else {
+        // GPT Image 2: use structured prompt as-is
+        finalPrompt = generatedPrompt;
+        // Add text overlay block if "native" mode
+        if (textOverlay === "native") {
+          const { buildTextOverlayBlock } = await import("./imageProviders");
+          finalPrompt += "\n" + buildTextOverlayBlock(
+            args.offer,
+            args.bullets,
+            args.benefit,
+            args.cta,
+          );
         }
       }
 
-      if (!imageUrl) {
-        throw new Error("FLUX: таймаут генерации изображения (3 мин)");
+      // Step 4: Call provider API
+      let imageBlob: Blob;
+      if (provider === "gpt-image-2") {
+        const openaiKey = process.env.OPENAI_API_KEY;
+        if (!openaiKey) throw new Error("OPENAI_API_KEY не настроен");
+        const { generateWithGptImage2 } = await import("./imageProviders");
+        imageBlob = await generateWithGptImage2(finalPrompt, openaiKey, "1024x1024");
+      } else {
+        const bflApiKey = process.env.BFL_API_KEY;
+        if (!bflApiKey) throw new Error("BFL_API_KEY не настроен");
+        const { generateWithFlux } = await import("./imageProviders");
+        imageBlob = await generateWithFlux(finalPrompt, bflApiKey);
       }
 
-      // Step 5: Download and store
-      const imgResp = await fetch(imageUrl);
-      if (!imgResp.ok) throw new Error("Не удалось скачать изображение от FLUX");
-      const imgBlob = await imgResp.blob();
-      const mimeType = imgBlob.type || "image/jpeg";
-      const imageBlob = new Blob([await imgBlob.arrayBuffer()], { type: mimeType });
+      // Step 5: Store image
       const storageId = await ctx.storage.store(imageBlob);
 
-      // Save to creative
+      // Save to creative (with provider info)
       await ctx.runMutation(internal.creatives.saveGeneratedImage, {
         id: args.creativeId,
         storageId,
+        imageProvider: provider,
       });
 
       // Record usage

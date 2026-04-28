@@ -1,4 +1,4 @@
-import { Trash2, Loader2, AlertCircle, ImageIcon } from 'lucide-react';
+import { Trash2, Loader2, AlertCircle, ImageIcon, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -26,6 +26,23 @@ interface CreativeGalleryProps {
 }
 
 export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalleryProps) {
+  const handleDownload = async (url: string, id: string) => {
+    try {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = blobUrl;
+      link.download = `creative-${id}.jpg`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(blobUrl);
+    } catch {
+      window.open(url, '_blank');
+    }
+  };
+
   if (creatives.length === 0) {
     return (
       <div className="text-center py-12">
@@ -92,19 +109,32 @@ export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalle
                   {formatRelativeTime(creative.createdAt)}
                 </span>
               </div>
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                onClick={() => onDelete(creative._id)}
-                disabled={deleting === creative._id}
-              >
-                {deleting === creative._id ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Trash2 className="h-4 w-4" />
+              <div className="flex items-center gap-1">
+                {creative.status === 'ready' && creative.imageUrl && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:text-primary"
+                    onClick={() => handleDownload(creative.imageUrl!, creative._id)}
+                    data-testid={`download-creative-${creative._id}`}
+                  >
+                    <Download className="h-4 w-4" />
+                  </Button>
                 )}
-              </Button>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  onClick={() => onDelete(creative._id)}
+                  disabled={deleting === creative._id}
+                >
+                  {deleting === creative._id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
