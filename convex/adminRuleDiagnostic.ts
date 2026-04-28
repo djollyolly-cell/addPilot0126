@@ -213,7 +213,7 @@ export const getActionLogs = internalQuery({
   handler: async (ctx, args) => {
     const logs = await ctx.db
       .query("actionLogs")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .withIndex("by_userId_date", (q) => q.eq("userId", args.userId))
       .collect();
     return logs.filter(
       (l) => l.createdAt >= args.dateFromTs && l.createdAt <= args.dateToTs

@@ -244,7 +244,7 @@ export const hasResetToday = internalQuery({
   handler: async (ctx, args) => {
     const log = await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", args.ruleId))
       .filter((q) =>
         q.and(
           q.eq(q.field("actionType"), "budget_reset"),

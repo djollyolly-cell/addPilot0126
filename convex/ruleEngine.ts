@@ -899,7 +899,7 @@ export const listActionLogs = query({
   handler: async (ctx, args) => {
     return await ctx.db
       .query("actionLogs")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .withIndex("by_userId_date", (q) => q.eq("userId", args.userId))
       .order("desc")
       .collect();
   },
@@ -911,7 +911,7 @@ export const getActionLogsByRule = query({
   handler: async (ctx, args) => {
     return await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", args.ruleId))
       .order("desc")
       .collect();
   },
@@ -923,7 +923,7 @@ export const getLastBudgetLogForCampaign = internalQuery({
   handler: async (ctx, args) => {
     const logs = await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", args.ruleId))
       .filter((q) =>
         q.and(
           q.eq(q.field("actionType"), "budget_increased"),
@@ -956,7 +956,7 @@ export const getRecentBudgetLogsForRule = internalQuery({
   handler: async (ctx, args) => {
     return await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", args.ruleId))
       .order("desc")
       .take(args.limitCount);
   },
@@ -2395,7 +2395,7 @@ export const isFirstBudgetIncreaseToday = internalQuery({
     const dayStartUtc = now.getTime() - (minutesSinceMidnight * 60 + now.getSeconds()) * 1000;
     const logs = await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", args.ruleId))
       .filter((q) =>
         q.and(
           q.eq(q.field("actionType"), "budget_increased"),
@@ -2421,7 +2421,7 @@ export const hasUncoveredNotificationToday = internalQuery({
     const dayStartUtc = mskMidnight.getTime() - 3 * 60 * 60 * 1000;
     const log = await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", args.ruleId))
       .filter((q) =>
         q.and(
           q.eq(q.field("adId"), args.campaignId),

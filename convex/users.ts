@@ -636,7 +636,7 @@ export const deleteUser = mutation({
     // Delete action logs
     const logs = await ctx.db
       .query("actionLogs")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .withIndex("by_userId_date", (q) => q.eq("userId", args.userId))
       .collect();
     for (const log of logs) {
       await ctx.db.delete(log._id);

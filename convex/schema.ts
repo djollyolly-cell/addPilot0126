@@ -300,9 +300,7 @@ export default defineSchema({
     orgId: v.optional(v.id("organizations")),
     createdAt: v.number(),
   })
-    .index("by_userId", ["userId"])
     .index("by_userId_date", ["userId", "createdAt"])
-    .index("by_ruleId", ["ruleId"])
     .index("by_ruleId_createdAt", ["ruleId", "createdAt"])
     .index("by_accountId", ["accountId"])
     .index("by_orgId_date", ["orgId", "createdAt"])

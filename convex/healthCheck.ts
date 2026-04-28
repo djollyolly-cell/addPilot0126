@@ -167,7 +167,7 @@ export const checkCronResetResults = internalQuery({
       for (const rule of resetRules) {
         const ruleLogs = await ctx.db
           .query("actionLogs")
-          .withIndex("by_ruleId", (q) => q.eq("ruleId", rule._id))
+          .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", rule._id))
           .order("desc")
           .take(50);
         const recentResets = ruleLogs.filter(
@@ -943,7 +943,7 @@ export const checkRuleCoverage = internalQuery({
 
     const logs = await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", args.ruleId))
       .collect();
     const todayLogs = logs.filter((l) => l.createdAt >= todayStart);
     const processedCampaigns = new Set(
@@ -990,7 +990,7 @@ export const checkLogDynamics = internalQuery({
 
     const logs = await ctx.db
       .query("actionLogs")
-      .withIndex("by_ruleId", (q) => q.eq("ruleId", args.ruleId))
+      .withIndex("by_ruleId_createdAt", (q) => q.eq("ruleId", args.ruleId))
       .collect();
     const todayLogs = logs
       .filter((l) => l.createdAt >= todayStart && l.actionType === "budget_increased")
@@ -1076,7 +1076,7 @@ export const checkDeduplication = internalQuery({
     const todayStart = dayStartInTz(tz);
     const logs = await ctx.db
       .query("actionLogs")
-      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .withIndex("by_userId_date", (q) => q.eq("userId", args.userId))
       .collect();
     const todayLogs = logs.filter((l) => l.createdAt >= todayStart);
     const issues: string[] = [];
