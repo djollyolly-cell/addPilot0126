@@ -17,6 +17,7 @@ interface User {
   organizationRole?: 'owner' | 'manager';
   permissions?: string[];
   assignedAccountIds?: string[];
+  pendingReferralCode?: string;
 }
 
 interface EmailLoginResult {
@@ -78,6 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logoutMutation = useMutation(api.auth.logout);
+  const savePendingReferral = useMutation(api.referrals.savePendingReferralCode);
   const getVkAuthUrl = useAction(api.auth.getVkAuthUrl);
   const emailLoginAction = useAction(api.authEmail.loginWithEmail);
 
@@ -138,6 +140,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setSessionToken(null);
     }
   }, [sessionToken, user]);
+
+  // Persist referral code from localStorage to DB after login
+  useEffect(() => {
+    if (!user || !user.userId) return;
+    const savedRef = localStorage.getItem('adpilot_referral_code');
+    if (!savedRef) return;
+    savePendingReferral({ userId: user.userId as import('../../convex/_generated/dataModel').Id<"users">, code: savedRef })
+      .then(() => localStorage.removeItem('adpilot_referral_code'))
+      .catch(() => {}); // will retry on next session load
+  }, [user?.userId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Sync logout across browser tabs
   useEffect(() => {

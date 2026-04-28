@@ -353,11 +353,12 @@ export const createBepaidCheckout = action({
       });
     }
 
-    // Calculate referral discount
+    // Calculate referral discount (fallback to pendingReferralCode from user record)
+    const effectiveReferralCode = args.referralCode || (user as Record<string, unknown>).pendingReferralCode as string | undefined;
     let referralDiscount = 0;
-    if (args.referralCode) {
+    if (effectiveReferralCode) {
       const referrer = await ctx.runQuery(internal.referrals.findReferrerByCode, {
-        code: args.referralCode.toUpperCase(),
+        code: effectiveReferralCode.toUpperCase(),
       });
       if (referrer && referrer.referralType === "discount") {
         referralDiscount = referrer.referralDiscount ?? 10;
@@ -429,7 +430,7 @@ export const createBepaidCheckout = action({
         amount: discountedBYN,
         currency: "BYN",
         promoCode: args.promoCode,
-        referralCode: args.referralCode?.toUpperCase(),
+        referralCode: effectiveReferralCode?.toUpperCase(),
         referralDiscount: referralDiscount > 0 ? referralDiscount : undefined,
         isUpgrade: args.isUpgrade,
         creditAmount: args.creditAmount,

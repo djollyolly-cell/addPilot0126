@@ -429,6 +429,7 @@ export const validateSession = query({
       organizationRole,
       permissions,
       assignedAccountIds,
+      pendingReferralCode: user.pendingReferralCode,
     };
   },
 });

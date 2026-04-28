@@ -54,6 +54,7 @@ export default defineSchema({
     referredBy: v.optional(v.id("users")),
     referralMilestone3Claimed: v.optional(v.boolean()),
     referralMilestone10Reached: v.optional(v.boolean()),
+    pendingReferralCode: v.optional(v.string()),
     // Agency org membership
     organizationId: v.optional(v.id("organizations")),
     passwordHash: v.optional(v.string()),  // bcrypt for org-users (Plan 2)

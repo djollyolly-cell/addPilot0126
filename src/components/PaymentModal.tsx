@@ -55,13 +55,16 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
   const [referralApplied, setReferralApplied] = useState<{ discount: number; referrerName: string } | null>(null);
   const [referralError, setReferralError] = useState<string | null>(null);
 
-  // Auto-fill referral code from localStorage (saved from referral link)
+  // Auto-fill referral code from localStorage or user record (saved from referral link)
   useEffect(() => {
+    if (referralCode) return;
     const savedRef = localStorage.getItem('adpilot_referral_code');
-    if (savedRef && !referralCode) {
+    if (savedRef) {
       setReferralCode(savedRef);
+    } else if (user?.pendingReferralCode) {
+      setReferralCode(user.pendingReferralCode);
     }
-  }, []);
+  }, [user?.pendingReferralCode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const createBepaidCheckout = useAction(api.billing.createBepaidCheckout);
   const upgradeInfo = useQuery(

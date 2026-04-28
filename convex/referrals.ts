@@ -119,6 +119,51 @@ export const getMyReferralStats = query({
   },
 });
 
+/** Save referral code to user record on login (from localStorage → DB).
+ *  Also creates a referrals record with status "registered" for tracking. */
+export const savePendingReferralCode = mutation({
+  args: { userId: v.id("users"), code: v.string() },
+  handler: async (ctx, args) => {
+    const code = args.code.trim().toUpperCase();
+    if (code.length < 4) return { saved: false };
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) return { saved: false };
+
+    // Already has this code saved — skip
+    if (user.pendingReferralCode === code) return { saved: true };
+    // Already referred (paid) — skip
+    if (user.referredBy) return { saved: false };
+
+    // Validate code exists
+    const referrer = await ctx.db
+      .query("users")
+      .withIndex("by_referralCode", (q) => q.eq("referralCode", code))
+      .first();
+    if (!referrer || referrer._id === args.userId) return { saved: false };
+
+    // Save on user
+    await ctx.db.patch(args.userId, { pendingReferralCode: code });
+
+    // Create "registered" referral record if not exists
+    const existing = await ctx.db
+      .query("referrals")
+      .withIndex("by_referredId", (q) => q.eq("referredId", args.userId))
+      .first();
+    if (!existing) {
+      await ctx.db.insert("referrals", {
+        referrerId: referrer._id,
+        referredId: args.userId,
+        referralCode: code,
+        status: "registered",
+        createdAt: Date.now(),
+      });
+    }
+
+    return { saved: true };
+  },
+});
+
 // ─── Mutations ───────────────────────────────────────
 
 /** Generate a unique referral code for a user */
@@ -242,10 +287,14 @@ export const applyReferralBonus = internalMutation({
 
     await ctx.db.patch(referrer._id, patch);
 
-    // Set referredBy on the invited user (write-once)
+    // Set referredBy on the invited user + clear pendingReferralCode (write-once)
     const referred = await ctx.db.get(args.referredUserId);
-    if (referred && !referred.referredBy) {
-      await ctx.db.patch(args.referredUserId, { referredBy: referrer._id });
+    if (referred) {
+      const referredPatch: Record<string, unknown> = { pendingReferralCode: undefined };
+      if (!referred.referredBy) {
+        referredPatch.referredBy = referrer._id;
+      }
+      await ctx.db.patch(args.referredUserId, referredPatch);
     }
 
     return { referrerId: referrer._id, bonusDays, newCount, milestone3, milestone10 };
