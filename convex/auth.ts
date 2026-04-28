@@ -555,7 +555,7 @@ export const getValidVkToken = internalAction({
         userId: args.userId,
         level: "error",
         source: "auth",
-        message: `VK token refresh failed: ${msg.slice(0, 180)}`,
+        message: `VK token refresh failed (user ${args.userId}): ${msg.slice(0, 150)}`,
       }); } catch { /* non-critical */ }
       throw new Error(`Не удалось обновить токен VK: ${msg}`);
     }
@@ -663,7 +663,7 @@ export const getValidVkAdsToken = internalAction({
         userId: args.userId,
         level: "error",
         source: "auth",
-        message: `VK Ads token refresh failed: ${detail.slice(0, 180)}`,
+        message: `VK Ads token refresh failed (user ${args.userId}): ${detail.slice(0, 150)}`,
       }); } catch { /* non-critical */ }
       throw new Error(`Не удалось обновить токен VK Ads: ${detail}`);
     }
@@ -1166,7 +1166,7 @@ export const getValidTokenForAccount = internalAction({
         accountId: args.accountId,
         level: "error",
         source: "auth",
-        message: `All token refresh methods failed: ${msg.slice(0, 150)}`,
+        message: `Token refresh failed for «${account.name}»: ${msg.slice(0, 150)}`,
       }); } catch { /* non-critical */ }
       throw new Error(`Не удалось обновить токен VK Ads: ${msg}. Подключите кабинет заново.`);
     }
@@ -1949,12 +1949,7 @@ export const tokenRefreshOne = internalAction({
             console.error(`[tokenRefreshOne] Account "${label}": recovery failed: ${recoveryErr}`);
           }
         }
-        try {
-          await ctx.runAction(internal.telegram.sendMessage, {
-            chatId: ADMIN_CHAT_ID,
-            text: `🔑 Token refresh failed: Account "${label}": ${errMsg.slice(0, 200)}`,
-          });
-        } catch { /* non-critical */ }
+        // Direct Telegram removed — already alerted via systemLogger in getValidTokenForAccount/tryRecoverToken
       }
     } else if (args.targetType === "user_vkads") {
       const userId = args.targetId as Id<"users">;
@@ -1975,12 +1970,7 @@ export const tokenRefreshOne = internalAction({
         if (isUnrecoverable(err)) {
           await ctx.runMutation(internal.auth.clearUserVkAdsRefreshToken, { userId });
         }
-        try {
-          await ctx.runAction(internal.telegram.sendMessage, {
-            chatId: ADMIN_CHAT_ID,
-            text: `🔑 VK Ads token refresh failed: User "${label}": ${errMsg.slice(0, 200)}`,
-          });
-        } catch { /* non-critical */ }
+        // Direct Telegram removed — already alerted via systemLogger in getValidVkAdsToken
       }
     } else if (args.targetType === "user_vk") {
       const userId = args.targetId as Id<"users">;
@@ -1996,12 +1986,7 @@ export const tokenRefreshOne = internalAction({
         if (isUnrecoverable(err)) {
           await ctx.runMutation(internal.auth.clearUserVkRefreshToken, { userId });
         }
-        try {
-          await ctx.runAction(internal.telegram.sendMessage, {
-            chatId: ADMIN_CHAT_ID,
-            text: `🔑 VK ID token refresh failed: User "${label}": ${errMsg.slice(0, 200)}`,
-          });
-        } catch { /* non-critical */ }
+        // Direct Telegram removed — already alerted via systemLogger in getValidVkToken
       }
     }
   },
