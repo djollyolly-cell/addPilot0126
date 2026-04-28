@@ -10,12 +10,16 @@ export async function generateWithGptImage2(
   openaiApiKey: string,
   size: "1024x1024" | "1536x1024" | "1024x1536" = "1024x1024",
 ): Promise<Blob> {
-  const response = await fetch("https://api.openai.com/v1/images/generations", {
+  const baseUrl = process.env.OPENAI_BASE_URL || "https://api.openai.com";
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${openaiApiKey}`,
+  };
+  if (process.env.OPENAI_BASE_URL) headers["x-target-api"] = "openai";
+
+  const response = await fetch(`${baseUrl}/v1/images/generations`, {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${openaiApiKey}`,
-    },
+    headers,
     body: JSON.stringify({
       model: "gpt-image-2",
       prompt,
