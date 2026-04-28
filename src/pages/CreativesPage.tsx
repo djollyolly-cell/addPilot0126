@@ -263,6 +263,28 @@ export function CreativesPage() {
         </CardContent>
       </Card>
 
+      {/* Direction selector — prominent, right after counter */}
+      {activeDirections.length > 0 && (
+        <Card>
+          <CardContent className="py-4">
+            <Label className="text-base font-semibold">Направление бизнеса</Label>
+            <p className="text-sm text-muted-foreground mt-0.5 mb-2">
+              Выберите направление для генерации релевантных креативов
+            </p>
+            <select
+              className="w-full rounded-lg border-2 border-primary/20 bg-background px-4 py-3 text-base font-medium focus:border-primary focus:outline-none transition-colors"
+              value={selectedDirectionId}
+              onChange={(e) => setSelectedDirectionId(e.target.value)}
+            >
+              <option value="">Выберите направление...</option>
+              {activeDirections.map((dir: any) => (
+                <option key={dir._id} value={dir._id}>{dir.name}</option>
+              ))}
+            </select>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Business profile hint */}
       {profile !== undefined && directions !== undefined && (
         !profile?.companyName || !profile?.industry || activeDirections.length === 0
@@ -307,25 +329,6 @@ export function CreativesPage() {
             generatingField={generatingField}
             disabled={generatingImage}
           />
-
-          {/* Direction selector */}
-          {activeDirections.length > 0 && (
-            <div className="mt-4">
-              <Label>Направление бизнеса</Label>
-              <div className="flex gap-2 mt-1">
-                <select
-                  className="flex-1 rounded-md border border-border bg-background px-3 py-2 text-sm"
-                  value={selectedDirectionId}
-                  onChange={(e) => setSelectedDirectionId(e.target.value)}
-                >
-                  <option value="">Выберите направление...</option>
-                  {activeDirections.map((dir: any) => (
-                    <option key={dir._id} value={dir._id}>{dir.name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          )}
 
           <div className="mt-6">
             <Button
