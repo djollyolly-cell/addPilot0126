@@ -348,12 +348,13 @@ export const handleTokenExpired = internalAction({
       );
     }
 
-    // 5. Recovery failed — mark as error
-    await ctx.runMutation(internal.adAccounts.invalidateAccountToken, {
+    // 5. Recovery failed — mark as error with tokenErrorSince for auto-abandon tracking
+    await ctx.runMutation(internal.tokenRecovery.markRecoveryFailure, {
       accountId: args.accountId,
+      errorMessage: "TOKEN_EXPIRED — автовосстановление не удалось",
     });
     console.log(
-      `[handleTokenExpired] «${account.name}» (${args.accountId}): all recovery failed, invalidated`
+      `[handleTokenExpired] «${account.name}» (${args.accountId}): all recovery failed, marked with tokenErrorSince`
     );
     return false;
   },

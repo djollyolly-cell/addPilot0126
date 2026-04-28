@@ -18,7 +18,16 @@ const BATCH_ACCOUNT_TIMEOUT_MS = 560_000; // 9 min 20s per account — heaviest 
 
 /** Permanent errors → immediate error status. Everything else is transient. */
 function isPermanentError(msg: string): boolean {
-  return msg.includes("TOKEN_EXPIRED") || msg.includes("403 Forbidden");
+  return (
+    msg.includes("TOKEN_EXPIRED") ||
+    msg.includes("403 Forbidden") ||
+    msg.includes("refreshToken отсутствует")
+  );
+}
+
+/** Token-specific permanent errors → route to handleTokenExpired for recovery attempt. */
+function isTokenExpiredError(msg: string): boolean {
+  return msg.includes("TOKEN_EXPIRED") || msg.includes("refreshToken отсутствует");
 }
 
 // Today's date in YYYY-MM-DD format
@@ -535,7 +544,7 @@ export const syncAll = internalAction({
           message: `Sync failed: ${msg.slice(0, 180)}`,
         }); } catch { /* non-critical */ }
 
-        if (msg.includes("TOKEN_EXPIRED")) {
+        if (isTokenExpiredError(msg)) {
           // TOKEN_EXPIRED — centralized handler owns the full flow:
           // verify token → recover → set status. handleTokenExpired returns boolean (never throws).
           let recovered = false;
@@ -861,21 +870,15 @@ async function syncSingleAccount(
       return;
     }
 
-    // Escalation: if account stuck in error for >2h, notify admin (max once per 2h via time-slot dedup)
+    // Escalation: if account stuck in error for >2h, notify admin
+    // dedupKey WITHOUT timeSlot — adminAlerts 30-min dedup prevents spam
     if (
       account.status === "error" &&
       account.lastSyncAt &&
       Date.now() - account.lastSyncAt > ERROR_ESCALATION_MS
     ) {
-      const timeSlot = Math.floor(Date.now() / ERROR_ESCALATION_MS); // changes every 2h
       try {
-        await ctx.runMutation(internal.systemLogger.log, {
-          accountId: account._id,
-          level: "warn",
-          source: "escalation",
-          message: `Кабинет "${account.name}" в ошибке более 2ч. Ошибка: ${(account.lastError || "неизвестно").slice(0, 150)}`,
-        });
-        // Direct admin alert with 2h time-slot dedup (systemLogger warn doesn't send Telegram)
+        // Admin Telegram alert — dedup by accountId only (30-min window in adminAlerts)
         await ctx.runMutation(internal.syncMetrics.scheduleEscalationAlert, {
           accountId: account._id,
           text: [
@@ -885,7 +888,7 @@ async function syncSingleAccount(
             `<b>Последний синк:</b> ${new Date(account.lastSyncAt).toLocaleString("ru-RU", { timeZone: "Europe/Moscow" })}`,
             `<b>Ошибка:</b> ${(account.lastError || "неизвестно").slice(0, 200)}`,
           ].join("\n"),
-          dedupKey: `escalation:${account._id}:${timeSlot}`,
+          dedupKey: `escalation:${account._id}`,
         });
       } catch { /* non-critical */ }
     }
@@ -1299,7 +1302,7 @@ async function syncSingleAccount(
       const msg = error instanceof Error ? error.message : "Unknown error";
       console.error(`[syncBatch] Error syncing account ${account._id}: ${msg}`);
 
-      if (msg.includes("TOKEN_EXPIRED")) {
+      if (isTokenExpiredError(msg)) {
         // Try recovery — handleTokenExpired returns boolean (never throws)
         let recovered = false;
         try {

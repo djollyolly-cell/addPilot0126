@@ -2356,7 +2356,7 @@ export const getAgencyAccountsForHealthCheck = internalQuery({
   handler: async (ctx) => {
     const allAccounts = await ctx.db.query("adAccounts").collect();
     return allAccounts
-      .filter(a => a.vkAccountId.startsWith("agency_"))
+      .filter(a => a.vkAccountId.startsWith("agency_") && a.status !== "abandoned")
       .map(a => ({
         _id: a._id,
         name: a.name,
@@ -2378,6 +2378,8 @@ export const updateAccountHealth = internalMutation({
     lastError: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account || account.status === "abandoned") return;
     await ctx.db.patch(args.accountId, {
       status: args.status as "active" | "paused" | "error",
       lastError: args.lastError,
