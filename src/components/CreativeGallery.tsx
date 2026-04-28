@@ -23,9 +23,10 @@ interface CreativeGalleryProps {
   creatives: Creative[];
   onDelete: (id: string) => void;
   deleting: string | null;
+  textOverlay?: 'none' | 'pillow' | 'native';
 }
 
-export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalleryProps) {
+export function CreativeGallery({ creatives, onDelete, deleting, textOverlay = 'pillow' }: CreativeGalleryProps) {
   const handleDownload = async (url: string, id: string) => {
     try {
       const response = await fetch(url);
@@ -75,14 +76,22 @@ export function CreativeGallery({ creatives, onDelete, deleting }: CreativeGalle
                   </span>
                 </div>
               ) : creative.imageUrl ? (
-                <BannerCompositor
-                  imageUrl={creative.imageUrl}
-                  headline={creative.offer}
-                  subtitle={creative.benefit}
-                  bullets={creative.bullets ? creative.bullets.split(' • ') : []}
-                  size={1080}
-                  className="w-full h-full"
-                />
+                textOverlay === 'pillow' ? (
+                  <BannerCompositor
+                    imageUrl={creative.imageUrl}
+                    headline={creative.offer}
+                    subtitle={creative.benefit}
+                    bullets={creative.bullets ? creative.bullets.split(' • ') : []}
+                    size={1080}
+                    className="w-full h-full"
+                  />
+                ) : (
+                  <img
+                    src={creative.imageUrl}
+                    alt={creative.offer}
+                    className="w-full h-full object-cover"
+                  />
+                )
               ) : (
                 <ImageIcon className="h-12 w-12 text-muted-foreground" />
               )}

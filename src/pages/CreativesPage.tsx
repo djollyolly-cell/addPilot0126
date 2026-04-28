@@ -363,6 +363,7 @@ export function CreativesPage() {
             creatives={(creatives || []) as any}
             onDelete={handleDelete}
             deleting={deletingId}
+            textOverlay={(settings?.imageTextOverlay as 'none' | 'pillow' | 'native') || 'pillow'}
           />
         )}
       </div>

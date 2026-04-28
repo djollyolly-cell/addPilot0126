@@ -38,35 +38,29 @@ Visual rules:
 - People must wear plain uniform, no logos, no patches, no badges.
 
 Output ONLY the prompt in English (2-3 sentences).`,
-  systemPromptGpt: `You create detailed image prompts for GPT Image 2 to generate VK advertising banners.
-Given Russian ad copy, create a dramatic cinematic metaphor for the product benefit.
+  systemPromptGpt: `You create ultra-realistic image prompts for GPT Image 2 to generate VK advertising banners.
+Given Russian ad copy, create a SPECIFIC, EMOTIONAL scene that makes the viewer feel the problem or desire.
 
-Output a STRUCTURED prompt with these sections:
+RULES:
+- Describe a CONCRETE real-life situation, not an abstract metaphor. "Inside a car stuck in traffic, driver sweating" NOT "transportation concept".
+- Include specific details: age, appearance, emotions, environment, weather, time of day.
+- People should show REAL emotions: frustration, exhaustion, joy, relief. No posed stock-photo faces.
+- Camera angle must feel natural: "from passenger seat", "over the shoulder", "eye level across the table".
+- Style: photorealistic, looks like real DSLR or smartphone photography. Visible skin texture, natural imperfections.
+- Composition: leave clean empty space on the LEFT or TOP of the frame for text overlay. Main subject on the RIGHT side.
+- Lighting: realistic for the scene (harsh sunlight, office fluorescent, warm evening light). Not cinematic color grading.
 
-Scene: [Detailed scene description - specific location, objects, people, actions. Be concrete: "inside a car stuck in traffic jam" not "transportation scene"]
-
-Camera: [Angle, perspective, distance - e.g. "from passenger seat perspective, cinematic and natural"]
-
-Lighting: [Type, mood, shadows - e.g. "harsh sunlight, warm tones, realistic shadows, glare from sun"]
-
-Atmosphere: [Emotional feeling - e.g. "heat, discomfort, tension. Viewer should almost feel the heat"]
-
-Style: photorealistic, not stylized, looks like real photography (DSLR or smartphone).
-
-Composition:
-Leave clean empty space on the left or top for text overlay.
-[Subject placement - e.g. "Focus on the driver on the right side of the frame"]
+Output the prompt as flowing prose paragraphs (NOT bullet lists or labeled sections). Describe the scene as if directing a photographer. 6-10 sentences.
 
 People rules:
-- People allowed but secondary to the scene.
-- From behind, side, silhouette, or far away. Always in action, never posed.
-- Do NOT show faces or direct eye contact.
-- People must wear plain clothes, no logos, no patches, no badges.
+- People allowed and encouraged. Show real emotions, natural poses.
+- From behind, side, or 3/4 angle preferred. Silhouettes work too.
+- Plain clothes, no logos, no patches, no badges.
 
 NO logos, NO branding, NO text, NO letters, NO UI elements.
-Focus on realism and emotional impact.
+Focus on realism, discomfort/desire, and emotional impact.
 
-Output ONLY the structured prompt in English.`,
+Output ONLY the prompt in English.`,
   suffix: "Professional commercial photography or high-quality 3D render. Bottom area significantly darker for text overlay. No text, no letters, no words, no watermarks, no logos, no UI elements.",
   nicheKeywords: ["лидогенерация", "маркетинг", "реклама", "финансы", "кредит", "страхование"],
 };
@@ -94,34 +88,26 @@ Visual rules:
 - People must wear plain uniform, no logos, no patches, no badges.
 
 Output ONLY the prompt in English (2-3 sentences).`,
-  systemPromptGpt: `You create detailed image prompts for GPT Image 2 to generate VK advertising banners.
-Given Russian ad copy, create a natural, candid lifestyle scene.
+  systemPromptGpt: `You create ultra-realistic image prompts for GPT Image 2 to generate VK advertising banners.
+Given Russian ad copy, create a SPECIFIC candid lifestyle scene showing a real person in a real moment.
 
-Output a STRUCTURED prompt with these sections:
+RULES:
+- Describe a CONCRETE person: age (25-45), gender, appearance, what they're wearing, what they're doing RIGHT NOW.
+- Show a REAL moment: checking phone after workout, laughing with a friend at a cafe, concentrating on laptop at home.
+- Include specific environment details: "kitchen with white tiles and morning sun through window", not just "kitchen".
+- Emotions must be GENUINE: the slight smile of satisfaction, tired but happy eyes, focused concentration.
+- Camera: feels like a friend took this photo. Eye level, slightly off-center, shallow depth of field.
+- Style: shot on iPhone 15 Pro. Visible skin pores, natural imperfections, no beauty filter, slight grain.
+- Composition: person on the RIGHT side of frame (~40% of image). Clean empty space on LEFT or TOP for text overlay.
 
-Scene: [Detailed real-life scene - specific person, age, appearance, what they're doing, environment. Be concrete and specific.]
+Output the prompt as flowing prose paragraphs (NOT bullet lists or labeled sections). 6-10 sentences.
 
-Camera: [Angle, perspective - e.g. "eye level, slightly off-center, as if captured by a friend"]
-
-Lighting: [Natural, warm, authentic - e.g. "soft window light, golden hour, indoor ambient"]
-
-Atmosphere: [Mood - e.g. "relaxed, genuine, everyday moment captured naturally"]
-
-Style: photorealistic, not stylized, looks like real photography. Shot on iPhone or smartphone feel. Visible skin pores, natural imperfections, no beauty filter, slight camera grain.
-
-Composition:
-Leave clean empty space on the left or top for text overlay.
-[Person placement - medium shot, person occupies ~40% of frame]
-
-People rules:
-- People ARE the focus. Show them naturally in context.
-- Faces and eye contact ARE allowed.
-- Candid expressions, genuine emotions. No stiff poses.
-- Plain clothes, no logos, no patches.
+People ARE the focus. Faces and eye contact allowed and encouraged. Candid expressions only — no stock-photo smiles.
+Plain clothes, no logos.
 
 NO logos, NO branding, NO text, NO letters, NO UI elements.
 
-Output ONLY the structured prompt in English.`,
+Output ONLY the prompt in English.`,
   suffix: "Shot on iPhone 15 Pro, casual candid photo, visible skin pores and fine lines, natural skin imperfections, no beauty filter, no smoothing, no retouching, slight camera grain and noise, shallow depth of field, natural indoor lighting, warm tones. Bottom area darker for text overlay. No text, no letters, no words, no watermarks.",
   nicheKeywords: ["фитнес", "спорт", "красота", "косметика", "еда", "ресторан", "доставка", "кафе", "мероприятие", "ивент"],
 };
@@ -142,31 +128,25 @@ Visual rules:
 - NEVER include: text, letters, logos, UI, screens, charts, icons.
 
 Output ONLY the prompt in English (2-3 sentences).`,
-  systemPromptGpt: `You create detailed image prompts for GPT Image 2 to generate VK advertising banners.
-Given Russian ad copy, create a clean product-focused visual.
+  systemPromptGpt: `You create ultra-realistic image prompts for GPT Image 2 to generate VK advertising banners.
+Given Russian ad copy, create a SPECIFIC product-focused visual that looks like a real photo, not a render.
 
-Output a STRUCTURED prompt with these sections:
+RULES:
+- Describe the SPECIFIC product implied by the ad: its shape, material, color, texture, size.
+- Place it on a CONCRETE surface: "dark marble countertop with water droplets", "worn wooden workbench", "clean white desk near a window".
+- Include contextual details that tell a story: steam rising from coffee, condensation on glass, scratch marks from use.
+- Lighting: studio quality but natural feel. Soft directional light, subtle shadows, reflections that show material texture.
+- Camera: 30-45 degree angle, close enough to see texture. Macro details visible. Shallow depth of field on background.
+- Style: photorealistic product photography, DSLR quality. High contrast, sharp focus on product.
+- Composition: product on the RIGHT side, occupies ~40% of frame. Clean empty space on LEFT for text overlay.
 
-Scene: [Product description - what it looks like, material, color, placed on what surface. Be specific.]
+Output the prompt as flowing prose paragraphs (NOT bullet lists or labeled sections). 5-8 sentences.
 
-Camera: [Angle - e.g. "45-degree angle from above, macro detail visible"]
-
-Lighting: [Studio quality - e.g. "clean studio lighting, soft shadows, subtle reflections on surface"]
-
-Atmosphere: [Premium, clean, professional]
-
-Style: photorealistic studio photography, high contrast, sharp focus on product.
-
-Composition:
-Product centered or rule-of-thirds, occupies ~40% of frame.
-Leave clean empty space on the left or top for text overlay.
-Dark, neutral, or contextually relevant background.
-
-No people. No clutter. Minimal props if any.
+No people. No clutter. 1-2 minimal props maximum.
 
 NO logos, NO branding, NO text, NO letters, NO UI elements.
 
-Output ONLY the structured prompt in English.`,
+Output ONLY the prompt in English.`,
   suffix: "Professional studio photography, high contrast, dark background. Bottom area significantly darker for text overlay. No text, no letters, no words, no watermarks, no logos, no UI elements.",
   nicheKeywords: ["товар", "интернет-магазин", "гаджет", "электроника", "одежда"],
 };
@@ -189,31 +169,25 @@ Visual rules:
 - People must wear plain uniform, no logos, no patches, no badges.
 
 Output ONLY the prompt in English (2-3 sentences).`,
-  systemPromptGpt: `You create detailed image prompts for GPT Image 2 to generate VK advertising banners.
-Given Russian ad copy, create a visual representing the end result or transformation.
+  systemPromptGpt: `You create ultra-realistic image prompts for GPT Image 2 to generate VK advertising banners.
+Given Russian ad copy, create a SPECIFIC scene showing the RESULT or transformation the customer gets.
 
-Output a STRUCTURED prompt with these sections:
+RULES:
+- Show the OUTCOME as a concrete moment: "woman looking at herself in mirror, smiling at her new figure", "entrepreneur reading a notification on phone showing new client request, slight grin".
+- The scene must feel REAL, not metaphorical. No mountaintops, no finish lines, no abstract victories.
+- Include specific details: facial expression, body language, environment, what they're holding or looking at.
+- Emotions: genuine satisfaction, quiet confidence, relief. NOT over-the-top celebration.
+- Camera: eye level or slightly below, medium shot. Natural perspective like a friend captured the moment.
+- Style: photorealistic, DSLR or smartphone quality. Natural lighting, no dramatic color grading.
+- Composition: subject on the RIGHT side of frame. Clean empty space on LEFT or TOP for text overlay.
 
-Scene: [Concrete outcome visualization - achievement, transformation, milestone. Be specific: "person standing on mountain summit at sunrise" not "achievement scene"]
+Output the prompt as flowing prose paragraphs (NOT bullet lists or labeled sections). 6-10 sentences.
 
-Camera: [Perspective - e.g. "wide shot from slightly below, emphasizing grandeur"]
-
-Lighting: [Optimistic, energetic - e.g. "golden sunrise light, warm tones, long shadows"]
-
-Atmosphere: [Triumph, relief, satisfaction - "the feeling of I made it"]
-
-Style: photorealistic, not stylized, looks like real photography (DSLR or smartphone).
-
-Composition:
-Leave clean empty space on the left or top for text overlay.
-[Subject placement - medium or wide shot, subject ~40% of frame]
-
-People optional. If shown, they express satisfaction, relief, or confidence.
-People must wear plain clothes, no logos.
+People optional but encouraged. If shown — real emotions, natural poses, plain clothes, no logos.
 
 NO logos, NO branding, NO text, NO letters, NO numbers, NO UI elements.
 
-Output ONLY the structured prompt in English.`,
+Output ONLY the prompt in English.`,
   suffix: "Professional commercial photography. Optimistic warm tones. Bottom area significantly darker for text overlay. No text, no letters, no words, no watermarks, no logos, no UI elements.",
   nicheKeywords: ["обучение", "курс", "коучинг", "похудение", "инвестиции"],
 };
@@ -234,32 +208,27 @@ Visual rules:
 - NEVER include: text, letters, logos, UI, screens, signs with readable words, icons.
 
 Output ONLY the prompt in English (2-3 sentences).`,
-  systemPromptGpt: `You create detailed image prompts for GPT Image 2 to generate VK advertising banners.
-Given Russian ad copy, create a recognisable location or environment visual.
+  systemPromptGpt: `You create ultra-realistic image prompts for GPT Image 2 to generate VK advertising banners.
+Given Russian ad copy, create a SPECIFIC, recognizable location that the target audience immediately relates to.
 
-Output a STRUCTURED prompt with these sections:
+RULES:
+- Describe a CONCRETE place with specific details: "auto repair shop with a car on a hydraulic lift, tools hanging on pegboard wall, oil stains on concrete floor, fluorescent lights" — NOT "a garage".
+- Include atmospheric details: smell cues (grease, coffee, fresh paint), temperature, time of day, season.
+- The place should feel LIVED IN and REAL: slight mess, wear marks, personal touches. Not a showroom.
+- Camera: wide angle, slightly elevated or eye-level. Show the full space so the viewer thinks "I know this place".
+- Lighting: natural for the setting — fluorescent for workshops, warm pendant lights for cafes, harsh daylight for outdoor locations.
+- Style: photorealistic, architectural or environmental photography. Looks like a real photo, not a stock image.
+- Composition: environment fills the frame. Clean empty space on LEFT or TOP for text overlay. Main focal point on RIGHT.
 
-Scene: [Specific location - describe the place, interior/exterior, what makes it recognizable. E.g. "cozy coffee shop interior with exposed brick walls, wooden tables, warm lighting"]
+Output the prompt as flowing prose paragraphs (NOT bullet lists or labeled sections). 6-10 sentences.
 
-Camera: [Wide or medium shot - e.g. "wide angle, slightly elevated perspective showing the full space"]
-
-Lighting: [Atmospheric - e.g. "warm ambient lighting from pendant lamps, soft daylight from windows"]
-
-Atmosphere: [Mood of the space - e.g. "inviting, familiar, comfortable"]
-
-Style: photorealistic, architectural or environmental photography feel.
-
-Composition:
-Environment is the hero. Wide shot preferred.
-Leave clean empty space on the left or top for text overlay.
-
-People optional. If present, they are part of the scene, not the focus.
+People optional. If present, they are part of the scene (working, moving), not posing. Plain clothes, no logos.
 
 NO logos, NO branding, NO text, NO letters, NO signs with readable words, NO UI elements.
 
-Output ONLY the structured prompt in English.`,
+Output ONLY the prompt in English.`,
   suffix: "Professional architectural or environmental photography, atmospheric lighting. Bottom area significantly darker for text overlay. No text, no letters, no words, no watermarks, no logos, no UI elements.",
-  nicheKeywords: ["недвижимость", "аренда", "локальный"],
+  nicheKeywords: ["недвижимость", "аренда", "локальный", "автосервис", "автомойка", "автомастерская", "шиномонтаж", "ремонт авто", "сто", "стоматология", "салон красоты", "барбершоп", "клиника", "ветеринар", "аптека", "магазин", "пекарня", "ателье", "химчистка", "прачечная"],
 };
 
 const MINIMAL_3D: StyleConfig = {
@@ -278,30 +247,25 @@ Visual rules:
 - NEVER include: text, letters, logos, UI, screens, charts, icons.
 
 Output ONLY the prompt in English (2-3 sentences).`,
-  systemPromptGpt: `You create detailed image prompts for GPT Image 2 to generate VK advertising banners.
-Given Russian ad copy, create a clean minimalist 3D visual.
+  systemPromptGpt: `You create image prompts for GPT Image 2 to generate VK advertising banners.
+Given Russian ad copy, create a clean, premium 3D visual that feels modern and techy.
 
-Output a STRUCTURED prompt with these sections:
+RULES:
+- ONE hero object: a stylized 3D representation related to the product/service. Be specific about shape, material, finish.
+- Example: "glossy dark blue dashboard interface floating at an angle, with subtle holographic data points around it, sitting on a matte black reflective surface".
+- Materials: glass, brushed metal, matte plastic, holographic. Premium feel.
+- Background: solid dark gradient (deep navy to black) or matte dark surface with soft reflections.
+- Lighting: clean studio. Soft rim light on edges, subtle ambient shadows. One accent color glow (blue, cyan, or violet).
+- Camera: slightly elevated, 30-degree angle. Object fills ~35% of frame.
+- Composition: object on the RIGHT side. At least 40% clean negative space on LEFT for text overlay.
 
-Scene: [One hero object - describe the 3D form, shape, material, color. E.g. "glossy dark blue sphere with metallic gold accents floating above a matte dark surface"]
+Output the prompt as flowing prose paragraphs (NOT bullet lists or labeled sections). 4-6 sentences.
 
-Camera: [Clean angle - e.g. "straight on, slightly elevated, centered"]
-
-Lighting: [Studio - e.g. "clean studio lighting, soft ambient shadows, subtle rim light on object edges"]
-
-Atmosphere: [Premium, modern, minimal]
-
-Style: high-quality 3D render, clean minimal aesthetic. Dark or gradient background.
-
-Composition:
-Object centered, occupies ~30% of frame. At least 40% negative space.
-Leave clean space on the left or top for text overlay.
-
-No people. No clutter. 1-2 accent colors maximum.
+No people. No clutter. 1-2 accent colors maximum. Premium and modern feel.
 
 NO logos, NO branding, NO text, NO letters, NO UI elements.
 
-Output ONLY the structured prompt in English.`,
+Output ONLY the prompt in English.`,
   suffix: "High-quality 3D render, clean minimal style, dark background, soft studio lighting. Bottom area significantly darker for text overlay. No text, no letters, no words, no watermarks, no logos, no UI elements.",
   nicheKeywords: ["saas", "приложение", "сервис", "b2b", "it", "разработка"],
 };
@@ -318,15 +282,26 @@ export const ALL_STYLES: Record<string, StyleConfig> = {
 /**
  * Select visual style based on niche/businessDirection keyword matching.
  * Searches for keywords in the input string (lowercased).
+ * Longer keywords are checked first to avoid false substring matches
+ * (e.g. "автосервис" should not match "сервис" → minimal_3d).
  * Falls back to "cinematic" if no match found.
  */
 export function selectStyle(nicheOrDirection: string): StyleConfig {
   const lower = nicheOrDirection.toLowerCase();
+
+  // Build flat list of (keyword, style) pairs sorted by keyword length descending
+  // so "автосервис" matches before "сервис", "интернет-магазин" before "магазин", etc.
+  const pairs: Array<{ keyword: string; style: StyleConfig }> = [];
   for (const style of Object.values(ALL_STYLES)) {
     for (const keyword of style.nicheKeywords) {
-      if (lower.includes(keyword)) {
-        return style;
-      }
+      pairs.push({ keyword, style });
+    }
+  }
+  pairs.sort((a, b) => b.keyword.length - a.keyword.length);
+
+  for (const { keyword, style } of pairs) {
+    if (lower.includes(keyword)) {
+      return style;
     }
   }
   return CINEMATIC; // Default fallback

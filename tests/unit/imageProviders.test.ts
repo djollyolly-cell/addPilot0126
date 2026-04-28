@@ -40,10 +40,10 @@ describe("bannerStyles GPT prompts", () => {
     }
   });
 
-  it("GPT prompts instruct structured output", () => {
+  it("GPT prompts instruct realistic output with composition rules", () => {
     for (const [code, style] of Object.entries(ALL_STYLES)) {
-      expect(style.systemPromptGpt, `${code} missing 'Scene:'`).toContain("Scene:");
-      expect(style.systemPromptGpt, `${code} missing 'Composition'`).toContain("Composition");
+      expect(style.systemPromptGpt, `${code} missing composition instructions`).toContain("text overlay");
+      expect(style.systemPromptGpt, `${code} missing no-text rule`).toContain("NO text");
     }
   });
 
