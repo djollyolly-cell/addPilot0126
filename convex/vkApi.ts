@@ -1709,7 +1709,9 @@ async function postCampaignWithFallback(
  * Update ad_plan status directly (for video rotation module).
  * targetCampaignIds in rules may contain ad_plan IDs, not ad_group IDs.
  * This function calls ad_plans/{id}.json endpoint directly.
- * When activating: also cascades to child ad_groups (VK doesn't cascade automatically).
+ * When activating: cascades to child ad_groups AND banners (only moderation_status=allowed).
+ * When blocking: only blocks ad_plan (VK auto-cascades). Explicitly blocking ad_groups
+ * causes VK to delete banners after re-moderation trigger.
  */
 export const updateAdPlanStatus = internalAction({
   args: {
@@ -1735,27 +1737,62 @@ export const updateAdPlanStatus = internalAction({
     }
     const planResult = await resp.text();
 
-    // 2. Cascade to child ad_groups (VK doesn't auto-cascade status changes)
-    const groupsResp = await fetchWithTimeout(
-      `${MT_API_BASE}/api/v2/ad_groups.json?_ad_plan_id=${args.adPlanId}&fields=id,status&limit=50`,
-      { headers: { Authorization: `Bearer ${args.accessToken}` } }
-    );
-    if (groupsResp.ok) {
-      const groupsData = await groupsResp.json() as { items?: Array<{ id: number; status: string }> };
-      for (const group of groupsData.items ?? []) {
-        // Only change groups that need it (blocked→active or active→blocked)
-        if (group.status !== args.status) {
+    // 2. Cascade to children when ACTIVATING only.
+    // When BLOCKING: VK auto-cascades block from ad_plan to ad_groups/banners.
+    // Explicitly POSTing blocked status to ad_groups causes VK to delete banners
+    // (re-moderation trigger + early block = deletion with 3-4h delay).
+    if (args.status === "active") {
+      // 2a. Cascade to ad_groups
+      const groupsResp = await fetchWithTimeout(
+        `${MT_API_BASE}/api/v2/ad_groups.json?_ad_plan_id=${args.adPlanId}&fields=id,status&limit=50`,
+        { headers: { Authorization: `Bearer ${args.accessToken}` } }
+      );
+      if (groupsResp.ok) {
+        const groupsData = await groupsResp.json() as { items?: Array<{ id: number; status: string }> };
+        for (const group of groupsData.items ?? []) {
+          if (group.status !== "active") {
+            try {
+              await fetchWithTimeout(`${MT_API_BASE}/api/v2/ad_groups/${group.id}.json`, {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${args.accessToken}`,
+                  "Content-Type": "application/json",
+                },
+                body: JSON.stringify({ status: "active" }),
+              });
+            } catch (e) {
+              console.error(`[updateAdPlanStatus] Failed to activate ad_group ${group.id}:`, e);
+            }
+          }
+
+          // 2b. Cascade to banners in this ad_group — activate only allowed ones
           try {
-            await fetchWithTimeout(`${MT_API_BASE}/api/v2/ad_groups/${group.id}.json`, {
-              method: "POST",
-              headers: {
-                Authorization: `Bearer ${args.accessToken}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({ status: args.status }),
-            });
+            const bannersResp = await fetchWithTimeout(
+              `${MT_API_BASE}/api/v2/banners.json?_ad_group_id=${group.id}&fields=id,status,moderation_status&_status__in=active,blocked&limit=50`,
+              { headers: { Authorization: `Bearer ${args.accessToken}` } }
+            );
+            if (bannersResp.ok) {
+              const bannersData = await bannersResp.json() as { items?: Array<{ id: number; status: string; moderation_status: string }> };
+              for (const banner of bannersData.items ?? []) {
+                // Only activate banners that passed moderation and are currently blocked
+                if (banner.status === "blocked" && banner.moderation_status === "allowed") {
+                  try {
+                    await fetchWithTimeout(`${MT_API_BASE}/api/v2/banners/${banner.id}.json`, {
+                      method: "POST",
+                      headers: {
+                        Authorization: `Bearer ${args.accessToken}`,
+                        "Content-Type": "application/json",
+                      },
+                      body: JSON.stringify({ status: "active" }),
+                    });
+                  } catch (e) {
+                    console.error(`[updateAdPlanStatus] Failed to activate banner ${banner.id}:`, e);
+                  }
+                }
+              }
+            }
           } catch (e) {
-            console.error(`[updateAdPlanStatus] Failed to cascade status to ad_group ${group.id}:`, e);
+            console.error(`[updateAdPlanStatus] Failed to fetch banners for ad_group ${group.id}:`, e);
           }
         }
       }
