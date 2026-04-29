@@ -119,7 +119,7 @@ export const markRecoveryFailure = internalMutation({
   },
   handler: async (ctx, args) => {
     const account = await ctx.db.get(args.accountId);
-    if (!account) return;
+    if (!account || account.status === "abandoned") return;
 
     const attempts = (account.tokenRecoveryAttempts ?? 0) + 1;
     const tokenErrorSince = account.tokenErrorSince ?? Date.now();
@@ -294,8 +294,8 @@ export const handleTokenExpired = internalAction({
     const account = await ctx.runQuery(api.adAccounts.get, {
       accountId: args.accountId,
     });
-    if (!account || !account.accessToken) {
-      console.log(`[handleTokenExpired] Account ${args.accountId}: not found or no token`);
+    if (!account || !account.accessToken || account.status === "abandoned") {
+      console.log(`[handleTokenExpired] Account ${args.accountId}: not found, no token, or abandoned`);
       return false;
     }
 

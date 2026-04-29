@@ -81,6 +81,9 @@ export const resetBudgets = internalAction({
         if (!initialBudget) continue;
 
         for (const accountId of rule.targetAccountIds) {
+          const acc = await ctx.runQuery(internal.adAccounts.getInternal, { accountId });
+          if (!acc || acc.status === "abandoned") continue;
+
           let accessToken: string;
           try {
             accessToken = await ctx.runAction(
