@@ -1700,7 +1700,7 @@ export const checkRulesForAccount = internalAction({
       const timeWindow = conditions?.timeWindow;
       const needsAllAds =
         !isCustom &&
-        (rule.type === "clicks_no_leads" || rule.type === "low_impressions") &&
+        (rule.type === "clicks_no_leads" || rule.type === "low_impressions" || rule.type === "cpl_limit") &&
         timeWindow &&
         timeWindow !== "daily";
 

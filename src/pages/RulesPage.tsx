@@ -23,7 +23,7 @@ const TIME_WINDOW_OPTIONS: { value: TimeWindow; label: string; description: stri
   { value: '1h', label: 'За 1 час', description: 'Показы за последний час' },
   { value: '6h', label: 'За 6 часов', description: 'Показы за последние 6 часов' },
   { value: '24h', label: 'За 24 часа', description: 'Сумма за последние 24 часа' },
-  { value: 'since_launch', label: 'С запуска', description: 'Все данные с момента запуска объявления' },
+  { value: 'since_launch', label: 'С запуска', description: 'Все данные с момента запуска объявления (макс. 90 дней)' },
 ];
 
 const RULE_TYPE_LABELS: Record<RuleType, string> = {
@@ -43,15 +43,15 @@ const RULE_TYPE_LABELS: Record<RuleType, string> = {
 };
 
 const RULE_TYPE_DESCRIPTIONS: Record<RuleType, string> = {
-  cpl_limit: 'Проверяет каждое объявление отдельно. Остановить, если стоимость лида превышает порог',
-  min_ctr: 'Проверяет каждое объявление отдельно. Остановить, если CTR ниже порога',
-  fast_spend: 'Остановить, если за 15 минут потрачено более N% дневного бюджета группы/кампании',
-  spend_no_leads: 'Проверяет каждое объявление отдельно. Остановить, если потрачено N без единого лида',
-  budget_limit: 'Проверяет каждое объявление отдельно. Остановить, если дневной расход превышает порог',
-  low_impressions: 'Проверяет каждое объявление отдельно. Уведомить, если показов меньше порога (не откручивается)',
-  clicks_no_leads: 'Проверяет каждое объявление отдельно. Остановить, если N+ кликов без единого лида',
-  cpc_limit: 'Проверяет каждое объявление отдельно. После минимального расхода — остановить, если цена клика выше лимита или кликов нет совсем',
-  new_lead: 'Проверяет каждое объявление отдельно. Уведомить в Telegram при получении нового лида',
+  cpl_limit: 'Расчёт за выбранный период. Проверяет каждое объявление отдельно. Остановить, если стоимость лида превышает порог',
+  min_ctr: 'Расчёт за текущие сутки. Проверяет каждое объявление отдельно. Остановить, если CTR ниже порога',
+  fast_spend: 'Расчёт за последние 15 минут. Остановить, если потрачено более N% дневного бюджета группы/кампании',
+  spend_no_leads: 'Расчёт за текущие сутки. Проверяет каждое объявление отдельно. Остановить, если потрачено N₽ без единого лида',
+  budget_limit: 'Расчёт за текущие сутки. Проверяет каждое объявление отдельно. Остановить, если дневной расход превышает порог',
+  low_impressions: 'Расчёт за выбранный период. Проверяет каждое объявление отдельно. Уведомить, если показов меньше порога (не откручивается)',
+  clicks_no_leads: 'Расчёт за выбранный период. Проверяет каждое объявление отдельно. Остановить, если N+ кликов без единого лида',
+  cpc_limit: 'Расчёт за текущие сутки. Проверяет каждое объявление отдельно. После минимального расхода — остановить, если цена клика выше лимита или кликов нет совсем',
+  new_lead: 'Расчёт за текущие сутки. Проверяет каждое объявление отдельно. Уведомить в Telegram при получении нового лида',
   uz_budget_manage: 'Работает на уровне группы. Управление дневным бюджетом: автоматическое увеличение при приостановке и сброс в начале суток',
   custom: 'Несколько условий, все должны выполниться одновременно',
   custom_l3: 'Правило с кастомной логикой (настраивается администратором)',
@@ -340,7 +340,7 @@ export function RulesPage() {
                                 ? ` · слот ${rule.conditions.slotDurationHours ?? 0}ч · ${rule.conditions.dailyBudget ?? 0}₽/сутки`
                                 : ` · ${rule.conditions.operator} ${rule.conditions.value}${RULE_TYPE_UNITS[rule.type as RuleType] ? ` ${RULE_TYPE_UNITS[rule.type as RuleType]}` : ''}`
                             )}
-                            {!Array.isArray(rule.conditions) && (rule.type === 'clicks_no_leads' || rule.type === 'low_impressions') && (
+                            {!Array.isArray(rule.conditions) && (rule.type === 'clicks_no_leads' || rule.type === 'low_impressions' || rule.type === 'cpl_limit') && (
                               <> · {rule.conditions.timeWindow === '1h' ? 'за 1ч' : rule.conditions.timeWindow === '6h' ? 'за 6ч' : rule.conditions.timeWindow === 'since_launch' ? 'с запуска' : rule.conditions.timeWindow === '24h' ? 'за 24ч' : 'за сегодня'}</>
                             )}
                           </p>
@@ -760,7 +760,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
           name: name.trim(),
           type,
           value: type === 'new_lead' || type === 'uz_budget_manage' ? 1 : numericValue,
-          timeWindow: (type === 'clicks_no_leads' || type === 'low_impressions') ? timeWindow : undefined,
+          timeWindow: (type === 'clicks_no_leads' || type === 'low_impressions' || type === 'cpl_limit') ? timeWindow : undefined,
           actions: type === 'uz_budget_manage'
             ? { ...flags, notifyOnEveryIncrease, notifyOnKeyEvents }
             : flags,
@@ -1104,7 +1104,7 @@ function RuleForm({ userId, subscriptionTier, existingRule, onSubmit, onCancel }
         </div>
 
         {/* Time window (for clicks_no_leads and low_impressions — template mode only) */}
-        {ruleMode === 'template' && (type === 'clicks_no_leads' || type === 'low_impressions') && (
+        {ruleMode === 'template' && (type === 'clicks_no_leads' || type === 'low_impressions' || type === 'cpl_limit') && (
           <div className="space-y-2" data-testid="time-window-selector">
             <label className="block text-sm font-medium">Период анализа</label>
             <div className="grid grid-cols-3 gap-2">
