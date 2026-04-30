@@ -96,6 +96,23 @@ export const isAgencyTier = (tier: string): tier is AgencyTier =>
 // Old prices before 2026-04-04 increase
 const OLD_PRICES = { start: 990, pro: 2490 } as const;
 
+/** Round timestamp to end of day (23:59:59.999) in a given IANA timezone */
+function endOfDayInTz(ts: number, timezone: string): number {
+  // Get the date string in the user's timezone
+  const dateStr = new Date(ts).toLocaleDateString("en-CA", { timeZone: timezone }); // "YYYY-MM-DD"
+  // Build 23:59:59.999 in that timezone by finding the UTC offset
+  // Create a date at start of that day in UTC, then adjust
+  const [y, m, d] = dateStr.split("-").map(Number);
+  // Use a known time in the target timezone to find the offset
+  const probe = new Date(ts);
+  const utcStr = probe.toLocaleString("en-US", { timeZone: "UTC" });
+  const tzStr = probe.toLocaleString("en-US", { timeZone: timezone });
+  const offsetMs = new Date(utcStr).getTime() - new Date(tzStr).getTime();
+  // End of day in timezone = YYYY-MM-DD 23:59:59.999 local → UTC
+  const endOfDayLocal = new Date(y, m - 1, d, 23, 59, 59, 999);
+  return endOfDayLocal.getTime() + offsetMs;
+}
+
 // Get user's effective prices (respects grandfathered/locked pricing)
 export const getUserPrices = query({
   args: { userId: v.id("users") },
@@ -114,8 +131,13 @@ export const getUserPrices = query({
     if (!user) return basePrices;
 
     // lockedPrices applies only to individual tiers (start/pro)
+    // Grace: valid until end of day in user's timezone
+    const settings = await ctx.db.query("userSettings")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .first();
+    const tz = settings?.timezone || "Europe/Moscow";
     const locked = user.lockedPrices;
-    if (locked && locked.until > Date.now()) {
+    if (locked && endOfDayInTz(locked.until, tz) >= Date.now()) {
       return {
         ...basePrices,
         start: locked.start,
@@ -583,11 +605,17 @@ export const handleBepaidWebhook = internalMutation({
         const paidUser = await ctx.db.get(payment.userId);
         const lockedUpdate: Record<string, unknown> = {};
         if (paidUser?.lockedPrices) {
-          const isStillActive = paidUser.subscriptionExpiresAt && paidUser.subscriptionExpiresAt >= Date.now();
+          // Grace period: locked prices valid until end of day in user's timezone
+          const userSettings = await ctx.db.query("userSettings")
+            .withIndex("by_userId", (q) => q.eq("userId", payment.userId))
+            .first();
+          const userTz = userSettings?.timezone || "Europe/Moscow";
+          const lockedUntilEOD = endOfDayInTz(paidUser.lockedPrices.until, userTz);
+          const isStillActive = lockedUntilEOD >= Date.now();
           if (isStillActive) {
             lockedUpdate.lockedPrices = {
               ...paidUser.lockedPrices,
-              until: expiresAt,
+              until: endOfDayInTz(expiresAt, userTz),
             };
           }
         }
@@ -716,11 +744,17 @@ export const processPayment = mutation({
     // Extend lockedPrices if subscription is continuous
     const lockedUpdate: Record<string, unknown> = {};
     if (user.lockedPrices) {
-      const isStillActive = user.subscriptionExpiresAt && user.subscriptionExpiresAt >= Date.now();
+      // Grace period: locked prices valid until end of day in user's timezone
+      const mockSettings = await ctx.db.query("userSettings")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .first();
+      const mockTz = mockSettings?.timezone || "Europe/Moscow";
+      const lockedUntilEOD = endOfDayInTz(user.lockedPrices.until, mockTz);
+      const isStillActive = lockedUntilEOD >= Date.now();
       if (isStillActive) {
         lockedUpdate.lockedPrices = {
           ...user.lockedPrices,
-          until: expiresAt,
+          until: endOfDayInTz(expiresAt, mockTz),
         };
       }
     }
