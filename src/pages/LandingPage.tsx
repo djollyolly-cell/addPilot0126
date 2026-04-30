@@ -470,6 +470,94 @@ function PricingSection() {
           ))}
         </div>
 
+        {/* Agency tiers */}
+        <div className="mt-20">
+          <div className="text-center mb-10">
+            <h3 className="text-2xl sm:text-3xl font-bold text-slate-900 mb-2 tracking-tight">
+              Для агентств
+            </h3>
+            <p className="text-lg text-slate-600">
+              Управление 10+ кабинетов с командой менеджеров
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-5xl mx-auto">
+            {[
+              { name: 'Agency S', price: '14 900', from: 'от 10 кабинетов', overage: 'доп. ед. 600 ₽',
+                features: ['Все функции Pro', 'Конструктор правил (L2)', 'Команда менеджеров с правами', 'Приоритетная поддержка', 'Мониторинг здоровья аккаунтов', 'Месячный отчёт по нагрузке'],
+                cta: 'Рассчитать', highlighted: false, link: '/agency/onboarding?tier=agency_s' },
+              { name: 'Agency M', price: '24 900', from: 'от 20 кабинетов', overage: 'доп. ед. 500 ₽',
+                features: ['Все функции Pro', 'Конструктор правил (L2)', 'Команда менеджеров с правами', 'Приоритетная поддержка', 'Мониторинг здоровья аккаунтов', 'Месячный отчёт по нагрузке'],
+                cta: 'Рассчитать', highlighted: false, link: '/agency/onboarding?tier=agency_m' },
+              { name: 'Agency L', price: '39 900', from: 'от 40 кабинетов', overage: 'доп. ед. 400 ₽',
+                features: ['Все функции Pro', 'Конструктор правил (L2)', 'Команда менеджеров с правами', 'Приоритетная поддержка', 'Мониторинг здоровья аккаунтов', 'Месячный отчёт по нагрузке', 'Выделенный IP', 'Кастомные типы правил (L3)', 'SLA на синхронизацию'],
+                cta: 'Рассчитать', highlighted: true, link: '/agency/onboarding?tier=agency_l' },
+              { name: 'Agency XL', from: 'от 67 кабинетов', overage: 'точное кол-во зависит от ниши',
+                features: ['Все функции Pro', 'Конструктор правил (L2)', 'Команда менеджеров с правами', 'Приоритетная поддержка', 'Мониторинг здоровья аккаунтов', 'Месячный отчёт по нагрузке', 'Выделенный IP', 'Кастомные типы правил (L3)', 'SLA на синхронизацию', 'Персональный менеджер'],
+                cta: 'Связаться', highlighted: false, link: '/agency/onboarding?tier=agency_xl' },
+            ].map((tier, i) => (
+              <div
+                key={i}
+                className={cn(
+                  "rounded-3xl p-6 border transition-all duration-300 relative flex flex-col",
+                  tier.highlighted
+                    ? "border-blue-200 bg-white shadow-2xl shadow-blue-900/10 z-10"
+                    : "border-slate-200 bg-white hover:border-blue-100 hover:shadow-lg z-0"
+                )}
+              >
+                {tier.highlighted && (
+                  <div className="absolute -top-4 left-0 right-0 text-center">
+                    <span className="px-4 py-1.5 bg-blue-600 text-white text-xs font-bold uppercase tracking-wider rounded-full shadow-lg shadow-blue-600/30">
+                      Рекомендуем
+                    </span>
+                  </div>
+                )}
+                <div className="text-center mb-6">
+                  <h4 className="text-lg font-bold text-slate-900 mb-2">{tier.name}</h4>
+                  {tier.price ? (
+                    <div className="flex items-baseline justify-center gap-1">
+                      <span className="text-4xl font-bold text-slate-900 tracking-tight">{tier.price}</span>
+                      <span className="text-slate-500 font-medium text-sm">₽/мес</span>
+                    </div>
+                  ) : (
+                    <div className="text-2xl font-bold text-slate-900">Индивидуально</div>
+                  )}
+                  <p className="text-xs text-slate-500 mt-1">{tier.from}</p>
+                  <p className="text-xs text-slate-400">{tier.overage}</p>
+                </div>
+                <ul className="space-y-3 mb-6 flex-1">
+                  {tier.features.map((feature, j) => (
+                    <li key={j} className="flex items-center gap-2.5 text-sm text-slate-700">
+                      <div className={cn(
+                        "w-4 h-4 rounded-full flex items-center justify-center flex-shrink-0",
+                        tier.highlighted ? "bg-blue-100" : "bg-slate-100"
+                      )}>
+                        <CheckCircle2 className={cn(
+                          "w-3 h-3",
+                          tier.highlighted ? "text-blue-600" : "text-slate-500"
+                        )} />
+                      </div>
+                      {feature}
+                    </li>
+                  ))}
+                </ul>
+                <Link to={tier.link} className="block mt-auto">
+                  <Button
+                    className={cn(
+                      "w-full h-11 rounded-xl font-bold transition-all",
+                      tier.highlighted
+                        ? "bg-blue-600 hover:bg-blue-700 text-white shadow-lg shadow-blue-600/20"
+                        : "bg-slate-50 hover:bg-slate-100 text-slate-900"
+                    )}
+                  >
+                    {tier.cta}
+                  </Button>
+                </Link>
+              </div>
+            ))}
+          </div>
+        </div>
+
         <div className="mt-10 max-w-2xl mx-auto p-4 rounded-2xl bg-blue-50 border border-blue-200 text-center">
           <p className="text-sm text-blue-800">
             🇷🇺 Для пользователей из России доступна оплата картами МИР
