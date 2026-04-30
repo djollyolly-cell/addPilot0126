@@ -14,10 +14,12 @@ export const runDaily = internalMutation({
     const vkLimits = await ctx.runMutation(internal.logCleanup.cleanupOldVkApiLimits);
     const health = await ctx.runMutation(internal.logCleanup.cleanupOldHealthCheckResults);
     const sessions = await ctx.runMutation(internal.logCleanup.cleanupExpiredSessions);
+    const actionLogs = await ctx.runMutation(internal.logCleanup.cleanupOldActionLogs);
 
     console.log(
       `[logCleanup] systemLogs: ${sys.deleted}, auditLog: ${audit.deleted}, dedup: ${dedup.deleted}, ` +
-      `vkApiLimits: ${vkLimits.deleted}, healthCheck: ${health.deleted}, sessions: ${sessions.deleted}`
+      `vkApiLimits: ${vkLimits.deleted}, healthCheck: ${health.deleted}, sessions: ${sessions.deleted}, ` +
+      `actionLogs: ${actionLogs.deleted}`
     );
   },
 });
