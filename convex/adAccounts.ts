@@ -395,6 +395,24 @@ export const setMtAdvertiserId = internalMutation({
   },
 });
 
+// Patch tokenExpiresAt on an account.
+// Used by getValidTokenForAccount (auth.ts) for liveness-based expiry extension
+// and by handleTokenExpired (tokenRecovery.ts) to write the invalidation marker (0).
+// Lives here (not in tokenRecovery.ts) so getValidTokenForAccount can stay free
+// of any internal.tokenRecovery.* references — see the guard comment on
+// getValidTokenForAccount in auth.ts.
+export const setTokenExpiry = internalMutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    tokenExpiresAt: v.number(),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.accountId, {
+      tokenExpiresAt: args.tokenExpiresAt,
+    });
+  },
+});
+
 // Disconnect (delete) an ad account and its related data
 export const disconnect = mutation({
   args: {

@@ -110,6 +110,8 @@ export default defineSchema({
     // Token recovery tracking
     tokenErrorSince: v.optional(v.number()),
     tokenRecoveryAttempts: v.optional(v.number()),
+    // Atomic claim timestamp for tokenRecovery.tryRecoverToken — prevents parallel recovery on same accountId
+    lastRecoveryAttemptAt: v.optional(v.number()),
     // Transient sync error tracking (non-TOKEN_EXPIRED)
     consecutiveSyncErrors: v.optional(v.number()),
     lastSyncError: v.optional(v.string()),

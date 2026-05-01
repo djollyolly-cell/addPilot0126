@@ -908,6 +908,15 @@ async function tryZaleycashRefresh(
 
 // Get a valid token for a specific adAccount (per-account credentials)
 // Falls back to user-level credentials if per-account ones are missing
+//
+// MUST NOT call tokenRecovery.tryRecoverToken or tokenRecovery.handleTokenExpired —
+// that creates a recursive backedge (tryRecoverToken → getValidTokenForAccount)
+// and causes Convex isolate restarts (memory_carry_over). On dead/expired token
+// throw TOKEN_EXPIRED; callers (syncMetrics/ruleEngine/uzBudgetCron) handle it
+// via handleTokenExpired.
+// Side-effect mutations on adAccounts (e.g. internal.adAccounts.setTokenExpiry)
+// are fine — they don't recurse.
+// See specs/2026-05-01-token-recovery-recursion-fix-design.md.
 export const getValidTokenForAccount = internalAction({
   args: { accountId: v.id("adAccounts") },
   handler: async (ctx, args): Promise<string> => {
@@ -954,23 +963,15 @@ export const getValidTokenForAccount = internalAction({
           const newExpiry = account.providerHasApi
             ? Date.now() + 24 * 60 * 60 * 1000
             : new Date("2099-01-01").getTime();
-          await ctx.runMutation(internal.tokenRecovery.setTokenExpiry, {
+          await ctx.runMutation(internal.adAccounts.setTokenExpiry, {
             accountId: args.accountId,
             tokenExpiresAt: newExpiry,
           });
           return account.accessToken;
         }
-        // Token is dead — try recovery
-        try {
-          const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId: args.accountId });
-          if (recovered) {
-            const fresh = await ctx.runQuery(api.adAccounts.get, { accountId: args.accountId });
-            if (fresh?.accessToken) return fresh.accessToken;
-          }
-        } catch (recErr) {
-          console.log(`[getValidTokenForAccount] «${account.name}» (${args.accountId}): recovery failed: ${recErr}`);
-        }
-        throw new Error("TOKEN_EXPIRED: токен недействителен и не удалось восстановить");
+        // Token is dead and no credentials — caller must handle recovery via
+        // handleTokenExpired (NOT recursively from here, see specs/2026-05-01-token-recovery-recursion-fix-design.md).
+        throw new Error("TOKEN_EXPIRED: токен недействителен");
       }
       // If token is still valid, return it
       if (account.tokenExpiresAt > now + BUFFER_MS) {
@@ -1018,13 +1019,15 @@ export const getValidTokenForAccount = internalAction({
     }
 
     // Has credentials — check if token is still valid
-    // Note: tokenExpiresAt=0 means "invalidated by TOKEN_EXPIRED", NOT "no expiry"
     if (account.tokenExpiresAt && account.tokenExpiresAt > now + BUFFER_MS) {
       return account.accessToken;
     }
 
-    // Token without expiry (undefined/null/0) — check liveness before returning
-    if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null || account.tokenExpiresAt === 0) {
+    // Permanent / unknown expiry path: undefined or null only.
+    // tokenExpiresAt=0 is the "invalidated" marker set by handleTokenExpired
+    // and intentionally falls through to the refresh / provider cascade below
+    // (see specs/2026-05-01-token-recovery-recursion-fix-design.md).
+    if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
       const alive = await quickTokenCheck(account.accessToken);
       if (alive) {
         // Providers with API (hasApi=true) → 24h expiry, proactive refresh possible
@@ -1032,24 +1035,17 @@ export const getValidTokenForAccount = internalAction({
         const newExpiry = account.providerHasApi
           ? Date.now() + 24 * 60 * 60 * 1000
           : new Date("2099-01-01").getTime();
-        await ctx.runMutation(internal.tokenRecovery.setTokenExpiry, {
+        await ctx.runMutation(internal.adAccounts.setTokenExpiry, {
           accountId: args.accountId,
           tokenExpiresAt: newExpiry,
         });
         return account.accessToken;
       }
-      // Token is dead — try recovery
-      try {
-        const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId: args.accountId });
-        if (recovered) {
-          const fresh = await ctx.runQuery(api.adAccounts.get, { accountId: args.accountId });
-          if (fresh?.accessToken) return fresh.accessToken;
-        }
-      } catch (recErr) {
-        console.log(`[getValidTokenForAccount] «${account.name}» (${args.accountId}): recovery failed: ${recErr}`);
-      }
-      throw new Error("TOKEN_EXPIRED: токен недействителен и не удалось восстановить");
+      // Permanent token is dead and there's no refresh path for it — caller
+      // must handle via handleTokenExpired. NOT recursively from here.
+      throw new Error("TOKEN_EXPIRED: токен недействителен");
     }
+    // tokenExpiresAt = 0 OR expired timestamp falls through to refresh cascade below.
 
     // Token expired or invalidated — log and proceed to refresh
     console.log(

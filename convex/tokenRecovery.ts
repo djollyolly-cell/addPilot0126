@@ -13,6 +13,7 @@ import { api, internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 
 const RECOVERY_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes — atomic recovery claim window
 
 /**
  * Lightweight token liveness check.
@@ -43,6 +44,32 @@ export async function quickTokenCheck(accessToken: string): Promise<boolean> {
 }
 
 // ─── Mutations for recovery state ───────────────────────────
+
+/**
+ * Atomic claim mutation for token recovery.
+ * Returns { claimed: true } if this caller acquired the recovery slot,
+ * { claimed: false } if another caller claimed within COOLDOWN_MS or account is abandoned.
+ *
+ * Convex serializes mutations on a single document — parallel calls for the same
+ * accountId are ordered, so the second sees the freshly-written timestamp.
+ */
+export const claimRecoveryAttempt = internalMutation({
+  args: { accountId: v.id("adAccounts") },
+  returns: v.object({ claimed: v.boolean() }),
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account || account.status === "abandoned") {
+      return { claimed: false };
+    }
+    const now = Date.now();
+    const last = account.lastRecoveryAttemptAt ?? 0;
+    if (now - last < COOLDOWN_MS) {
+      return { claimed: false };
+    }
+    await ctx.db.patch(args.accountId, { lastRecoveryAttemptAt: now });
+    return { claimed: true };
+  },
+});
 
 export const markRecoverySuccess = internalMutation({
   args: {
@@ -121,6 +148,13 @@ export const markRecoveryFailure = internalMutation({
     const account = await ctx.db.get(args.accountId);
     if (!account || account.status === "abandoned") return;
 
+    // Skip patch when state already reflects this failure — eliminates OCC
+    // contention with concurrent updateAccountTokens. tokenRecoveryAttempts is
+    // informational; the 7-day expiry uses tokenErrorSince-age, not count.
+    if (account.status === "error" && account.lastError === args.errorMessage) {
+      return;
+    }
+
     const attempts = (account.tokenRecoveryAttempts ?? 0) + 1;
     const tokenErrorSince = account.tokenErrorSince ?? Date.now();
 
@@ -168,9 +202,26 @@ export const isAccountPermanentToken = internalQuery({
 // ─── Main recovery action ───────────────────────────────────
 
 export const tryRecoverToken = internalAction({
-  args: { accountId: v.id("adAccounts") },
+  args: {
+    accountId: v.id("adAccounts"),
+    // force=true skips the atomic claim — only retryRecovery cron should pass this.
+    force: v.optional(v.boolean()),
+  },
   returns: v.boolean(),
   handler: async (ctx, args): Promise<boolean> => {
+    // Atomic claim: prevents multiple parallel recoveries on same accountId.
+    // retryRecovery cron passes force=true (it's the periodic retry).
+    if (!args.force) {
+      const { claimed } = await ctx.runMutation(
+        internal.tokenRecovery.claimRecoveryAttempt,
+        { accountId: args.accountId }
+      );
+      if (!claimed) {
+        console.log(`[tokenRecovery] ${args.accountId}: recovery claim denied (cooldown active)`);
+        return false;
+      }
+    }
+
     // 1. Load account
     const account = await ctx.runQuery(api.adAccounts.get, {
       accountId: args.accountId,
@@ -252,9 +303,11 @@ export const tryRecoverToken = internalAction({
       accountId: args.accountId,
       errorMessage: "Все методы восстановления токена исчерпаны",
     });
+    // First failure (attempts was 0/undefined) fires admin alert; subsequent
+    // failures log as warn to suppress alert spam for chronically failing accounts.
     try { await ctx.runMutation(internal.systemLogger.log, {
       accountId: args.accountId,
-      level: "error",
+      level: isFirstAttempt ? "error" : "warn",
       source: "tokenRecovery",
       message: `All recovery methods failed for «${account.name}» (attempt ${(account.tokenRecoveryAttempts ?? 0) + 1})`,
     }); } catch { /* non-critical */ }
@@ -290,12 +343,14 @@ export const handleTokenExpired = internalAction({
   args: { accountId: v.id("adAccounts") },
   returns: v.boolean(),
   handler: async (ctx, args): Promise<boolean> => {
-    // 1. Load account to get current token
+    // 1. Load account
     const account = await ctx.runQuery(api.adAccounts.get, {
       accountId: args.accountId,
     });
     if (!account || !account.accessToken || account.status === "abandoned") {
-      console.log(`[handleTokenExpired] Account ${args.accountId}: not found, no token, or abandoned`);
+      console.log(
+        `[handleTokenExpired] Account ${args.accountId}: not found, no token, or abandoned`
+      );
       return false;
     }
 
@@ -305,17 +360,15 @@ export const handleTokenExpired = internalAction({
       console.log(
         `[handleTokenExpired] «${account.name}» (${args.accountId}): false TOKEN_EXPIRED — token still alive, skipping invalidation`
       );
-      // Clear error status since token is fine
       await ctx.runMutation(internal.tokenRecovery.markRecoverySuccess, {
         accountId: args.accountId,
       });
       return true;
     }
 
-    // 3. Token is really dead — invalidate tokenExpiresAt FIRST so that
-    //    getValidTokenForAccount doesn't short-circuit on stale expiry and
-    //    actually tries the agency refresh cascade (Vitamin, GetUNIQ, etc.)
-    await ctx.runMutation(internal.tokenRecovery.setTokenExpiry, {
+    // 3. Token is really dead — invalidate so getValidTokenForAccount routes
+    //    to refresh / provider cascade (see auth.ts: tokenExpiresAt=0 → cascade)
+    await ctx.runMutation(internal.adAccounts.setTokenExpiry, {
       accountId: args.accountId,
       tokenExpiresAt: 0,
     });
@@ -323,40 +376,12 @@ export const handleTokenExpired = internalAction({
       `[handleTokenExpired] «${account.name}» (${args.accountId}): token dead, set tokenExpiresAt=0`
     );
 
-    // 4. Now try recovery — with tokenExpiresAt=0 the cascade will go through
-    //    agency refresh methods instead of returning the stale token
-    try {
-      const newToken = await ctx.runAction(internal.auth.getValidTokenForAccount, {
-        accountId: args.accountId,
-      });
-      if (newToken) {
-        // Verify the new token is actually alive
-        const alive = await quickTokenCheck(newToken);
-        if (alive) {
-          await ctx.runMutation(internal.tokenRecovery.markRecoverySuccess, {
-            accountId: args.accountId,
-          });
-          console.log(
-            `[handleTokenExpired] «${account.name}» (${args.accountId}): recovered successfully`
-          );
-          return true;
-        }
-      }
-    } catch (recErr) {
-      console.log(
-        `[handleTokenExpired] «${account.name}» (${args.accountId}): recovery failed: ${recErr}`
-      );
-    }
-
-    // 5. Recovery failed — mark as error with tokenErrorSince for auto-abandon tracking
-    await ctx.runMutation(internal.tokenRecovery.markRecoveryFailure, {
+    // 4. Delegate to tryRecoverToken (atomic claim + cascade + user-level fallback).
+    //    No `force` — gate enforced. Multiple parallel handleTokenExpired calls
+    //    on same accountId result in exactly one cascade run per COOLDOWN_MS window.
+    return await ctx.runAction(internal.tokenRecovery.tryRecoverToken, {
       accountId: args.accountId,
-      errorMessage: "TOKEN_EXPIRED — автовосстановление не удалось",
     });
-    console.log(
-      `[handleTokenExpired] «${account.name}» (${args.accountId}): all recovery failed, marked with tokenErrorSince`
-    );
-    return false;
   },
 });
 
@@ -385,9 +410,10 @@ export const retryRecovery = internalAction({
         continue;
       }
 
-      // Try recovery
+      // Try recovery — force=true bypasses the atomic claim (this IS the periodic retry)
       const success = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, {
         accountId: acc._id,
+        force: true,
       });
       if (success) {
         recovered++;
@@ -416,16 +442,6 @@ export const getRecoverableAccounts = internalQuery({
   },
 });
 
-// ─── Utility mutations ──────────────────────────────────────
-
-export const setTokenExpiry = internalMutation({
-  args: {
-    accountId: v.id("adAccounts"),
-    tokenExpiresAt: v.number(),
-  },
-  handler: async (ctx, args) => {
-    await ctx.db.patch(args.accountId, {
-      tokenExpiresAt: args.tokenExpiresAt,
-    });
-  },
-});
+// Note: setTokenExpiry moved to convex/adAccounts.ts so getValidTokenForAccount
+// can stay clear of any internal.tokenRecovery.* reference. See the guard
+// comment on getValidTokenForAccount in auth.ts.
