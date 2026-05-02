@@ -478,6 +478,7 @@ export default defineSchema({
     createdAt: v.number(),
     completedAt: v.optional(v.number()),
     isUpgrade: v.optional(v.boolean()),
+    isRenewal: v.optional(v.boolean()),
     creditAmount: v.optional(v.number()),
     orgId: v.optional(v.id("organizations")),
   })
