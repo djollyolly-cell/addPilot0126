@@ -16,6 +16,19 @@ const FALLBACK_BYN_PRICES = {
   pro: 106,
 } as const;
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function formatRenewalDate(ts: number): string {
+  const d = new Date(ts);
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+}
+
+/** Mirror of backend calculateRenewalExpiresAt — same formula, includes promo bonus days */
+function computeRenewalExpiresAt(currentExpiresAt: number, totalDays: number, now: number): number {
+  const baseTs = currentExpiresAt > now ? currentExpiresAt : now;
+  return baseTs + totalDays * DAY_MS;
+}
+
 type Currency = 'RUB' | 'BYN';
 type PaymentStep = 'select-country' | 'payment';
 
@@ -71,6 +84,11 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
     api.billing.getUpgradePrice,
     user?.userId ? { userId: user.userId as Id<"users">, newTier: tier } : "skip"
   );
+  const renewalInfo = useQuery(
+    api.billing.getRenewalEligibility,
+    user?.userId ? { userId: user.userId as Id<"users">, tier } : "skip"
+  );
+  const isRenewal = renewalInfo?.eligible === true;
   const promoValidation = useQuery(
     api.billing.validatePromoCode,
     promoCode.trim().length >= 3 ? { code: promoCode.trim() } : "skip"
@@ -131,6 +149,13 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
     ? Math.max(Math.ceil(priceBYN - upgradeCredit), 1)
     : priceBYN;
   const finalAmountBYN = isUpgrade ? upgradeCostBYN : priceBYN;
+
+  // Promo-aware renewal date — recompute on client when promoApplied changes
+  // (server's newExpiresAt is for 30 days only; promo bonus pushes it further)
+  const renewalTotalDays = 30 + (promoApplied?.bonusDays ?? 0);
+  const renewalNewExpiresAt = isRenewal && renewalInfo?.currentExpiresAt
+    ? computeRenewalExpiresAt(renewalInfo.currentExpiresAt, renewalTotalDays, Date.now())
+    : null;
 
   const handleApplyPromo = () => {
     if (!promoCode.trim()) return;
@@ -246,7 +271,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
             </Button>
             <CardTitle className="flex items-center gap-2">
               <CreditCard className="h-5 w-5" />
-              Оплата тарифа {tierInfo.name}
+              {isRenewal ? `Продление тарифа ${tierInfo.name}` : `Оплата тарифа ${tierInfo.name}`}
             </CardTitle>
             <CardDescription>
               Выберите способ оплаты
@@ -367,7 +392,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
             </Button>
             <CardTitle className="flex items-center gap-2 pl-8">
               <CreditCard className="h-5 w-5" />
-              Оплата тарифа {tierInfo.name}
+              {isRenewal ? `Продление тарифа ${tierInfo.name}` : `Оплата тарифа ${tierInfo.name}`}
             </CardTitle>
             <CardDescription className="pl-8">
               {isUpgrade ? `${upgradeCostBYN} BYN (доплата)` : `${price} ${currencySymbol}/месяц`} • 🇧🇾 Беларусь
@@ -405,6 +430,28 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
                 <div className="flex justify-between font-bold border-t border-border pt-1 mt-1">
                   <span>К оплате</span>
                   <span>{upgradeCostBYN} BYN</span>
+                </div>
+              </div>
+            )}
+
+            {/* Renewal info */}
+            {isRenewal && renewalInfo?.currentExpiresAt && renewalNewExpiresAt && (
+              <div
+                className="p-4 bg-blue-500/10 rounded-lg space-y-1 text-sm"
+                data-testid="renewal-info"
+              >
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Текущая подписка истекает</span>
+                  <span className="font-medium">{formatRenewalDate(renewalInfo.currentExpiresAt)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">
+                    Будет продлена до
+                    {promoApplied && promoApplied.bonusDays > 0 ? ` (с учётом +${promoApplied.bonusDays} дн.)` : ''}
+                  </span>
+                  <span className="font-medium text-blue-700 dark:text-blue-400">
+                    {formatRenewalDate(renewalNewExpiresAt)}
+                  </span>
                 </div>
               </div>
             )}
@@ -595,7 +642,7 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
           </Button>
           <CardTitle className="flex items-center gap-2 pl-8">
             <CreditCard className="h-5 w-5" />
-            Оплата тарифа {tierInfo.name}
+            {isRenewal ? `Продление тарифа ${tierInfo.name}` : `Оплата тарифа ${tierInfo.name}`}
           </CardTitle>
           <CardDescription className="pl-8">
             {priceRUB} ₽/месяц • 🇷🇺 Россия
@@ -638,6 +685,28 @@ export function PaymentModal({ tier, tierInfo, onClose, onSuccess: _onSuccess }:
               <div className="flex justify-between font-bold border-t border-border pt-1 mt-1">
                 <span>К оплате</span>
                 <span>{upgradeCostBYN} BYN</span>
+              </div>
+            </div>
+          )}
+
+          {/* Renewal info */}
+          {isRenewal && renewalInfo?.currentExpiresAt && renewalNewExpiresAt && (
+            <div
+              className="p-4 bg-blue-500/10 rounded-lg space-y-1 text-sm"
+              data-testid="renewal-info"
+            >
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Текущая подписка истекает</span>
+                <span className="font-medium">{formatRenewalDate(renewalInfo.currentExpiresAt)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">
+                  Будет продлена до
+                  {promoApplied && promoApplied.bonusDays > 0 ? ` (с учётом +${promoApplied.bonusDays} дн.)` : ''}
+                </span>
+                <span className="font-medium text-blue-700 dark:text-blue-400">
+                  {formatRenewalDate(renewalNewExpiresAt)}
+                </span>
               </div>
             </div>
           )}
