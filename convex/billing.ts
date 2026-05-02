@@ -253,6 +253,61 @@ export function calculateUpgradePriceWithFallback(input: UpgradePriceInput): Upg
   return { credit, remainingDays, isUpgrade: true, currency: "RUB" };
 }
 
+// ═══════════════════════════════════════════════════════════
+// Renewal — продление того же тарифа в последние 7 дней
+// ═══════════════════════════════════════════════════════════
+
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export interface RenewalExpiresAtInput {
+  /** Текущий subscriptionExpiresAt (может быть в прошлом, если cron не сбросил) */
+  currentExpiresAt: number | undefined;
+  /** Сколько дней оплачивается (30 + bonusDays) */
+  totalDays: number;
+  /** Now timestamp (для тестируемости) */
+  now: number;
+}
+
+/**
+ * Pure: расчёт нового expiresAt при продлении.
+ *
+ * - Активная подписка (currentExpiresAt > now): продлевает с конца срока.
+ * - Просроченная-не-сброшенная (currentExpiresAt <= now) или undefined: с now.
+ *
+ * Гарантирует, что юзер не теряет оплаченный остаток, но не возвращает «просроченные» дни.
+ */
+export function calculateRenewalExpiresAt(input: RenewalExpiresAtInput): number {
+  const { currentExpiresAt, totalDays, now } = input;
+  const baseTs = currentExpiresAt && currentExpiresAt > now ? currentExpiresAt : now;
+  return baseTs + totalDays * DAY_MS;
+}
+
+export interface RenewalEligibleInput {
+  currentTier: string;
+  paymentTier: string;
+  currentExpiresAt: number | undefined;
+  now: number;
+}
+
+/**
+ * Pure: разрешено ли продление?
+ *
+ * Условия:
+ * - currentTier — платный (не freemium).
+ * - paymentTier === currentTier (продление того же тарифа).
+ * - currentExpiresAt задан.
+ * - currentExpiresAt - now <= 7 дней (включая отрицательные значения — истёкшая,
+ *   но не сброшенная подписка).
+ */
+export function isRenewalEligible(input: RenewalEligibleInput): boolean {
+  const { currentTier, paymentTier, currentExpiresAt, now } = input;
+  if (currentTier === "freemium") return false;
+  if (currentTier !== paymentTier) return false;
+  if (typeof currentExpiresAt !== "number") return false;
+  return currentExpiresAt - now <= SEVEN_DAYS_MS;
+}
+
 /** Query: get upgrade credit for prorated pricing (with fallback) */
 export const getUpgradePrice = query({
   args: {
