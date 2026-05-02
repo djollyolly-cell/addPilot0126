@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { internal } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 
 // Tier limits and pricing
 export const TIERS = {
@@ -465,6 +465,88 @@ export const createBepaidCheckout = action({
     const user = await ctx.runQuery(internal.users.getById, { userId: args.userId });
     if (!user) {
       throw new Error("Пользователь не найден");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Renewal guard: same-tier purchase only allowed in 7-day window
+    // ─────────────────────────────────────────────────────────────
+    if (!isAgency && user.subscriptionTier === args.tier) {
+      const eligible = isRenewalEligible({
+        currentTier: user.subscriptionTier,
+        paymentTier: args.tier,
+        currentExpiresAt: user.subscriptionExpiresAt,
+        now: Date.now(),
+      });
+      if (!eligible) {
+        throw new Error(
+          "Продление того же тарифа доступно только в последние 7 дней подписки"
+        );
+      }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Server-side price sanity bound (guards against client manipulation)
+    //
+    // Bound applies to ALL non-agency purchases — including upgrades.
+    // For upgrades we shrink the minimum by the SERVER-COMPUTED upgrade
+    // credit (normalized to BYN), because legitimate upgrade payment can be
+    // small. Without this, an active Start user upgrading to Pro could
+    // bypass the bound entirely with amountBYN: 1.
+    //
+    // Source of truth for both isUpgrade and credit: getUpgradePrice query
+    // (calls calculateUpgradePriceWithFallback). Avoids duplicating the
+    // currentTier/newTier/expiresAt rules inline.
+    //
+    // Limitation: lower-bound is a heuristic. Exact server-side validation
+    // would require cached NBRB rate + server recompute. Future work.
+    //
+    // Formula: minBYN = tierRUB * 0.0175 (≈ 50% of typical 3.5/100 rate),
+    // shrunk by serverComputedCreditBYN for upgrades, floored at 1 BYN.
+    // For Pro 2990 RUB → minBYN ≈ 52 BYN (typical actual ~105 BYN @ rate 3.5).
+    // For Start 1290 RUB → minBYN ≈ 23 BYN (typical actual ~46 BYN @ rate 3.5).
+    //
+    // ⚠ DO NOT trust args.isUpgrade or args.creditAmount — both come from
+    // client. Use getUpgradePrice result instead. Credit may be returned in
+    // RUB (fallback path) — normalize to BYN before subtracting.
+    // ─────────────────────────────────────────────────────────────
+    if (!isAgency) {
+      const serverUpgradeInfo = await ctx.runQuery(api.billing.getUpgradePrice, {
+        userId: args.userId,
+        newTier: args.tier,
+      });
+      const serverIsUpgrade = serverUpgradeInfo.isUpgrade;
+
+      // Normalize credit to BYN — calculateUpgradePriceWithFallback can return RUB
+      // (fallback path: no payment history → uses catalog RUB price for proration).
+      // Conservative conversion at 0.0175 (same heuristic as minTierBYN), so credit
+      // is rounded DOWN — minAcceptable stays defensively higher.
+      const serverComputedCreditBYN =
+        !serverIsUpgrade
+          ? 0
+          : serverUpgradeInfo.currency === "BYN"
+            ? serverUpgradeInfo.credit
+            : serverUpgradeInfo.currency === "RUB"
+              ? serverUpgradeInfo.credit * 0.0175
+              : 0;
+
+      const tierRUB = (TIERS as Record<string, { price: number }>)[args.tier]?.price ?? 0;
+      if (tierRUB > 0) {
+        const minTierBYN = tierRUB * 0.0175;
+        const minAcceptableBYN = serverIsUpgrade
+          ? Math.max(1, minTierBYN - serverComputedCreditBYN)
+          : minTierBYN;
+
+        if (args.amountBYN < minAcceptableBYN) {
+          await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+            category: "payments",
+            dedupKey: `checkout-amount-suspicious:${args.userId}:${args.tier}`,
+            text: `🚨 <b>Подозрительная сумма checkout</b>\n\nUser: ${args.userId}\nTier: ${args.tier}\nПрислано: ${args.amountBYN} BYN\nМинимум: ${minAcceptableBYN.toFixed(2)} BYN${serverIsUpgrade ? `\nUpgrade credit: ${serverComputedCreditBYN.toFixed(2)} BYN (${serverUpgradeInfo.currency})` : ""}`,
+          });
+          throw new Error(
+            `Сумма платежа ниже допустимого минимума для тарифа ${args.tier}`
+          );
+        }
+      }
     }
 
     // For new agency: create pending org (idempotent)
