@@ -12,6 +12,14 @@ import { PaymentModal } from '@/components/PaymentModal';
 import { AgencyTierCard } from '@/components/AgencyTierCard';
 import { useNavigate } from 'react-router-dom';
 
+function pluralizeDays(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'день';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return 'дня';
+  return 'дней';
+}
+
 const TIERS = {
   freemium: {
     name: "Freemium",
@@ -83,6 +91,14 @@ export function PricingPage() {
     user?.userId ? { userId: user.userId as Id<"users"> } : "skip"
   );
 
+  // Renewal eligibility for current tier (only meaningful if user is on start/pro)
+  const renewalEligibility = useQuery(
+    api.billing.getRenewalEligibility,
+    user?.userId && (currentTier === 'start' || currentTier === 'pro')
+      ? { userId: user.userId as Id<"users">, tier: currentTier }
+      : "skip"
+  );
+
   // Handle URL params on mount: ?status=success/failed and ?plan=start/pro
   useEffect(() => {
     const status = searchParams.get('status');
@@ -117,7 +133,9 @@ export function PricingPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSelectTier = (tier: TierKey) => {
-    if (tier === 'freemium' || tier === currentTier) return;
+    if (tier === 'freemium') return;
+    // Same-tier click only allowed when renewal is eligible
+    if (tier === currentTier && !renewalEligibility?.eligible) return;
     setSelectedTier(tier);
     setShowPaymentModal(true);
   };
@@ -213,6 +231,16 @@ export function PricingPage() {
                     );
                   })()}
                 </CardDescription>
+                {isCurrent && renewalEligibility?.eligible && renewalEligibility.daysLeft !== null && (
+                  <p
+                    className="text-xs mt-2 text-warning font-medium"
+                    data-testid={`expiring-soon-${key}`}
+                  >
+                    {renewalEligibility.daysLeft <= 0
+                      ? 'Подписка истекла'
+                      : `Истекает через ${renewalEligibility.daysLeft} ${pluralizeDays(renewalEligibility.daysLeft)}`}
+                  </p>
+                )}
               </CardHeader>
 
               <CardContent className="flex-1">
@@ -231,10 +259,19 @@ export function PricingPage() {
                   data-testid={`select-${key}`}
                   className="w-full"
                   variant={tier.popular ? 'default' : 'outline'}
-                  disabled={isCurrent || key === 'freemium'}
+                  disabled={
+                    key === 'freemium' ||
+                    (isCurrent && !renewalEligibility?.eligible)
+                  }
                   onClick={() => handleSelectTier(key)}
                 >
-                  {isCurrent ? 'Текущий тариф' : key === 'freemium' ? 'Бесплатно' : `Оформить ${tier.name}`}
+                  {key === 'freemium'
+                    ? 'Бесплатно'
+                    : isCurrent && renewalEligibility?.eligible
+                      ? 'Продлить'
+                      : isCurrent
+                        ? 'Текущий тариф'
+                        : `Оформить ${tier.name}`}
                 </Button>
               </CardFooter>
             </Card>
