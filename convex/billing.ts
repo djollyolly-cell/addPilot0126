@@ -647,6 +647,41 @@ export const handleBepaidWebhook = internalMutation({
     }
 
     if (args.status === "successful") {
+      // Idempotency: bePaid retries on transient failures. Don't re-activate
+      // a subscription, re-apply promo, re-trigger referral bonus on duplicate.
+      if (payment.status === "completed") {
+        console.log(`bePaid webhook: ${args.trackingId} already completed, ignoring duplicate`);
+        return { success: true, alreadyProcessed: true };
+      }
+
+      // Amount sanity check: args.amount is already in BYN (converted in http.ts:98).
+      // Defense-in-depth alongside bePaid HMAC: rejects mismatches that bypass signing.
+      // Note: this catches webhook tampering, not client-side price manipulation at
+      // checkout creation — that's enforced separately in createBepaidCheckout.
+      if (Math.abs(args.amount - payment.amount) > 0.01) {
+        console.error(
+          `bePaid webhook: amount mismatch for ${args.trackingId} — ` +
+          `expected ${payment.amount} BYN, got ${args.amount} BYN`
+        );
+        await ctx.scheduler.runAfter(0, internal.systemLogger.log, {
+          userId: payment.userId,
+          level: "error",
+          source: "billing",
+          message: `Webhook amount mismatch: ${args.trackingId} expected=${payment.amount} got=${args.amount}`,
+        });
+        await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+          category: "payments",
+          dedupKey: `payment-amount-mismatch:${args.trackingId}`,
+          text: `🚨 <b>Webhook amount mismatch</b>\n\nTrackingId: ${args.trackingId}\nExpected: ${payment.amount} BYN\nGot: ${args.amount} BYN`,
+        });
+        await ctx.db.patch(payment._id, {
+          status: "failed",
+          errorMessage: `amount_mismatch: expected ${payment.amount}, got ${args.amount}`,
+          completedAt: Date.now(),
+        });
+        return { success: false, error: "amount_mismatch" };
+      }
+
       const isAgencyPayment = isAgencyTier(payment.tier);
 
       // Check promo code bonus days (individual tiers only)
@@ -685,17 +720,51 @@ export const handleBepaidWebhook = internalMutation({
         }
       }
 
-      // Update payment status
+      // Activate subscription (30 days + bonus). For same-tier renewal of an
+      // active individual subscription within the 7d window, extend from
+      // current expiresAt. Otherwise fresh: extend from now.
+      //
+      // ⚠ DO NOT shortcut to subscriber.subscriptionTier === payment.tier —
+      // a legacy/internal pending payment outside the 7d window must NOT
+      // get period-extension treatment. Use the same isRenewalEligible
+      // gate as createBepaidCheckout for defense-in-depth.
+      const totalDays = 30 + bonusDays;
+      const renewalNow = Date.now();
+
+      let isRenewal = false;
+      let renewalCurrentExpiresAt: number | undefined;
+      if (!payment.orgId) {
+        const subscriber = await ctx.db.get(payment.userId);
+        if (subscriber) {
+          const eligible = isRenewalEligible({
+            currentTier: subscriber.subscriptionTier ?? "freemium",
+            paymentTier: payment.tier,
+            currentExpiresAt: subscriber.subscriptionExpiresAt,
+            now: renewalNow,
+          });
+          if (eligible) {
+            isRenewal = true;
+            renewalCurrentExpiresAt = subscriber.subscriptionExpiresAt;
+          }
+        }
+      }
+
+      const expiresAt = isRenewal
+        ? calculateRenewalExpiresAt({
+            currentExpiresAt: renewalCurrentExpiresAt,
+            totalDays,
+            now: renewalNow,
+          })
+        : renewalNow + totalDays * 24 * 60 * 60 * 1000;
+
+      // Update payment status (after isRenewal is known so we can record it)
       await ctx.db.patch(payment._id, {
         status: "completed",
         bepaidUid: args.uid,
         bonusDays: bonusDays > 0 ? bonusDays : undefined,
         completedAt: Date.now(),
+        isRenewal: isRenewal || undefined,
       });
-
-      // Activate subscription (30 days + bonus)
-      const totalDays = 30 + bonusDays;
-      const expiresAt = Date.now() + totalDays * 24 * 60 * 60 * 1000;
 
       if (payment.orgId) {
         // Agency: update organizations record, not users
@@ -746,14 +815,20 @@ export const handleBepaidWebhook = internalMutation({
         category: "payment",
         action: "payment_completed",
         status: "success",
-        details: { tier: payment.tier, amount: args.amount / 100, promoCode: payment.promoCode, orgId: payment.orgId },
+        details: {
+          tier: payment.tier,
+          amount: args.amount,
+          promoCode: payment.promoCode,
+          orgId: payment.orgId,
+          isRenewal: isRenewal || undefined,
+        },
       }); } catch { /* non-critical */ }
       // Admin alert: payment
       const alertUser = await ctx.db.get(payment.userId);
       const alertUserName = alertUser?.name || alertUser?.email || "—";
       try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
         category: "payments",
-        text: `💰 <b>Оплата</b>\n\nПользователь: ${alertUserName}\nТариф: ${payment.tier}\nСумма: ${args.amount / 100} ${args.currency}${payment.orgId ? "\nОрганизация: " + payment.orgId : ""}`,
+        text: `💰 <b>Оплата</b>\n\nПользователь: ${alertUserName}\nТариф: ${payment.tier}\nСумма: ${args.amount} ${args.currency}${payment.orgId ? "\nОрганизация: " + payment.orgId : ""}`,
       }); } catch { /* non-critical */ }
 
       return { success: true };
@@ -806,6 +881,23 @@ export const processPayment = mutation({
       throw new Error("User not found");
     }
 
+    // Same-tier guard: only allow buying current tier within 7-day renewal window.
+    // Mirrors the guard in createBepaidCheckout for consistency in mock flow.
+    if (user.subscriptionTier === args.tier) {
+      const eligible = isRenewalEligible({
+        currentTier: user.subscriptionTier,
+        paymentTier: args.tier,
+        currentExpiresAt: user.subscriptionExpiresAt,
+        now: Date.now(),
+      });
+      if (!eligible) {
+        return {
+          success: false,
+          error: "Продление того же тарифа доступно только в последние 7 дней подписки",
+        };
+      }
+    }
+
     // Mock card validation
     const cardLast4 = args.cardNumber.slice(-4);
 
@@ -841,9 +933,27 @@ export const processPayment = mutation({
       }
     }
 
-    // Calculate expiration (30 days + bonus)
+    // Calculate expiration (30 days + bonus). For same-tier renewal,
+    // extend from currentExpiresAt; otherwise from now.
+    //
+    // Use isRenewalEligible (not raw tier comparison) for defense-in-depth:
+    // if the same-tier guard above is ever refactored away, this still won't
+    // grant period-extension to ineligible payments.
     const totalDays = 30 + bonusDays;
-    const expiresAt = Date.now() + totalDays * 24 * 60 * 60 * 1000;
+    const renewalNow = Date.now();
+    const isRenewal = isRenewalEligible({
+      currentTier: user.subscriptionTier ?? "freemium",
+      paymentTier: args.tier,
+      currentExpiresAt: user.subscriptionExpiresAt,
+      now: renewalNow,
+    });
+    const expiresAt = isRenewal
+      ? calculateRenewalExpiresAt({
+          currentExpiresAt: user.subscriptionExpiresAt,
+          totalDays,
+          now: renewalNow,
+        })
+      : renewalNow + totalDays * 24 * 60 * 60 * 1000;
 
     // Extend lockedPrices if subscription is continuous
     const lockedUpdate: Record<string, unknown> = {};
