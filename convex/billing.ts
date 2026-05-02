@@ -352,6 +352,55 @@ export const getUpgradePrice = query({
   },
 });
 
+/**
+ * Query: можно ли продлить тариф `tier` для юзера userId, и если да — детали.
+ *
+ * Возвращает:
+ *  - eligible: можно ли продлить
+ *  - daysLeft: сколько дней до конца текущей подписки (может быть отрицательным
+ *    для истёкшей-но-не-сброшенной)
+ *  - currentExpiresAt: текущий expiresAt (для отрисовки «с DD.MM до DD.MM»)
+ *  - newExpiresAt: каким станет expiresAt после оплаты 30 дней (без бонусов)
+ */
+export const getRenewalEligibility = query({
+  args: {
+    userId: v.id("users"),
+    tier: v.union(v.literal("start"), v.literal("pro")),
+  },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user) {
+      return { eligible: false, daysLeft: 0, currentExpiresAt: null, newExpiresAt: null };
+    }
+
+    const currentTier = user.subscriptionTier ?? "freemium";
+    const currentExpiresAt = user.subscriptionExpiresAt;
+    const now = Date.now();
+
+    const eligible = isRenewalEligible({
+      currentTier,
+      paymentTier: args.tier,
+      currentExpiresAt,
+      now,
+    });
+
+    const daysLeft = currentExpiresAt
+      ? Math.ceil((currentExpiresAt - now) / (24 * 60 * 60 * 1000))
+      : 0;
+
+    const newExpiresAt = eligible
+      ? calculateRenewalExpiresAt({ currentExpiresAt, totalDays: 30, now })
+      : null;
+
+    return {
+      eligible,
+      daysLeft,
+      currentExpiresAt: currentExpiresAt ?? null,
+      newExpiresAt,
+    };
+  },
+});
+
 // bePaid checkout result type
 type BepaidCheckoutResult = {
   success: boolean;
