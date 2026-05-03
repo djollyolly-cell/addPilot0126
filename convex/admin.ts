@@ -571,23 +571,25 @@ export const listAccountsForCount = internalQuery({
   },
 });
 
-// DIAGNOSTIC (temporary): count ads for a single account using paginate
-// (single paginate per transaction = OK). Remove with the rest of block.
-export const adsCountForAccount = internalQuery({
-  args: { accountId: v.id("adAccounts") },
-  handler: async (ctx, { accountId }) => {
-    let count = 0;
-    let cursor: string | null = null;
-    while (true) {
-      const page = await ctx.db
-        .query("ads")
-        .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", accountId))
-        .paginate({ cursor, numItems: 200 });
-      count += page.page.length;
-      if (page.isDone) break;
-      cursor = page.continueCursor;
-    }
-    return count;
+// DIAGNOSTIC (temporary): one page of ads for an account. Convex rejects
+// multiple paginate() calls per transaction (even sequentially with cursors)
+// — one paginate per UDF, period. The runner action loops cursors externally,
+// so each page is its own transaction. Remove with the rest of block.
+export const adsPageForAccount = internalQuery({
+  args: {
+    accountId: v.id("adAccounts"),
+    cursor: v.union(v.string(), v.null()),
+  },
+  handler: async (ctx, { accountId, cursor }) => {
+    const page = await ctx.db
+      .query("ads")
+      .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", accountId))
+      .paginate({ cursor, numItems: 500 });
+    return {
+      pageSize: page.page.length,
+      isDone: page.isDone,
+      continueCursor: page.continueCursor,
+    };
   },
 });
 
@@ -604,9 +606,18 @@ export const reportAdsCountByAccount = internalAction({
     const accounts = await ctx.runQuery(internal.admin.listAccountsForCount, {});
     const results: Array<[string, number, string]> = [];
     for (const acc of accounts) {
-      const count = await ctx.runQuery(internal.admin.adsCountForAccount, {
-        accountId: acc._id,
-      });
+      let count = 0;
+      let cursor: string | null = null;
+      while (true) {
+        const page: { pageSize: number; isDone: boolean; continueCursor: string } =
+          await ctx.runQuery(internal.admin.adsPageForAccount, {
+            accountId: acc._id,
+            cursor,
+          });
+        count += page.pageSize;
+        if (page.isDone) break;
+        cursor = page.continueCursor;
+      }
       results.push([acc._id, count, acc.name]);
     }
     const top = results.sort((a, b) => b[1] - a[1]).slice(0, 20);
