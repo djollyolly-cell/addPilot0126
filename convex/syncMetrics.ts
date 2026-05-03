@@ -1145,11 +1145,11 @@ async function syncSingleAccount(
         // Auto-upsert ads from lightweight getMtBanners data — batched
         if (adBatch.length > 0) {
           try {
-            const CHUNK = DEFAULT_UPSERT_CHUNK_SIZE;
-            for (let i = 0; i < adBatch.length; i += CHUNK) {
+            const chunk = adUpsertChunkSize(adBatch.length);
+            for (let i = 0; i < adBatch.length; i += chunk) {
               await ctx.runMutation(internal.adAccounts.upsertAdsBatch, {
                 accountId: account._id,
-                ads: adBatch.slice(i, i + CHUNK),
+                ads: adBatch.slice(i, i + chunk),
               });
             }
           } catch (err) {
@@ -1220,20 +1220,20 @@ async function syncSingleAccount(
 
         // Flush metrics batches
         if (realtimeBatch.length > 0) {
-          const CHUNK = 200;
-          for (let i = 0; i < realtimeBatch.length; i += CHUNK) {
+          const chunk = realtimeMetricsChunkSize(realtimeBatch.length);
+          for (let i = 0; i < realtimeBatch.length; i += chunk) {
             await ctx.runMutation(internal.metrics.saveRealtimeBatch, {
               accountId: account._id,
-              items: realtimeBatch.slice(i, i + CHUNK),
+              items: realtimeBatch.slice(i, i + chunk),
             });
           }
         }
         if (dailyBatch.length > 0) {
-          const CHUNK = 100;
-          for (let i = 0; i < dailyBatch.length; i += CHUNK) {
+          const chunk = dailyMetricsChunkSize(dailyBatch.length);
+          for (let i = 0; i < dailyBatch.length; i += chunk) {
             await ctx.runMutation(internal.metrics.saveDailyBatch, {
               accountId: account._id,
-              items: dailyBatch.slice(i, i + CHUNK),
+              items: dailyBatch.slice(i, i + chunk),
             });
           }
         }
