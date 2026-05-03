@@ -20,6 +20,21 @@ const DEFAULT_UPSERT_CHUNK_SIZE = 200;
 const HEAVY_ACCOUNT_UPSERT_CHUNK_SIZE = 50;
 const HEAVY_ACCOUNT_CAMPAIGN_THRESHOLD = 500;
 
+// Residual carry-over fix: adaptive chunks for sync batch flush mutations.
+// Threshold = items count in single batch (== ads count for daily/realtime,
+// ads count for upsert). Calibrated via Pre-Step B production measurement
+// (admin.adsCountByAccount): top-1 = 2047, top-5 median = 1471, 12/20
+// accounts > 1000 ads. Threshold 800 catches outliers without bloating
+// the ~280 lighter accounts. Exported so unit tests assert behaviour
+// relative to the threshold rather than hardcoded magic numbers.
+export const HEAVY_BATCH_THRESHOLD = 800;
+const DEFAULT_DAILY_CHUNK = 100;
+const HEAVY_DAILY_CHUNK = 25;
+const DEFAULT_REALTIME_CHUNK = 200;
+const HEAVY_REALTIME_CHUNK = 50;
+const DEFAULT_AD_UPSERT_CHUNK = 200;
+const HEAVY_AD_UPSERT_CHUNK = 50;
+
 type AdUpsertPayload = {
   vkAdId: string;
   campaignVkId: string;
@@ -41,6 +56,24 @@ function campaignUpsertChunkSize(count: number): number {
   return count > HEAVY_ACCOUNT_CAMPAIGN_THRESHOLD
     ? HEAVY_ACCOUNT_UPSERT_CHUNK_SIZE
     : DEFAULT_UPSERT_CHUNK_SIZE;
+}
+
+export function dailyMetricsChunkSize(itemsCount: number): number {
+  return itemsCount > HEAVY_BATCH_THRESHOLD
+    ? HEAVY_DAILY_CHUNK
+    : DEFAULT_DAILY_CHUNK;
+}
+
+export function realtimeMetricsChunkSize(itemsCount: number): number {
+  return itemsCount > HEAVY_BATCH_THRESHOLD
+    ? HEAVY_REALTIME_CHUNK
+    : DEFAULT_REALTIME_CHUNK;
+}
+
+export function adUpsertChunkSize(itemsCount: number): number {
+  return itemsCount > HEAVY_BATCH_THRESHOLD
+    ? HEAVY_AD_UPSERT_CHUNK
+    : DEFAULT_AD_UPSERT_CHUNK;
 }
 
 /** Permanent errors → immediate error status. Everything else is transient. */
