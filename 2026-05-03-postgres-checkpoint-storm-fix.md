@@ -917,8 +917,8 @@ docker restart dokploy-traefik
 | Postgres backend page eviction (`shared_buffers = 128 MB`) | ⚠ Найдено, не устранено | 10, 11 |
 | Postgres `adpilot_prod` порт 5433 наружу | ⚠ Security TODO | 0 |
 | Traefik `idleTimeout = 180s` | ✅ Устранён (1h) | 13 |
-| Convex Isolate memory carry-over restarts | ✅ Fix реализован в `3ca60eb`, ⏳ ждёт deploy verification | 14, 15.1 |
-| WebSocket 1006 разрывы | ⚠ Уменьшены (idleTimeout); требуется повторный замер после memory-fix deploy | 12, 13, 15.1 |
+| Convex Isolate memory carry-over restarts | ⚠ Primary fix реализован и задеплоен, но post-deploy остался residual фон `TooMuchMemoryCarryOver` | 14, 15.1, 17 |
+| WebSocket 1006 разрывы | ⚠ Уменьшены (idleTimeout), но продолжаются; residual carry-over остаётся кандидатом | 12, 13, 15.1, 17 |
 | Auto-link-video | ⚠ Временно отключён в primary sync, нужен отдельный cron PR | 15.2 |
 
 **Что не делается в этой сессии (отложено):**
@@ -930,7 +930,97 @@ docker restart dokploy-traefik
 
 ---
 
-## 17. Структура новой сессии: Convex memory carry-over fix
+## 17. Post-deploy verification и residual carry-over
+
+### 17.1. Primary memory-fix deploy verification
+
+После push/deploy primary fix (`3ca60eb`) и lint housekeeping (`90baea5`) контейнеры на production здоровы:
+
+- `adpilot-frontend` — healthy
+- `adpilot-convex-backend` — healthy
+- `adpilot-postgres` — healthy
+- `dokploy-traefik` — up
+
+Postgres checkpoint storm не вернулся:
+
+```text
+stats_reset: 2026-05-03 05:13:22 UTC
+checkpoints_timed: 4
+checkpoints_req: 26
+req_per_hour: ~2.96
+buffers_backend_fsync: 0
+fresh Postgres FATAL/ERROR/no-space/checkpoint-too-frequent warnings: 0
+disk /: 166G used, 23G free, 88%
+```
+
+Convex result:
+
+```text
+TooMuchMemoryCarryOver за 1h: 7
+TooMuchMemoryCarryOver за 30m: 3
+TooMuchMemoryCarryOver за 15m: 0
+```
+
+Вывод: primary fix снял прежние главные hot paths (`getMtBanners`, `getMtStatistics`, `upsertCampaignsBatch`) как доминирующую причину, но **acceptance "0–1 TooMuchMemoryCarryOver / hour" не достигнут**. Нужен следующий residual fix.
+
+### 17.2. Новые post-deploy `last request`
+
+Свежий post-deploy срез показал остаточные restarts уже на других requests:
+
+- `Action: vkApi.js:getCampaignTypeMap`
+- `UDF: adAccounts.js:getInternal`
+- `UDF: metrics.js:saveDailyBatch`
+- `Action: ruleEngine.js:checkRulesForAccount`
+- `UDF: users.js:getVkAdsCredentials`
+- `UDF: metrics.js:saveRealtimeBatch`
+- `UDF: adAccounts.js:upsertAdsBatch`
+
+Интерпретация:
+
+- `saveDailyBatch`, `saveRealtimeBatch`, `upsertAdsBatch` — реальные candidates на residual batch/write-set pressure.
+- `getInternal`, `getVkAdsCredentials`, `updateSyncTime` — скорее marker functions: маленькие `db.get`/`patch`, на которых heap-check поймал уже накопленный Isolate state.
+- `ruleEngine.checkRulesForAccount` и `vkApi.getCampaignTypeMap` требуют отдельной диагностики, если batch chunking не снизит общий фон.
+
+### 17.3. Residual fix spec
+
+**Spec файл:** `docs/2026-05-03-convex-residual-carry-over-design.md`
+
+Фокус следующего PR:
+
+1. Перед кодом снять production taxonomy `TooMuchMemoryCarryOver` за 2–4 часа и распределение ads per account.
+2. Если batch mutations дают существенную долю событий — внедрить adaptive chunking сразу для:
+   - `metrics.saveDailyBatch`
+   - `metrics.saveRealtimeBatch`
+   - `adAccounts.upsertAdsBatch`
+3. После deploy снять 30–60 минут мониторинга.
+4. Если marker functions или `ruleEngine/getCampaignTypeMap` продолжают рестартить Isolate — переходить к module-level/bundle diagnostics, не делать слепой split модулей.
+
+Acceptance residual spec:
+
+| Метрика | Целевое значение |
+|---|---|
+| `TooMuchMemoryCarryOver` на `saveDailyBatch` | 0 / час |
+| `TooMuchMemoryCarryOver` на `saveRealtimeBatch` / `upsertAdsBatch` | 0 / час |
+| `TooMuchMemoryCarryOver` суммарно | 0–1 / час |
+| trivial marker functions (`updateSyncTime`, `getInternal`, `getVkAdsCredentials`) | 0 / час |
+| p95 batch functions | ≤ baseline +30% |
+
+### 17.4. Структура новой сессии: residual Convex memory carry-over fix
+
+**Spec файл:** `docs/2026-05-03-convex-residual-carry-over-design.md`
+
+### Фокус residual session
+
+1. **Pre-step A:** снять production taxonomy за 2–4 часа:
+   `docker logs --since 4h adpilot-convex-backend | grep TooMuchMemoryCarryOver`.
+2. **Pre-step B:** замерить распределение ads per account через одноразовый `internalQuery`.
+3. **Код:** adaptive chunk для `saveDailyBatch`, `saveRealtimeBatch`, `upsertAdsBatch`.
+4. **Verification:** 30–60 минут prod-мониторинга по acceptance выше.
+5. **Если residual остаётся:** диагностика module-level state / bundle size для `ruleEngine`, `vkApi`, `tokenRecovery`.
+
+---
+
+## 18. Архив: структура сессии primary Convex memory carry-over fix
 
 **Spec файл:** `docs/2026-05-03-convex-memory-carry-over-fix-design.md`
 
