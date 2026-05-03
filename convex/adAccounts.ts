@@ -1345,7 +1345,10 @@ export const fetchLiveCampaigns = action({
     const [adPlans, adGroups, banners] = await Promise.all([
       ctx.runAction(api.vkApi.getMtAdPlans, { accessToken }),
       ctx.runAction(internal.vkApi.getMtAdGroups, { accessToken }),
-      ctx.runAction(api.vkApi.getMtBanners, { accessToken }),
+      ctx.runAction(api.vkApi.getMtBanners, {
+        accessToken,
+        fields: "id,campaign_id,textblocks,status,moderation_status",
+      }),
     ]);
 
     // Group banners by ad_plan_id (via ad_group mapping)
@@ -1531,6 +1534,7 @@ export const syncNow = action({
       // Fetch banners (ads) from myTarget API
       const mtBanners = await ctx.runAction(api.vkApi.getMtBanners, {
         accessToken,
+        fields: "id,campaign_id,textblocks,status,moderation_status",
       });
 
       // Upsert ads (banners) and collect valid VK IDs

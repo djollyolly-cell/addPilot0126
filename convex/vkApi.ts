@@ -203,8 +203,8 @@ export interface MtBanner {
   content?: Record<string, MtBannerContentSlot>;
   status: string;
   moderation_status: string;
-  created: string;
-  updated: string;
+  created?: string;
+  updated?: string;
 }
 
 /** Return type for rate-limit header extraction. */
@@ -1066,6 +1066,7 @@ export const getMtBanners = action({
     accessToken: v.string(),
     campaignId: v.optional(v.string()),
     accountId: v.optional(v.id("adAccounts")),
+    fields: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<MtBanner[]> => {
     // Rate-limit logger for this account
@@ -1086,8 +1087,10 @@ export const getMtBanners = action({
       },
     };
 
+    // Default stays full for API compatibility. Hot sync paths pass a lightweight
+    // fields list explicitly to avoid carrying the heavy `content` payload.
     const params: Record<string, string> = {
-      fields: "id,campaign_id,textblocks,status,moderation_status,created,updated,content",
+      fields: args.fields ?? "id,campaign_id,textblocks,status,moderation_status,created,updated,content",
       limit: "250",
       _status__in: "active,blocked",
     };
@@ -2469,5 +2472,3 @@ export const fetchUzCampaigns = action({
     };
   },
 });
-
-

@@ -373,6 +373,7 @@ async function diagnoseUser(
     try {
       banners = await ctx.runAction(api.vkApi.getMtBanners, {
         accessToken: account.accessToken,
+        fields: "id,campaign_id,textblocks,status,moderation_status",
       });
       await sleep(200);
     } catch {
