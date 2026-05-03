@@ -1,6 +1,7 @@
 import { v } from "convex/values";
-import type { Id } from "./_generated/dataModel";
+import type { Id, Doc } from "./_generated/dataModel";
 import { internalAction } from "./_generated/server";
+import type { ActionCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import type { MtVideoStats, MtCampaign, MtStatItem } from "./vkApi";
 import { withTimeout } from "./vkApi";
@@ -816,7 +817,7 @@ export const dispatchSyncBatches = internalMutation({
  * Called sequentially by syncBatchWorker for each account in its chunk.
  */
 async function syncSingleAccount(
-  ctx: { runQuery: any; runMutation: any; runAction: any },
+  ctx: ActionCtx,
   accountId: Id<"adAccounts">
 ): Promise<void> {
     // Load account
@@ -1207,10 +1208,10 @@ async function syncSingleAccount(
         // Collect video stats for linked creatives
         try {
           const linkedVideos = await ctx.runQuery(internal.videos.listLinkedVideos, {});
-          const accountVideos = linkedVideos.filter((vid: any) => vid.accountId === account._id);
+          const accountVideos = linkedVideos.filter((vid: Doc<"videos">) => vid.accountId === account._id);
           if (accountVideos.length > 0) {
             const videoAdIds = accountVideos
-              .map((vid: any) => vid.vkAdId)
+              .map((vid: Doc<"videos">) => vid.vkAdId)
               .filter(Boolean)
               .join(",");
             if (videoAdIds) {
@@ -1219,7 +1220,7 @@ async function syncSingleAccount(
               });
               for (const item of videoStats) {
                 const adId = String(item.id);
-                const linkedVideo = accountVideos.find((vid: any) => vid.vkAdId === adId);
+                const linkedVideo = accountVideos.find((vid: Doc<"videos">) => vid.vkAdId === adId);
                 for (const row of item.rows) {
                   const base = row.base;
                   const vid: MtVideoStats = row.video || {};

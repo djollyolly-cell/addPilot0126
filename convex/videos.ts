@@ -671,8 +671,8 @@ ${hasTranscription ? `- Голос/текст: структура повеств
   ]
 }`;
 
-    // Build message content with frames + transcription
-    const userContent: Array<any> = [];
+    // Build message content with frames + transcription (Anthropic SDK shape)
+    const userContent: Array<unknown> = [];
 
     if (hasFrames) {
       userContent.push({ type: "text", text: `Ключевые кадры видео "${video?.filename || "video"}" (${frameImages.length} кадров по порядку):` });
@@ -752,7 +752,7 @@ ${hasTranscription ? `- Голос/текст: структура повеств
 export const discoverAdvertiserId = action({
   args: { userId: v.id("users") },
   handler: async (ctx, args) => {
-    const results: Record<string, any> = {};
+    const results: Record<string, unknown> = {};
 
     const accounts = await ctx.runQuery(api.adAccounts.list, {
       userId: args.userId,
@@ -804,7 +804,7 @@ export const discoverAdvertiserId = action({
       } catch (e) { results["v3_videos_no_account"] = { error: String(e) }; }
 
       // 6. List videos v3 WITH ?account=myTargetUserId
-      const userIdFromJson = results["user.json"]?.id;
+      const userIdFromJson = (results["user.json"] as { id?: string } | undefined)?.id;
       if (userIdFromJson) {
         try {
           const r = await fetch(`https://target.my.com/api/v3/content/videos.json?limit=5&account=${userIdFromJson}`, {
@@ -884,7 +884,7 @@ export const verifyVideoInVk = action({
     const accountInfo = await ctx.runQuery(internal.adAccounts.getInternal, { accountId: args.accountId });
     if (!accountInfo?.accessToken) throw new Error("No token");
     const token = accountInfo.accessToken;
-    const results: Record<string, any> = {};
+    const results: Record<string, unknown> = {};
 
     const domains = [
       { name: "target.my.com", base: "https://target.my.com" },
@@ -893,7 +893,7 @@ export const verifyVideoInVk = action({
     ];
 
     for (const domain of domains) {
-      const d: Record<string, any> = {};
+      const d: Record<string, unknown> = {};
 
       // user.json
       try {
@@ -931,7 +931,7 @@ export const verifyVideoInVk = action({
     }
 
     // Try ads.vk.com API patterns
-    const adsVkTests: Record<string, any> = {};
+    const adsVkTests: Record<string, unknown> = {};
 
     // ads.vk.com/api/* patterns
     const adsEndpoints = [

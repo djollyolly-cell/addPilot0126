@@ -2,6 +2,7 @@ import { v } from "convex/values";
 import { paginationOptsValidator } from "convex/server";
 import { mutation, query, action, internalAction, internalMutation, internalQuery } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { checkOrgWritable, checkFeaturesDisabled } from "./loadUnits";
 
 const VK_ADS_API_BASE = "https://target.my.com";
@@ -1567,13 +1568,13 @@ export const syncNow = action({
       // At 500 records/page, each query uses ~500 reads — well under the limit.
 
       // 1. Paginate all ads in DB, find stale _ids
-      const staleAdDocIds: Array<any> = []; // Id<"ads">[] — typed at call site
+      const staleAdDocIds: Array<Id<"ads">> = [];
       {
         let done = false;
         let cursor: string | null = null;
         while (!done) {
           const paginationOpts = { numItems: 500, cursor } as { numItems: number; cursor: string | null };
-          const page: { page: Array<{ _id: any; vkAdId: string }>; isDone: boolean; continueCursor: string } =
+          const page: { page: Array<{ _id: Id<"ads">; vkAdId: string }>; isDone: boolean; continueCursor: string } =
             await ctx.runQuery(internal.adAccounts.listAdPage, {
               accountId: args.accountId,
               paginationOpts,
@@ -1589,13 +1590,13 @@ export const syncNow = action({
       }
 
       // 2. Paginate all campaigns in DB, find stale _ids
-      const staleCampaignDocIds: Array<any> = []; // Id<"campaigns">[] — typed at call site
+      const staleCampaignDocIds: Array<Id<"campaigns">> = [];
       {
         let done = false;
         let cursor: string | null = null;
         while (!done) {
           const paginationOpts = { numItems: 500, cursor } as { numItems: number; cursor: string | null };
-          const page: { page: Array<{ _id: any; vkCampaignId: string }>; isDone: boolean; continueCursor: string } =
+          const page: { page: Array<{ _id: Id<"campaigns">; vkCampaignId: string }>; isDone: boolean; continueCursor: string } =
             await ctx.runQuery(internal.adAccounts.listCampaignPage, {
               accountId: args.accountId,
               paginationOpts,
