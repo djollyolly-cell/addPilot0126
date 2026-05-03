@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalQuery, mutation, query } from "./_generated/server";
+import { action, internalAction, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 // Bootstrap admins: used as fallback so existing admins can still access
@@ -556,5 +556,48 @@ export const listUsersModules = query({
       email: u.email,
       videoRotationEnabled: u.videoRotationEnabled ?? false,
     }));
+  },
+});
+
+// DIAGNOSTIC (temporary): adsCountByAccount — used to calibrate
+// HEAVY_BATCH_THRESHOLD in syncMetrics. Bounded/paginated to avoid
+// becoming the very memory pressure we're hunting. Remove after measurement.
+export const adsCountByAccount = internalQuery({
+  args: {},
+  handler: async (ctx) => {
+    const accounts = await ctx.db.query("adAccounts").collect();
+    const results: Array<[string, number, string]> = [];
+
+    for (const account of accounts) {
+      let count = 0;
+      let cursor: string | null = null;
+      while (true) {
+        const page = await ctx.db
+          .query("ads")
+          .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", account._id))
+          .paginate({ cursor, numItems: 200 });
+        count += page.page.length;
+        if (page.isDone) break;
+        cursor = page.continueCursor;
+      }
+      results.push([account._id, count, account.name]);
+    }
+
+    return results.sort((a, b) => b[1] - a[1]).slice(0, 20);
+  },
+});
+
+// DIAGNOSTIC (temporary): runner that invokes adsCountByAccount and logs
+// result. Self-hosted Convex Dashboard может не давать UI для internalQuery;
+// этот action видится в Functions list и его можно триггернуть через CLI.
+// Explicit return type breaks circular inference between this action and
+// internal.admin.adsCountByAccount through the generated api types.
+// Remove with adsCountByAccount.
+export const reportAdsCountByAccount = internalAction({
+  args: {},
+  handler: async (ctx): Promise<Array<[string, number, string]>> => {
+    const top = await ctx.runQuery(internal.admin.adsCountByAccount, {});
+    console.log("[diag] adsCountByAccount top-20:", JSON.stringify(top));
+    return top;
   },
 });
