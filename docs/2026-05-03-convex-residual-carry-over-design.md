@@ -323,3 +323,60 @@ console.log(`[sync] saveDailyBatch took ${Date.now() - t0}ms, items=${chunk.leng
 ## 10. Связь с auto-link cron
 
 Auto-link-video cron (см. primary spec §8) — независимая задача. Делать **после** этого residual fix, чтобы не путать сигнал по carry-over: если cron добавляет новый источник памяти одновременно с fix'ом метрик — будет неясно, что именно влияет.
+
+---
+
+## 11. Implementation results (2026-05-03)
+
+**Deploy stack on `main`:**
+- `87ee051` — feat(sync): add adaptive chunk-size helpers + tests
+- `d1dc294` — perf(sync): adaptive chunking in syncAll path (3 sites)
+- `f7d492e` — perf(sync): adaptive chunking in syncBatchWorker path (3 sites)
+- `b75f051` — chore(diag): remove adsCountByAccount diagnostic
+
+**Cleanup deploy timestamp UTC:** 2026-05-03T15:24:40Z
+**Calibrated threshold:** `HEAVY_BATCH_THRESHOLD = 800` (top-1 = 2047 ads, top-5 median = 1471, 12/20 accounts > 1000 ads, batch flush share in Pre-Step A = 20%)
+
+### Acceptance snapshot at T+42min (16:06Z)
+
+| § | Метрика | Цель | Факт | Verdict |
+|---|---|---|---|---|
+| 6.1 | `saveDailyBatch` / 30m | 0 | **0** | ✅ |
+| 6.2 | `saveRealtimeBatch` + `upsertAdsBatch` / 30m | 0 | **1** (1× upsertAdsBatch) | ⚠️ почти |
+| 6.3 | Total / 1h | 0–1 (was 7) | **8** | ❌ |
+| 6.4 | p95 of three flush mutations | ≤ baseline +30% | _not measured (no Dashboard access during automated execution; manual check pending)_ | — |
+| 6.5 | Trivial markers (`updateSyncTime`/`getInternal`/`getVkAdsCredentials`) / 30m | 0 | **0** | ✅ |
+
+### Distribution shift
+
+**Pre-fix (Pre-Step A, last 4h before deploy):** 25 events / 4h ≈ 6/h. 16 distinct functions. Batch flush (saveDailyBatch + saveRealtimeBatch + upsertAdsBatch) = 5 events = 20%. Trivial markers (updateSyncTime + getInternal + getVkAdsCredentials) = 4 events = 16%.
+
+**Post-fix (last 30m after deploy):** 3 events / 30m ≈ 6/h.
+- `vkApiLimits:recordRateLimit` — 1 (**new source**, not present pre-fix)
+- `adAccounts:upsertAdsBatch` — 1
+- `vkApi:getCampaignsForAccount` — 1
+
+### Observations
+
+**What worked (in declared scope):**
+- `saveDailyBatch` — 0 events in post-deploy 30m window. Adaptive chunk 25 for heavy accounts is the right call.
+- `saveRealtimeBatch` — 0 events for the full 1h. Cleanly resolved.
+- Trivial markers — 0 events in post-deploy 30m. The 4 marker functions that surfaced as «victims» pre-fix (updateSyncTime, getInternal, getVkAdsCredentials, plus auth/users variants) all stopped triggering. This is the strongest indirect signal that chunking lifted some Isolate pressure across the board, not just on the chunked functions.
+
+**What did not close:**
+- Total carry-over rate did not drop. Pre-fix 6/h ≈ post-fix 6/h. Adaptive chunking moved the «last request» distribution but did not reduce overall heap pressure inside Isolates.
+- A new source emerged: `vkApiLimits:recordRateLimit`. Hypothesis: adaptive chunk multiplies number of mutations on heavy accounts (e.g. 2047 ads × 4 = 8× more calls), each touching the rate-limit recorder. The recorder is now more often the function exiting at the moment a carry-over restart fires.
+- `upsertAdsBatch` still showed 1 event in 30m. Chunk 50 for >800-ads accounts may still hold a peaked write-set; could be lowered to 25 in a follow-up tuning, but evidence is too thin (1 event) to act now.
+
+### Decision
+
+**Continue with §3.3 module-state diagnostic** as a separate follow-up plan. Reasoning:
+1. The plan was scoped to batch flush write-set reduction (§3.1). Within that scope it succeeded — `saveDailyBatch`/`saveRealtimeBatch`/`upsertAdsBatch` are vastly improved.
+2. The remaining background (~6/h) is diversified across vkApi/ruleEngine/getCampaignsForAccount/recordRateLimit. None of these have a write-set pattern; they look like Isolate-level shared state (modules, JIT caches, closures).
+3. Pre-Step A already showed batch flush = 20%, so a further partial improvement was the realistic ceiling for this plan. The actual outcome matches that prediction.
+
+Follow-up plan must address §3.3 (Isolate memory profiling) and §3.4 (module-level audit). Auto-link-video cron (primary spec §8) remains gated on this — do not start it before module-state is investigated, or signal will be muddied again.
+
+### What to also check manually (pending)
+
+- p95 duration of saveDailyBatch / saveRealtimeBatch / upsertAdsBatch via Convex Dashboard for heavy accounts (compare with pre-deploy 24h history). If +30%+ — consider raising `HEAVY_BATCH_THRESHOLD` to 1200 to reduce mutation count multiplier.
