@@ -372,11 +372,11 @@ export const syncAll = internalAction({
         {
           if (adBatch.length > 0) {
             try {
-              const CHUNK = DEFAULT_UPSERT_CHUNK_SIZE;
-              for (let i = 0; i < adBatch.length; i += CHUNK) {
+              const chunk = adUpsertChunkSize(adBatch.length);
+              for (let i = 0; i < adBatch.length; i += chunk) {
                 await ctx.runMutation(internal.adAccounts.upsertAdsBatch, {
                   accountId: account._id,
-                  ads: adBatch.slice(i, i + CHUNK),
+                  ads: adBatch.slice(i, i + chunk),
                 });
               }
             } catch (err) {
@@ -448,20 +448,20 @@ export const syncAll = internalAction({
 
         // Flush metrics batches
         if (realtimeBatchAll.length > 0) {
-          const CHUNK = 200;
-          for (let i = 0; i < realtimeBatchAll.length; i += CHUNK) {
+          const chunk = realtimeMetricsChunkSize(realtimeBatchAll.length);
+          for (let i = 0; i < realtimeBatchAll.length; i += chunk) {
             await ctx.runMutation(internal.metrics.saveRealtimeBatch, {
               accountId: account._id,
-              items: realtimeBatchAll.slice(i, i + CHUNK),
+              items: realtimeBatchAll.slice(i, i + chunk),
             });
           }
         }
         if (dailyBatchAll.length > 0) {
-          const CHUNK = 100;
-          for (let i = 0; i < dailyBatchAll.length; i += CHUNK) {
+          const chunk = dailyMetricsChunkSize(dailyBatchAll.length);
+          for (let i = 0; i < dailyBatchAll.length; i += chunk) {
             await ctx.runMutation(internal.metrics.saveDailyBatch, {
               accountId: account._id,
-              items: dailyBatchAll.slice(i, i + CHUNK),
+              items: dailyBatchAll.slice(i, i + chunk),
             });
           }
         }
