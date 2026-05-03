@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { action, internalAction, internalQuery, mutation, query } from "./_generated/server";
+import { action, internalQuery, mutation, query } from "./_generated/server";
 import { internal } from "./_generated/api";
 
 // Bootstrap admins: used as fallback so existing admins can still access
@@ -559,69 +559,3 @@ export const listUsersModules = query({
   },
 });
 
-// DIAGNOSTIC (temporary): list account ids+names — needed because runner
-// action coordinates per-account counts (Convex disallows multiple paginated
-// queries in one transaction, so a monolithic count UDF doesn't fit).
-// Remove with the rest of the diagnostic block after Pre-Step B.
-export const listAccountsForCount = internalQuery({
-  args: {},
-  handler: async (ctx) => {
-    const accounts = await ctx.db.query("adAccounts").collect();
-    return accounts.map((a) => ({ _id: a._id, name: a.name }));
-  },
-});
-
-// DIAGNOSTIC (temporary): one page of ads for an account. Convex rejects
-// multiple paginate() calls per transaction (even sequentially with cursors)
-// — one paginate per UDF, period. The runner action loops cursors externally,
-// so each page is its own transaction. Remove with the rest of block.
-export const adsPageForAccount = internalQuery({
-  args: {
-    accountId: v.id("adAccounts"),
-    cursor: v.union(v.string(), v.null()),
-  },
-  handler: async (ctx, { accountId, cursor }) => {
-    const page = await ctx.db
-      .query("ads")
-      .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", accountId))
-      .paginate({ cursor, numItems: 500 });
-    return {
-      pageSize: page.page.length,
-      isDone: page.isDone,
-      continueCursor: page.continueCursor,
-    };
-  },
-});
-
-// DIAGNOSTIC (temporary): runner that aggregates per-account counts and
-// logs top-20. Each `runQuery` is its own transaction, so the per-account
-// paginated query stays within Convex's single-paginate constraint. Self-
-// hosted Dashboard может не давать UI для internalQuery; этот action
-// видится в Functions list и легко триггерится через `npx convex run`.
-// Explicit return type breaks circular inference through generated api.
-// Remove with the rest of diagnostic block.
-export const reportAdsCountByAccount = internalAction({
-  args: {},
-  handler: async (ctx): Promise<Array<[string, number, string]>> => {
-    const accounts = await ctx.runQuery(internal.admin.listAccountsForCount, {});
-    const results: Array<[string, number, string]> = [];
-    for (const acc of accounts) {
-      let count = 0;
-      let cursor: string | null = null;
-      while (true) {
-        const page: { pageSize: number; isDone: boolean; continueCursor: string } =
-          await ctx.runQuery(internal.admin.adsPageForAccount, {
-            accountId: acc._id,
-            cursor,
-          });
-        count += page.pageSize;
-        if (page.isDone) break;
-        cursor = page.continueCursor;
-      }
-      results.push([acc._id, count, acc.name]);
-    }
-    const top = results.sort((a, b) => b[1] - a[1]).slice(0, 20);
-    console.log("[diag] adsCountByAccount top-20:", JSON.stringify(top));
-    return top;
-  },
-});
