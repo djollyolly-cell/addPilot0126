@@ -58,6 +58,8 @@ export default defineSchema({
     // Agency org membership
     organizationId: v.optional(v.id("organizations")),
     passwordHash: v.optional(v.string()),  // bcrypt for org-users (Plan 2)
+    // Stamped on manual activate or auto-reactivation (used for contextual CTA window)
+    lastReactivationAt: v.optional(v.number()),
   })
     .index("by_vkId", ["vkId"])
     .index("by_email", ["email"])
@@ -262,6 +264,10 @@ export default defineSchema({
     lastTriggeredAt: v.optional(v.number()),
     createdAt: v.number(),
     updatedAt: v.number(),
+    // Set when updateLimitsOnDowngrade disables a rule due to billing tier change.
+    // Cleared (via replace) by updateLimitsOnUpgrade or by any user-initiated rule mutation.
+    // NOT set on video_rotation rules (rotation is sensitive to staleness — see spec §2).
+    disabledByBillingAt: v.optional(v.number()),
   })
     .index("by_userId", ["userId"])
     .index("by_userId_active", ["userId", "isActive"])

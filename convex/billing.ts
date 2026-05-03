@@ -1396,7 +1396,19 @@ export const updateLimitsOnDowngrade = internalMutation({
     const deactivatedRuleIds: string[] = [];
 
     for (const rule of rulesToDeactivate) {
-      await ctx.db.patch(rule._id, { isActive: false, updatedAt: Date.now() });
+      const isRotation = rule.type === "video_rotation";
+      // video_rotation НЕ маркируется (риск автозапуска ротации с устаревшими креативами при upgrade —
+      // см. спек §2). Reactive-правила получают marker для последующей auto-reactivation.
+      await ctx.db.patch(rule._id, {
+        isActive: false,
+        updatedAt: Date.now(),
+        ...(isRotation ? {} : { disabledByBillingAt: Date.now() }),
+      });
+      // Останавливаем фоновый процесс ротации для video_rotation. Без этого rotationState
+      // продолжает крутиться до health-check'а — pre-existing bug, попутно чиним.
+      if (isRotation) {
+        await ctx.scheduler.runAfter(0, internal.videoRotation.deactivate, { ruleId: rule._id });
+      }
       deactivatedRuleIds.push(rule._id);
     }
 

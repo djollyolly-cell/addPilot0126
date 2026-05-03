@@ -1,10 +1,48 @@
 import { v } from "convex/values";
 import { mutation, query, action, internalQuery } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { checkOrgWritable } from "./loadUnits";
 import type { GenericDatabaseReader } from "convex/server";
 import type { DataModel, Doc } from "./_generated/dataModel";
+
+// Whitelist patch type — запрещает передачу системных полей _id / _creationTime,
+// чтобы caller не мог случайно их положить в replace и сломать схему.
+type RulePatch = Partial<Omit<Doc<"rules">, "_id" | "_creationTime">>;
+
+/**
+ * Применяет patch к правилу и физически удаляет disabledByBillingAt маркер если он есть.
+ *
+ * Зачем replace вместо patch: в Convex `patch({ field: undefined })` — no-op (поле остаётся).
+ * Чтобы реально снять маркер, нужен `replace()` с body без этого поля.
+ *
+ * Используется в rules.toggleActive и rules.update — любое ручное касание правила юзером
+ * означает «правило стало моим, не биллинговым», маркер больше не отражает реальность.
+ */
+async function patchRuleAndClearBillingMarker(
+  ctx: MutationCtx,
+  ruleId: Id<"rules">,
+  patch: RulePatch
+): Promise<void> {
+  const rule = await ctx.db.get(ruleId);
+  if (!rule) throw new Error("Правило не найдено");
+
+  // Strip undefined-valued keys из patch — иначе они уйдут в replace и могут сломать схему
+  // (если caller передал { name: undefined } по optional полю).
+  const cleanPatch = Object.fromEntries(
+    Object.entries(patch).filter(([, v]) => v !== undefined)
+  ) as RulePatch;
+
+  if (rule.disabledByBillingAt !== undefined) {
+    // CRITICAL: replace(id, value) ожидает body БЕЗ системных полей. Destructure обязателен.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { _id, _creationTime, disabledByBillingAt: _drop, ...rest } = rule;
+    await ctx.db.replace(ruleId, { ...rest, ...cleanPatch, updatedAt: Date.now() });
+  } else {
+    await ctx.db.patch(ruleId, { ...cleanPatch, updatedAt: Date.now() });
+  }
+}
 
 /**
  * Check if caller can modify this rule (ownership or org membership with "rules" permission).
@@ -831,7 +869,10 @@ export const update = mutation({
       patch.targetAdIds = args.targetAdIds;
     }
 
-    await ctx.db.patch(args.ruleId, patch);
+    // Используем helper чтобы автоматически снять disabledByBillingAt маркер
+    // (ручное редактирование = «правило стало моим»). updatedAt helper выставит сам.
+    delete patch.updatedAt;
+    await patchRuleAndClearBillingMarker(ctx, args.ruleId, patch as RulePatch);
 
     // Re-activate video_rotation if campaigns or key params changed while rule is active
     if (rule.type === "video_rotation" && rule.isActive) {
@@ -909,9 +950,8 @@ export const toggleActive = mutation({
       }
     }
 
-    await ctx.db.patch(args.ruleId, {
+    await patchRuleAndClearBillingMarker(ctx, args.ruleId, {
       isActive: newActive,
-      updatedAt: Date.now(),
     });
 
     // Schedule rotation activate/deactivate (must run outside mutation)

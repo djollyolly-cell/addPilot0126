@@ -1064,4 +1064,114 @@ describe("rules", () => {
     const updated = await t.query(api.rules.get, { ruleId });
     expect(updated?.targetAccountIds).toHaveLength(2);
   });
+
+  // ── Task 1: disabledByBillingAt cleanup при ручных изменениях ──
+
+  test("rules.toggleActive физически удаляет disabledByBillingAt при включении (replace path)", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Marked Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Имитируем биллинг-выключение: помечаем правило вручную через t.run
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ruleId, {
+        isActive: false,
+        disabledByBillingAt: Date.now(),
+      });
+    });
+
+    // Юзер сам включает обратно через toggleActive
+    await t.mutation(api.rules.toggleActive, { ruleId, userId });
+
+    const ruleAfter = await t.run(async (ctx) => ctx.db.get(ruleId));
+    expect(ruleAfter?.isActive).toBe(true);
+    // Физически удалено — поле отсутствует в записи
+    expect(ruleAfter?.disabledByBillingAt).toBeUndefined();
+    expect("disabledByBillingAt" in (ruleAfter ?? {})).toBe(false);
+  });
+
+  test("rules.toggleActive без маркера работает как раньше (patch path, no regression)", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Plain Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Без маркера — toggle off → on
+    await t.mutation(api.rules.toggleActive, { ruleId, userId });
+    const offRule = await t.run(async (ctx) => ctx.db.get(ruleId));
+    expect(offRule?.isActive).toBe(false);
+
+    await t.mutation(api.rules.toggleActive, { ruleId, userId });
+    const onRule = await t.run(async (ctx) => ctx.db.get(ruleId));
+    expect(onRule?.isActive).toBe(true);
+    expect(onRule?.disabledByBillingAt).toBeUndefined();
+  });
+
+  test("rules.update физически удаляет disabledByBillingAt при любом редактировании", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Updated Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    // Имитируем биллинг-маркер
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ruleId, {
+        isActive: false,
+        disabledByBillingAt: Date.now(),
+      });
+    });
+
+    // Юзер просто переименовал правило — маркер должен сняться («стало моим»)
+    await t.mutation(api.rules.update, {
+      ruleId,
+      userId,
+      name: "Renamed By User",
+    });
+
+    const after = await t.run(async (ctx) => ctx.db.get(ruleId));
+    expect(after?.name).toBe("Renamed By User");
+    expect(after?.disabledByBillingAt).toBeUndefined();
+    expect("disabledByBillingAt" in (after ?? {})).toBe(false);
+    // isActive сам по себе update не меняет
+    expect(after?.isActive).toBe(false);
+  });
+
+  test("rules.create НЕ выставляет disabledByBillingAt", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const ruleId = await t.mutation(api.rules.create, {
+      userId,
+      name: "Fresh Rule",
+      type: "cpl_limit",
+      value: 500,
+      actions: { stopAd: false, notify: true },
+      targetAccountIds: [accountId],
+    });
+
+    const rule = await t.run(async (ctx) => ctx.db.get(ruleId));
+    expect(rule?.disabledByBillingAt).toBeUndefined();
+  });
 });
