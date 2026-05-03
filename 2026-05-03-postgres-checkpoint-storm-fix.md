@@ -1051,3 +1051,55 @@ Acceptance residual spec:
 - Memory: `websocket-1006-investigation.md` — краткий контекст.
 - Memory: `postgres-tuning.md` — состояние Postgres-фикса.
 - Реальный код: `convex/syncMetrics.ts:938+`, `convex/vkApi.ts:getMtBanners`, `convex/adAccounts.ts:1709`.
+
+---
+
+## 19. Residual Convex carry-over fix: что сделано и к чему привело
+
+**Spec:** `docs/2026-05-03-convex-residual-carry-over-design.md`
+
+**Deploy stack:**
+- `87ee051` — добавлены `HEAVY_BATCH_THRESHOLD`, helper'ы `dailyMetricsChunkSize`, `realtimeMetricsChunkSize`, `adUpsertChunkSize` и unit-тесты.
+- `d1dc294` — adaptive chunking применён в `syncAll` для `upsertAdsBatch`, `saveRealtimeBatch`, `saveDailyBatch`.
+- `f7d492e` — adaptive chunking применён в `syncBatchWorker` для тех же 3 batch flush sites.
+- `b75f051` — временная диагностика `adsCountByAccount` удалена после калибровки порога.
+
+**Калибровка:** `HEAVY_BATCH_THRESHOLD = 800`.
+Причина: production diagnostic показал top-1 = 2047 ads, top-5 median = 1471, 12/20 тяжёлых аккаунтов >1000 ads. Порог 800 ловит тяжёлые аккаунты, но не бьёт сотни лёгких аккаунтов.
+
+**Локальная верификация после реализации:**
+- `tsc --noEmit -p convex/tsconfig.json` — clean.
+- `vitest convex/syncMetrics.test.ts` — 6/6 pass.
+- `npm run lint` — pass, 57/60 warnings.
+
+### 19.1. Production result
+
+Свежий замер 2026-05-03 16:56 UTC:
+
+| Window | Total `TooMuchMemoryCarryOver` | Batch flush events | Marker/victim events | Вывод |
+|---|---:|---:|---:|---|
+| 1h | 9 | 2 (`upsertAdsBatch` 2) | 2 (`vkApiLimits:recordRateLimit`) | acceptance провален |
+| 2h | 17 | 4 (`saveDailyBatch` 2, `upsertAdsBatch` 2) | 5 | acceptance провален |
+| 4h | 29 | 7 (`saveDailyBatch` 3, `upsertAdsBatch` 3, `saveRealtimeBatch` 1) | 8 | фон остаётся высоким |
+
+### 19.2. Что реально улучшилось
+
+- `saveRealtimeBatch` почти ушёл из last-request carry-over: 0 событий в свежем 1h/2h окне, 1 событие за 4h.
+- `saveDailyBatch` улучшился в свежем 1h окне, но не исчез полностью на 2h/4h окнах.
+- `upsertAdsBatch` всё ещё появляется: chunk 50 снизил размер mutation, но не добил write-set pressure полностью.
+- Batch/write-set pressure больше не выглядит единственной причиной. Распределение сместилось в `vkApi.*`, `ruleEngine.*`, `getCampaignsForAccount/getCampaignTypeMap`, `vkApiLimits.recordRateLimit`.
+
+### 19.3. Что не закрыто
+
+Цель residual spec была `0-1 TooMuchMemoryCarryOver / hour`. Фактически после деплоя остаётся около `8.5-9/hour` на свежих окнах. Поэтому residual fix — **частичный**, не финальный.
+
+Важное уточнение по latency: adaptive chunking **мог** увеличить общее число mutations на тяжёлых аккаунтах, но p95 ещё не измерен. Нельзя утверждать, что latency выросла или снизилась, пока не проверены Convex Dashboard percentiles для `saveDailyBatch`, `saveRealtimeBatch`, `upsertAdsBatch`.
+
+### 19.4. Следующее решение
+
+Открывать follow-up по `docs/2026-05-03-convex-residual-carry-over-design.md` §3.3/§3.4:
+- Isolate memory profiling.
+- Module-level audit для `vkApi`, `ruleEngine`, `getCampaignsForAccount/getCampaignTypeMap`, `vkApiLimits`.
+- Не запускать auto-link-video cron до этой диагностики, чтобы не добавить новый memory-heavy path и не смешать сигнал.
+
+Не стоит слепо снижать chunks ещё ниже до p95-замера: меньше chunk = меньше per-mutation memory, но больше mutations и больше служебной нагрузки.
