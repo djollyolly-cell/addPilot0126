@@ -1907,7 +1907,7 @@ export const upsertAd = mutation({
       .first();
 
     if (existing) {
-      if (hasAdChanged(existing, { name: args.name, status: args.status, approved: args.approved, campaignId: args.campaignId as string })) {
+      if (hasAdChanged(existing, { name: args.name, status: args.status, approved: args.approved, campaignId: args.campaignId })) {
         const patch: Record<string, unknown> = {
           name: args.name,
           status: args.status,
@@ -1986,14 +1986,14 @@ export const upsertAdsBatch = internalMutation({
         .first();
 
       if (existing) {
-        if (hasAdChanged(existing, { ...ad, campaignId: campaignId ?? undefined })) {
+        if (hasAdChanged(existing, { name: ad.name, status: ad.status, approved: ad.approved, campaignId })) {
           const patch: Record<string, unknown> = {
             name: ad.name,
             status: ad.status,
             updatedAt: now,
           };
           if (ad.approved !== undefined) patch.approved = ad.approved;
-          if (campaignId !== undefined) patch.campaignId = campaignId; // must patch or dirty-check loops forever
+          patch.campaignId = campaignId; // must patch or dirty-check loops forever
           await ctx.db.patch(existing._id, patch);
         }
       } else {

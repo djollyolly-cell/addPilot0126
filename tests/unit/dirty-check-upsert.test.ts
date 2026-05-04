@@ -90,4 +90,11 @@ describe("hasAdChanged", () => {
       { name: "Ad", status: "active", approved: "yes", campaignId: "camp_1" }
     )).toBe(false);
   });
+
+  it("detects approved change from undefined to value", () => {
+    expect(hasAdChanged(
+      { name: "Ad", status: "active" },
+      { name: "Ad", status: "active", approved: "yes" }
+    )).toBe(true);
+  });
 });
