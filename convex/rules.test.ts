@@ -1174,4 +1174,135 @@ describe("rules", () => {
     const rule = await t.run(async (ctx) => ctx.db.get(ruleId));
     expect(rule?.disabledByBillingAt).toBeUndefined();
   });
+
+  // ── Task 4: getReactivationCta — контекстный CTA с окном 7 дней ──
+
+  test("getReactivationCta: НЕ показывает у юзера без lastReactivationAt", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    // Создадим disabled-правило (юзер сам выключил)
+    await t.run(async (ctx) => {
+      await ctx.db.insert("rules", {
+        userId,
+        name: "User Disabled",
+        type: "cpl_limit",
+        conditions: { metric: "cpl", operator: ">", value: 500 },
+        actions: { stopAd: false, notify: true },
+        targetAccountIds: [accountId],
+        isActive: false,
+        triggerCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+
+    const cta = await t.query(api.rules.getReactivationCta, { userId });
+    expect(cta.show).toBe(false);
+    expect(cta.count).toBe(0);
+  });
+
+  test("getReactivationCta: show=true в окне 7 дней при наличии user-disabled правила", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(userId, { lastReactivationAt: Date.now() - 1000 });
+      await ctx.db.insert("rules", {
+        userId,
+        name: "User Disabled",
+        type: "cpl_limit",
+        conditions: { metric: "cpl", operator: ">", value: 500 },
+        actions: { stopAd: false, notify: true },
+        targetAccountIds: [accountId],
+        isActive: false,
+        triggerCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+
+    const cta = await t.query(api.rules.getReactivationCta, { userId });
+    expect(cta.show).toBe(true);
+    expect(cta.count).toBe(1);
+    expect(cta.hasVideoRotation).toBe(false);
+  });
+
+  test("getReactivationCta: show=false после 7 дней", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    const eightDaysAgo = Date.now() - 8 * 24 * 60 * 60 * 1000;
+    await t.run(async (ctx) => {
+      await ctx.db.patch(userId, { lastReactivationAt: eightDaysAgo });
+      await ctx.db.insert("rules", {
+        userId,
+        name: "User Disabled",
+        type: "cpl_limit",
+        conditions: { metric: "cpl", operator: ">", value: 500 },
+        actions: { stopAd: false, notify: true },
+        targetAccountIds: [accountId],
+        isActive: false,
+        triggerCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+
+    const cta = await t.query(api.rules.getReactivationCta, { userId });
+    expect(cta.show).toBe(false);
+  });
+
+  test("getReactivationCta: hasVideoRotation=true если выключено rotation-правило", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(userId, { lastReactivationAt: Date.now() });
+      await ctx.db.insert("rules", {
+        userId,
+        name: "Rotation",
+        type: "video_rotation",
+        conditions: { metric: "rotation", operator: "=", value: 0, slotDurationHours: 4, dailyBudget: 1000 },
+        actions: { stopAd: false, notify: true },
+        targetAccountIds: [accountId],
+        isActive: false,
+        triggerCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+
+    const cta = await t.query(api.rules.getReactivationCta, { userId });
+    expect(cta.show).toBe(true);
+    expect(cta.count).toBe(1);
+    expect(cta.hasVideoRotation).toBe(true);
+  });
+
+  test("getReactivationCta: НЕ включает биллинг-выключенные reactive (auto-reactivation их вернёт)", async () => {
+    const t = convexTest(schema);
+    const { userId, accountId } = await createTestUserWithAccount(t);
+
+    await t.run(async (ctx) => {
+      await ctx.db.patch(userId, { lastReactivationAt: Date.now() });
+      // Биллинг-выключенный — НЕ должен попасть в count
+      await ctx.db.insert("rules", {
+        userId,
+        name: "Billing Disabled",
+        type: "cpl_limit",
+        conditions: { metric: "cpl", operator: ">", value: 500 },
+        actions: { stopAd: false, notify: true },
+        targetAccountIds: [accountId],
+        isActive: false,
+        disabledByBillingAt: Date.now() - 1000,
+        triggerCount: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+    });
+
+    const cta = await t.query(api.rules.getReactivationCta, { userId });
+    expect(cta.show).toBe(false);
+    expect(cta.count).toBe(0);
+  });
 });

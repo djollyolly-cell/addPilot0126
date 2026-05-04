@@ -333,6 +333,45 @@ export const get = query({
   },
 });
 
+// Контекстный CTA для /accounts: показывает напоминание включить правила, которые
+// auto-reactivation НЕ вернула — это (a) выключенные юзером (нет маркера) или
+// (b) video_rotation (мы её не авто-реактивируем по соображениям безопасности).
+//
+// Окно — 7 дней после reactivation event. Не показывается у новых юзеров без
+// lastReactivationAt и через неделю после последней реактивации. Это compromise
+// в пользу простоты — не пытаемся матчить правила к конкретным reactivated кабинетам.
+const REACTIVATION_CTA_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+
+export const getReactivationCta = query({
+  args: { userId: v.id("users") },
+  handler: async (ctx, args) => {
+    const user = await ctx.db.get(args.userId);
+    if (!user?.lastReactivationAt) {
+      return { show: false, count: 0, hasVideoRotation: false };
+    }
+    const withinWindow = Date.now() - user.lastReactivationAt < REACTIVATION_CTA_WINDOW_MS;
+    if (!withinWindow) {
+      return { show: false, count: 0, hasVideoRotation: false };
+    }
+
+    const rules = await ctx.db
+      .query("rules")
+      .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+      .collect();
+    const candidates = rules.filter(
+      (r) =>
+        !r.isActive &&
+        (r.disabledByBillingAt === undefined || r.type === "video_rotation")
+    );
+
+    return {
+      show: candidates.length > 0,
+      count: candidates.length,
+      hasVideoRotation: candidates.some((r) => r.type === "video_rotation"),
+    };
+  },
+});
+
 // Create a new rule
 export const create = mutation({
   args: {

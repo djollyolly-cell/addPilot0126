@@ -12,6 +12,15 @@ import { useNavigate } from 'react-router-dom';
 import { cn } from '../lib/utils';
 import { Id } from '../../convex/_generated/dataModel';
 
+// Russian pluralization for "правил(о/а)"
+function pluralRules(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'правило';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'правила';
+  return 'правил';
+}
+
 export function AccountsPage() {
   const { user, isAdmin } = useAuth();
   const [isConnecting, setIsConnecting] = useState(false);
@@ -28,6 +37,13 @@ export function AccountsPage() {
 
   const limits = useQuery(
     api.users.getLimits,
+    user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
+  );
+
+  // CTA окно 7 дней после reactivation event — напоминание включить правила,
+  // которые auto-reactivation не вернула (юзер-выключенные + video_rotation).
+  const reactivationCta = useQuery(
+    api.rules.getReactivationCta,
     user?.userId ? { userId: user.userId as Id<"users"> } : 'skip'
   );
 
@@ -247,6 +263,27 @@ export function AccountsPage() {
         >
           <AlertCircle className="h-4 w-4 shrink-0" />
           <span>{error}</span>
+        </div>
+      )}
+
+      {/* Reactivation CTA — окно 7 дней после reactivation. Напоминаем включить
+          правила, которые auto-reactivation не вернула (юзер-выключенные + video_rotation). */}
+      {reactivationCta?.show && (
+        <div
+          className="flex items-center justify-between gap-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-900 text-sm"
+          data-testid="reactivation-cta"
+        >
+          <span>
+            {reactivationCta.count} {pluralRules(reactivationCta.count)} требуют ручного включения в /rules
+            {reactivationCta.hasVideoRotation && ' (включая правила ротации видео — проверьте актуальность креативов перед запуском)'}
+          </span>
+          <button
+            type="button"
+            onClick={() => navigate('/rules')}
+            className="font-medium hover:underline shrink-0"
+          >
+            Перейти →
+          </button>
         </div>
       )}
 
