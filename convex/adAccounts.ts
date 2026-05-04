@@ -1813,6 +1813,7 @@ export function hasCampaignChanged(
 ): boolean {
   if (existing.name !== incoming.name) return true;
   if (existing.status !== incoming.status) return true;
+  // undefined means "caller did not provide this field" — treat as no change requested
   if (incoming.adPlanId !== undefined && existing.adPlanId !== incoming.adPlanId) return true;
   if (incoming.dailyLimit !== undefined && existing.dailyLimit !== incoming.dailyLimit) return true;
   if (incoming.allLimit !== undefined && existing.allLimit !== incoming.allLimit) return true;

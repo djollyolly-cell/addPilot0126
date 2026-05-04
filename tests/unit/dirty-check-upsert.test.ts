@@ -45,3 +45,5 @@ describe("hasCampaignChanged", () => {
     expect(hasCampaignChanged(base, { ...base, dailyLimit: 0 })).toBe(true);
   });
 });
+
+// TODO Task 2: hasAdChanged tests go here
