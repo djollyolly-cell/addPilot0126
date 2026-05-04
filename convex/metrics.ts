@@ -75,7 +75,7 @@ export const saveDaily = internalMutation({
 
       if (!metricsChanged) return existing._id;
 
-      // Update existing record (overwrite with latest API data)
+      // Metrics changed: update with latest API data
       const patch: Record<string, unknown> = {
         impressions: args.impressions,
         clicks: args.clicks,
