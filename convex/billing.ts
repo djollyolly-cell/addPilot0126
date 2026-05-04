@@ -1,6 +1,8 @@
 import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
+import type { MutationCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 
 // Tier limits and pricing
 export const TIERS = {
@@ -887,6 +889,15 @@ export const handleBepaidWebhook = internalMutation({
           ...lockedUpdate,
           ...proLimitPatch,
         });
+
+        // Auto-reactivation: вернуть paused-кабинеты и billing-disabled rules.
+        // Идемпотентно — webhook retry безопасен. Вызываем helper напрямую
+        // (Convex запрещает mutation→mutation через runMutation).
+        await applyUpgradeReactivation(
+          ctx,
+          payment.userId,
+          payment.tier as UpgradeTier
+        );
       }
 
       console.log(`bePaid: Subscription ${payment.tier} activated for user ${payment.userId} (${totalDays} days, promo: ${payment.promoCode || "none"}, orgId: ${payment.orgId || "none"})`);
@@ -1069,6 +1080,10 @@ export const processPayment = mutation({
       ...lockedUpdate,
       ...proLimitPatch,
     });
+
+    // Auto-reactivation: симметрично bePaid webhook flow. Без этого вызова mock payment
+    // в dev/test проходит без восстановления paused-кабинетов и billing-disabled rules.
+    await applyUpgradeReactivation(ctx, args.userId, args.tier);
 
     return {
       success: true,
@@ -1416,6 +1431,160 @@ export const updateLimitsOnDowngrade = internalMutation({
       accountsDeactivated: deactivatedIds.length,
       rulesDeactivated: deactivatedRuleIds.length,
     };
+  },
+});
+
+// Helper: реализация upgrade-восстановления. Вызывается:
+//  - напрямую из processPayment / handleBepaidWebhook (mutations, нельзя runMutation→mutation)
+//  - через тонкую обёртку updateLimitsOnUpgrade (для тестов и внешних callers через runMutation из action)
+// Convex запрещает mutation→mutation через ctx.runMutation, поэтому общий код вынесен сюда.
+
+type UpgradeTier = "freemium" | "start" | "pro";
+
+async function applyUpgradeReactivation(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  newTier: UpgradeTier
+): Promise<{ accountsActivated: number; rulesReactivated: number; skipped?: string }> {
+  // Skip org-members симметрично downgrade — у них своя grace policy
+  const user = await ctx.db.get(userId);
+  if (!user) return { accountsActivated: 0, rulesReactivated: 0 };
+  if (user.organizationId) {
+    return {
+      accountsActivated: 0,
+      rulesReactivated: 0,
+      skipped: "user is in organization, upgrade flow N/A",
+    };
+  }
+
+  // Compute new account limit
+  const newAccountLimit =
+    newTier === "pro"
+      ? user.proAccountLimit ?? TIERS.pro.accountsLimit
+      : TIERS[newTier].accountsLimit;
+
+  // Reactivate paused accounts up to limit (oldest first by createdAt)
+  const accounts = await ctx.db
+    .query("adAccounts")
+    .withIndex("by_userId", (q) => q.eq("userId", userId))
+    .collect();
+  const activeCount = accounts.filter(
+    (a) => a.status === "active" || a.status === "abandoned"
+  ).length;
+  const pausedAccounts = accounts
+    .filter((a) => a.status === "paused")
+    .sort((a, b) => a.createdAt - b.createdAt);
+
+  const slotsAvailable =
+    newAccountLimit < 0
+      ? pausedAccounts.length
+      : Math.max(0, newAccountLimit - activeCount);
+  const accountsToActivate = pausedAccounts.slice(0, slotsAvailable);
+
+  let reactivatedAt: number | null = null;
+  for (const account of accountsToActivate) {
+    await ctx.db.patch(account._id, { status: "active" });
+    reactivatedAt = Date.now();
+    // Audit log: вызываем helper напрямую (не через runMutation), потому что
+    // mutation→mutation запрещено в Convex. Используем ctx.db.insert.
+    try {
+      await ctx.db.insert("auditLog", {
+        userId,
+        category: "account",
+        action: "account_activated",
+        status: "success",
+        details: {
+          accountName: account.name,
+          vkAccountId: account.vkAccountId,
+          source: "auto_reactivation",
+        },
+        createdAt: Date.now(),
+      });
+    } catch {
+      /* non-critical */
+    }
+  }
+
+  // Reactivate ONLY billing-disabled reactive rules — never user-disabled,
+  // never video_rotation (defensive filter — marker shouldn't exist on rotation,
+  // но защищаемся от будущих миграций / ручных patches).
+  const newRulesLimit =
+    TIERS[newTier].rulesLimit === -1
+      ? Infinity
+      : TIERS[newTier].rulesLimit;
+
+  const rules = await ctx.db
+    .query("rules")
+    .withIndex("by_userId", (q) => q.eq("userId", userId))
+    .collect();
+  const activeRulesCount = rules.filter((r) => r.isActive).length;
+  const billingDisabledRules = rules
+    .filter(
+      (r) =>
+        !r.isActive &&
+        r.disabledByBillingAt !== undefined &&
+        r.type !== "video_rotation"
+    )
+    .sort(
+      (a, b) =>
+        (a.disabledByBillingAt ?? 0) - (b.disabledByBillingAt ?? 0)
+    );
+
+  const ruleSlotsAvailable = Math.max(0, newRulesLimit - activeRulesCount);
+  const rulesToReactivate = billingDisabledRules.slice(0, ruleSlotsAvailable);
+
+  for (const rule of rulesToReactivate) {
+    // Physically remove disabledByBillingAt via replace() — patch({ field: undefined })
+    // is no-op in Convex. Без удаления повторный вызов нашёл бы те же правила и
+    // продублировал audit log (нарушение идемпотентности).
+    // CRITICAL: replace ожидает body БЕЗ системных полей. Destructure обязателен.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { _id, _creationTime, disabledByBillingAt: _drop, ...rest } = rule;
+    await ctx.db.replace(rule._id, {
+      ...rest,
+      isActive: true,
+      updatedAt: Date.now(),
+    });
+    reactivatedAt = Date.now();
+    try {
+      await ctx.db.insert("auditLog", {
+        userId,
+        category: "rule",
+        action: "rule_reactivated",
+        status: "success",
+        details: { ruleName: rule.name, source: "auto_reactivation" },
+        createdAt: Date.now(),
+      });
+    } catch {
+      /* non-critical */
+    }
+  }
+
+  // Stamp lastReactivationAt только если что-то реально реактивировано —
+  // иначе пустой вызов (webhook retry, no-op upgrade) сбросит окно CTA.
+  if (reactivatedAt) {
+    await ctx.db.patch(userId, { lastReactivationAt: reactivatedAt });
+  }
+
+  return {
+    accountsActivated: accountsToActivate.length,
+    rulesReactivated: rulesToReactivate.length,
+  };
+}
+
+// Public-facing wrapper: для вызова из тестов и из actions через runMutation.
+// Внутри mutations использовать applyUpgradeReactivation напрямую.
+export const updateLimitsOnUpgrade = internalMutation({
+  args: {
+    userId: v.id("users"),
+    newTier: v.union(
+      v.literal("freemium"),
+      v.literal("start"),
+      v.literal("pro")
+    ),
+  },
+  handler: async (ctx, args) => {
+    return await applyUpgradeReactivation(ctx, args.userId, args.newTier);
   },
 });
 
