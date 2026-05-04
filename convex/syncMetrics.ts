@@ -137,6 +137,10 @@ export const syncAll = internalAction({
 
     let consecutiveCampaignApiFailures = 0;
 
+    const cycleC = { inserted: 0, patched: 0, skipped: 0 };
+    const cycleA = { inserted: 0, patched: 0, skipped: 0 };
+    const cycleM = { inserted: 0, patched: 0, skipped: 0 };
+
     for (const account of accounts) {
       try {
         await withTimeout((async () => {
@@ -352,13 +356,19 @@ export const syncAll = internalAction({
         // Auto-upsert campaigns (ad groups) + ad_plans — batched
         if (campaignBatch.length > 0) {
           try {
+            const cTotal = { inserted: 0, patched: 0, skipped: 0 };
             const chunk = campaignUpsertChunkSize(campaignBatch.length);
             for (let i = 0; i < campaignBatch.length; i += chunk) {
-              await ctx.runMutation(internal.adAccounts.upsertCampaignsBatch, {
+              const r = await ctx.runMutation(internal.adAccounts.upsertCampaignsBatch, {
                 accountId: account._id,
                 campaigns: campaignBatch.slice(i, i + chunk),
               });
+              cTotal.inserted += r.inserted; cTotal.patched += r.patched; cTotal.skipped += r.skipped;
             }
+            if (cTotal.inserted + cTotal.patched > 0) {
+              console.log(`[syncAll] campaigns «${account.name}»: inserted=${cTotal.inserted} patched=${cTotal.patched} skipped=${cTotal.skipped}`);
+            }
+            cycleC.inserted += cTotal.inserted; cycleC.patched += cTotal.patched; cycleC.skipped += cTotal.skipped;
           } catch (err) {
             console.error(`[syncAll] upsertCampaignsBatch failed for «${account.name}»:`, err);
             try { await ctx.runMutation(internal.systemLogger.log, {
@@ -372,13 +382,19 @@ export const syncAll = internalAction({
         {
           if (adBatch.length > 0) {
             try {
+              const aTotal = { inserted: 0, patched: 0, skipped: 0 };
               const chunk = adUpsertChunkSize(adBatch.length);
               for (let i = 0; i < adBatch.length; i += chunk) {
-                await ctx.runMutation(internal.adAccounts.upsertAdsBatch, {
+                const r = await ctx.runMutation(internal.adAccounts.upsertAdsBatch, {
                   accountId: account._id,
                   ads: adBatch.slice(i, i + chunk),
                 });
+                aTotal.inserted += r.inserted; aTotal.patched += r.patched; aTotal.skipped += r.skipped;
               }
+              if (aTotal.inserted + aTotal.patched > 0) {
+                console.log(`[syncAll] ads «${account.name}»: inserted=${aTotal.inserted} patched=${aTotal.patched} skipped=${aTotal.skipped}`);
+              }
+              cycleA.inserted += aTotal.inserted; cycleA.patched += aTotal.patched; cycleA.skipped += aTotal.skipped;
             } catch (err) {
               console.error(`[syncAll] upsertAdsBatch failed for «${account.name}»:`, err);
               try { await ctx.runMutation(internal.systemLogger.log, {
@@ -457,13 +473,19 @@ export const syncAll = internalAction({
           }
         }
         if (dailyBatchAll.length > 0) {
+          const mTotal = { inserted: 0, patched: 0, skipped: 0 };
           const chunk = dailyMetricsChunkSize(dailyBatchAll.length);
           for (let i = 0; i < dailyBatchAll.length; i += chunk) {
-            await ctx.runMutation(internal.metrics.saveDailyBatch, {
+            const r = await ctx.runMutation(internal.metrics.saveDailyBatch, {
               accountId: account._id,
               items: dailyBatchAll.slice(i, i + chunk),
             });
+            mTotal.inserted += r.inserted; mTotal.patched += r.patched; mTotal.skipped += r.skipped;
           }
+          if (mTotal.inserted + mTotal.patched > 0) {
+            console.log(`[syncAll] metrics «${account.name}»: inserted=${mTotal.inserted} patched=${mTotal.patched} skipped=${mTotal.skipped}`);
+          }
+          cycleM.inserted += mTotal.inserted; cycleM.patched += mTotal.patched; cycleM.skipped += mTotal.skipped;
         }
 
         // Collect video stats for linked creatives
@@ -635,6 +657,8 @@ export const syncAll = internalAction({
         }
       }
     }
+
+    console.log(`[syncAll] cycle complete: campaigns inserted=${cycleC.inserted} patched=${cycleC.patched} skipped=${cycleC.skipped} | ads inserted=${cycleA.inserted} patched=${cycleA.patched} skipped=${cycleA.skipped} | metrics inserted=${cycleM.inserted} patched=${cycleM.patched} skipped=${cycleM.skipped}`);
 
     // checkAllRules removed — rules now run per-account inside the loop above
 
@@ -1126,12 +1150,17 @@ async function syncSingleAccount(
         // Auto-upsert campaigns (ad groups) + ad_plans — batched
         if (campaignBatch.length > 0) {
           try {
+            const cTotal = { inserted: 0, patched: 0, skipped: 0 };
             const chunk = campaignUpsertChunkSize(campaignBatch.length);
             for (let i = 0; i < campaignBatch.length; i += chunk) {
-              await ctx.runMutation(internal.adAccounts.upsertCampaignsBatch, {
+              const r = await ctx.runMutation(internal.adAccounts.upsertCampaignsBatch, {
                 accountId: account._id,
                 campaigns: campaignBatch.slice(i, i + chunk),
               });
+              cTotal.inserted += r.inserted; cTotal.patched += r.patched; cTotal.skipped += r.skipped;
+            }
+            if (cTotal.inserted + cTotal.patched > 0) {
+              console.log(`[syncBatch] campaigns «${account.name}»: inserted=${cTotal.inserted} patched=${cTotal.patched} skipped=${cTotal.skipped}`);
             }
           } catch (err) {
             console.error(`[syncBatch] upsertCampaignsBatch failed for "${account.name}":`, err);
@@ -1145,12 +1174,17 @@ async function syncSingleAccount(
         // Auto-upsert ads from lightweight getMtBanners data — batched
         if (adBatch.length > 0) {
           try {
+            const aTotal = { inserted: 0, patched: 0, skipped: 0 };
             const chunk = adUpsertChunkSize(adBatch.length);
             for (let i = 0; i < adBatch.length; i += chunk) {
-              await ctx.runMutation(internal.adAccounts.upsertAdsBatch, {
+              const r = await ctx.runMutation(internal.adAccounts.upsertAdsBatch, {
                 accountId: account._id,
                 ads: adBatch.slice(i, i + chunk),
               });
+              aTotal.inserted += r.inserted; aTotal.patched += r.patched; aTotal.skipped += r.skipped;
+            }
+            if (aTotal.inserted + aTotal.patched > 0) {
+              console.log(`[syncBatch] ads «${account.name}»: inserted=${aTotal.inserted} patched=${aTotal.patched} skipped=${aTotal.skipped}`);
             }
           } catch (err) {
             console.error(`[syncBatch] upsertAdsBatch failed for "${account.name}":`, err);
@@ -1229,12 +1263,17 @@ async function syncSingleAccount(
           }
         }
         if (dailyBatch.length > 0) {
+          const mTotal = { inserted: 0, patched: 0, skipped: 0 };
           const chunk = dailyMetricsChunkSize(dailyBatch.length);
           for (let i = 0; i < dailyBatch.length; i += chunk) {
-            await ctx.runMutation(internal.metrics.saveDailyBatch, {
+            const r = await ctx.runMutation(internal.metrics.saveDailyBatch, {
               accountId: account._id,
               items: dailyBatch.slice(i, i + chunk),
             });
+            mTotal.inserted += r.inserted; mTotal.patched += r.patched; mTotal.skipped += r.skipped;
+          }
+          if (mTotal.inserted + mTotal.patched > 0) {
+            console.log(`[syncBatch] metrics «${account.name}»: inserted=${mTotal.inserted} patched=${mTotal.patched} skipped=${mTotal.skipped}`);
           }
         }
 

@@ -161,6 +161,7 @@ export const saveDailyBatch = internalMutation({
     })),
   },
   handler: async (ctx, args) => {
+    let inserted = 0, patched = 0, skipped = 0;
     for (const item of args.items) {
       const cpl = item.leads > 0 ? item.spent / item.leads : undefined;
       const ctr = item.impressions > 0 ? (item.clicks / item.impressions) * 100 : undefined;
@@ -185,7 +186,7 @@ export const saveDailyBatch = internalMutation({
           (item.formEvents !== undefined && existing.formEvents !== item.formEvents) ||
           (item.campaignId !== undefined && existing.campaignId !== item.campaignId);
 
-        if (!metricsChanged) continue;
+        if (!metricsChanged) { skipped++; continue; }
 
         const patch: Record<string, unknown> = {
           impressions: item.impressions,
@@ -202,6 +203,7 @@ export const saveDailyBatch = internalMutation({
         if (ctr !== undefined) patch.ctr = ctr;
         if (cpc !== undefined) patch.cpc = cpc;
         await ctx.db.patch(existing._id, patch);
+        patched++;
       } else {
         await ctx.db.insert("metricsDaily", {
           accountId: args.accountId,
@@ -220,8 +222,10 @@ export const saveDailyBatch = internalMutation({
           ctr,
           cpc,
         });
+        inserted++;
       }
     }
+    return { inserted, patched, skipped };
   },
 });
 

@@ -1835,6 +1835,7 @@ export const upsertCampaignsBatch = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    let inserted = 0, patched = 0, skipped = 0;
     for (const c of args.campaigns) {
       const existing = await ctx.db
         .query("campaigns")
@@ -1854,6 +1855,9 @@ export const upsertCampaignsBatch = internalMutation({
           if (c.dailyLimit !== undefined) patch.dailyLimit = c.dailyLimit;
           if (c.allLimit !== undefined) patch.allLimit = c.allLimit;
           await ctx.db.patch(existing._id, patch);
+          patched++;
+        } else {
+          skipped++;
         }
       } else {
         await ctx.db.insert("campaigns", {
@@ -1867,8 +1871,10 @@ export const upsertCampaignsBatch = internalMutation({
           createdAt: now,
           updatedAt: now,
         });
+        inserted++;
       }
     }
+    return { inserted, patched, skipped };
   },
 });
 
@@ -1960,6 +1966,7 @@ export const upsertAdsBatch = internalMutation({
   },
   handler: async (ctx, args) => {
     const now = Date.now();
+    let inserted = 0, patched = 0, skipped = 0;
     // Cache campaign lookups within this batch (many ads share the same campaign)
     const campaignCache = new Map<string, string | null>();
 
@@ -1976,7 +1983,7 @@ export const upsertAdsBatch = internalMutation({
         campaignId = campaign?._id ?? null;
         campaignCache.set(ad.campaignVkId, campaignId);
       }
-      if (!campaignId) continue;
+      if (!campaignId) continue; // no campaign found — not counted in any bucket
 
       const existing = await ctx.db
         .query("ads")
@@ -1995,6 +2002,9 @@ export const upsertAdsBatch = internalMutation({
           if (ad.approved !== undefined) patch.approved = ad.approved;
           patch.campaignId = campaignId; // must patch or dirty-check loops forever
           await ctx.db.patch(existing._id, patch);
+          patched++;
+        } else {
+          skipped++;
         }
       } else {
         await ctx.db.insert("ads", {
@@ -2007,8 +2017,11 @@ export const upsertAdsBatch = internalMutation({
           createdAt: now,
           updatedAt: now,
         });
+        inserted++;
       }
     }
+    // skipped = no-op on existing doc; ads without campaign (continue above) not counted
+    return { inserted, patched, skipped };
   },
 });
 
