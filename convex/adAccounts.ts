@@ -1778,21 +1778,17 @@ export const upsertCampaign = mutation({
       .first();
 
     if (existing) {
-      const patch: Record<string, unknown> = {
-        name: args.name,
-        status: args.status,
-        updatedAt: Date.now(),
-      };
-      if (args.adPlanId !== undefined) {
-        patch.adPlanId = args.adPlanId;
+      if (hasCampaignChanged(existing, args)) {
+        const patch: Record<string, unknown> = {
+          name: args.name,
+          status: args.status,
+          updatedAt: Date.now(),
+        };
+        if (args.adPlanId !== undefined) patch.adPlanId = args.adPlanId;
+        if (args.dailyLimit !== undefined) patch.dailyLimit = args.dailyLimit;
+        if (args.allLimit !== undefined) patch.allLimit = args.allLimit;
+        await ctx.db.patch(existing._id, patch);
       }
-      if (args.dailyLimit !== undefined) {
-        patch.dailyLimit = args.dailyLimit;
-      }
-      if (args.allLimit !== undefined) {
-        patch.allLimit = args.allLimit;
-      }
-      await ctx.db.patch(existing._id, patch);
       return existing._id;
     }
 
@@ -1809,6 +1805,19 @@ export const upsertCampaign = mutation({
     });
   },
 });
+
+/** Returns true if any synced field changed and a DB patch is needed. */
+export function hasCampaignChanged(
+  existing: { name: string; status: string; adPlanId?: string; dailyLimit?: number; allLimit?: number },
+  incoming: { name: string; status: string; adPlanId?: string; dailyLimit?: number; allLimit?: number }
+): boolean {
+  if (existing.name !== incoming.name) return true;
+  if (existing.status !== incoming.status) return true;
+  if (incoming.adPlanId !== undefined && existing.adPlanId !== incoming.adPlanId) return true;
+  if (incoming.dailyLimit !== undefined && existing.dailyLimit !== incoming.dailyLimit) return true;
+  if (incoming.allLimit !== undefined && existing.allLimit !== incoming.allLimit) return true;
+  return false;
+}
 
 /** Batch upsert campaigns — one mutation instead of N individual calls */
 export const upsertCampaignsBatch = internalMutation({
@@ -1834,15 +1843,17 @@ export const upsertCampaignsBatch = internalMutation({
         .first();
 
       if (existing) {
-        const patch: Record<string, unknown> = {
-          name: c.name,
-          status: c.status,
-          updatedAt: now,
-        };
-        if (c.adPlanId !== undefined) patch.adPlanId = c.adPlanId;
-        if (c.dailyLimit !== undefined) patch.dailyLimit = c.dailyLimit;
-        if (c.allLimit !== undefined) patch.allLimit = c.allLimit;
-        await ctx.db.patch(existing._id, patch);
+        if (hasCampaignChanged(existing, c)) {
+          const patch: Record<string, unknown> = {
+            name: c.name,
+            status: c.status,
+            updatedAt: now,
+          };
+          if (c.adPlanId !== undefined) patch.adPlanId = c.adPlanId;
+          if (c.dailyLimit !== undefined) patch.dailyLimit = c.dailyLimit;
+          if (c.allLimit !== undefined) patch.allLimit = c.allLimit;
+          await ctx.db.patch(existing._id, patch);
+        }
       } else {
         await ctx.db.insert("campaigns", {
           accountId: args.accountId,
