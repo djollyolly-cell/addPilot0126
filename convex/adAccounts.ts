@@ -4,6 +4,7 @@ import { mutation, query, action, internalAction, internalMutation, internalQuer
 import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { checkOrgWritable, checkFeaturesDisabled } from "./loadUnits";
+import { TIERS, type SubscriptionTier } from "./billing";
 
 const VK_ADS_API_BASE = "https://target.my.com";
 
@@ -1462,10 +1463,109 @@ export const updateStatus = mutation({
     lastError: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    await ctx.db.patch(args.accountId, {
+    // Bypass guard: восстановление paused → active должно идти через `activate`,
+    // там проверка лимита тарифа. Все non-billing transitions (error→active,
+    // active→paused, * → error/abandoned/archived) работают как раньше.
+    if (args.status === "active") {
+      const current = await ctx.db.get(args.accountId);
+      if (current?.status === "paused") {
+        throw new Error(
+          "Используйте api.adAccounts.activate для возврата приостановленного кабинета — там проверка лимита тарифа."
+        );
+      }
+    }
+
+    // Convex отклоняет patch с undefined-полями (`Field name $undefined`),
+    // поэтому собираем patch условно. Это также гарантирует, что отсутствие
+    // lastError в args не затирает существующее значение случайно.
+    const patch: { status: typeof args.status; lastError?: string } = {
       status: args.status,
-      lastError: args.lastError,
-    });
+    };
+    if (args.lastError !== undefined) {
+      patch.lastError = args.lastError;
+    }
+    await ctx.db.patch(args.accountId, patch);
+  },
+});
+
+// Manual activation of paused account (fallback after auto-reactivation, see spec §7).
+// Auto-reactivation покрывает базовый случай (payment success), а это — для оставшихся
+// paused-кабинетов при превышении лимита нового тарифа или для будущих manual pause.
+export const activate = mutation({
+  args: {
+    accountId: v.id("adAccounts"),
+    userId: v.id("users"),
+  },
+  handler: async (ctx, args) => {
+    const account = await ctx.db.get(args.accountId);
+    if (!account) throw new Error("Кабинет не найден");
+    if (account.userId !== args.userId) throw new Error("Нет доступа");
+    if (account.status !== "paused") {
+      throw new Error("Активировать можно только приостановленный кабинет");
+    }
+
+    const user = await ctx.db.get(args.userId);
+    if (!user) throw new Error("Пользователь не найден");
+
+    // Effective tier: account.orgId wins over user.organizationId.
+    // org с не-agency tier (если такой когда-нибудь появится) применит свой лимит,
+    // как у обычного юзера. Сейчас org schema поддерживает только agency_*.
+    const ownerOrgId = account.orgId ?? user.organizationId;
+    let effectiveTier: SubscriptionTier;
+    if (ownerOrgId) {
+      const org = await ctx.db.get(ownerOrgId);
+      if (!org) throw new Error("Организация не найдена");
+      if (org.expiredGracePhase === "frozen") {
+        throw new Error("Подписка организации заморожена. Продлите подписку.");
+      }
+      effectiveTier = org.subscriptionTier;
+    } else {
+      effectiveTier = (user.subscriptionTier ?? "freemium") as SubscriptionTier;
+    }
+
+    const limit =
+      effectiveTier === "pro"
+        ? user.proAccountLimit ?? TIERS.pro.accountsLimit
+        : TIERS[effectiveTier].accountsLimit;
+
+    if (limit !== -1) {
+      const accounts = await ctx.db
+        .query("adAccounts")
+        .withIndex("by_userId", (q) => q.eq("userId", args.userId))
+        .collect();
+      const activeCount = accounts.filter(
+        (a) => a.status === "active" || a.status === "abandoned"
+      ).length;
+      if (activeCount + 1 > limit) {
+        const tierName = TIERS[effectiveTier].name;
+        throw new Error(
+          `Лимит активных кабинетов на тарифе ${tierName}: ${limit}. Продлите подписку или отключите другой кабинет.`
+        );
+      }
+    }
+
+    await ctx.db.patch(args.accountId, { status: "active" });
+    await ctx.db.patch(args.userId, { lastReactivationAt: Date.now() });
+
+    // Audit log напрямую через ctx.db.insert (mutation→mutation запрещено в Convex).
+    try {
+      await ctx.db.insert("auditLog", {
+        userId: args.userId,
+        category: "account",
+        action: "account_activated",
+        status: "success",
+        details: {
+          accountName: account.name,
+          vkAccountId: account.vkAccountId,
+          source: "manual",
+        },
+        createdAt: Date.now(),
+      });
+    } catch {
+      /* non-critical */
+    }
+
+    return { success: true };
   },
 });
 

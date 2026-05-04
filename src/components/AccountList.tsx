@@ -16,11 +16,13 @@ interface AccountListProps {
   userId: string;
   onSync: (accountId: string) => Promise<void>;
   onDisconnect: (accountId: string) => void;
+  onActivated?: (message: string) => void;
+  onActivationError?: (message: string) => void;
   isAdmin?: boolean;
   sessionToken?: string;
 }
 
-export function AccountList({ accounts, userId, onSync, onDisconnect, isAdmin, sessionToken }: AccountListProps) {
+export function AccountList({ accounts, userId, onSync, onDisconnect, onActivated, onActivationError, isAdmin, sessionToken }: AccountListProps) {
   if (accounts.length === 0) {
     return (
       <div
@@ -47,6 +49,8 @@ export function AccountList({ accounts, userId, onSync, onDisconnect, isAdmin, s
           userId={userId}
           onSync={onSync}
           onDisconnect={onDisconnect}
+          onActivated={onActivated}
+          onActivationError={onActivationError}
           isAdmin={isAdmin}
           sessionToken={sessionToken}
         />

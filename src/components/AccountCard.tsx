@@ -1,5 +1,5 @@
 import { useState, memo } from 'react';
-import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Loader2, Trash2, ChevronDown, ChevronRight, Pencil, Check, X, XCircle, VolumeX, RotateCcw } from 'lucide-react';
+import { Building2, AlertTriangle, CheckCircle2, PauseCircle, Loader2, Trash2, ChevronDown, ChevronRight, Pencil, Check, X, XCircle, VolumeX, RotateCcw, Play } from 'lucide-react';
 import { useMutation } from 'convex/react';
 import { api } from '../../convex/_generated/api';
 import { Id } from '../../convex/_generated/dataModel';
@@ -24,6 +24,8 @@ interface AccountCardProps {
   userId: string;
   onSync: (accountId: string) => Promise<void>;
   onDisconnect: (accountId: string) => void;
+  onActivated?: (message: string) => void;
+  onActivationError?: (message: string) => void;
   isAdmin?: boolean;
   sessionToken?: string;
 }
@@ -61,7 +63,7 @@ const statusConfig = {
   },
 };
 
-export const AccountCard = memo(function AccountCard({ account, userId, onSync, onDisconnect, isAdmin, sessionToken }: AccountCardProps) {
+export const AccountCard = memo(function AccountCard({ account, userId, onSync, onDisconnect, onActivated, onActivationError, isAdmin, sessionToken }: AccountCardProps) {
   const [showCampaigns, setShowCampaigns] = useState(false);
   const [showProfile, setShowProfile] = useState(false);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
@@ -74,7 +76,9 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
   const renameAccount = useMutation(api.adAccounts.rename);
   const abandonAccount = useMutation(api.admin.abandonAccount);
   const reactivateAccount = useMutation(api.admin.reactivateAccount);
+  const activateAccount = useMutation(api.adAccounts.activate);
   const [adminAction, setAdminAction] = useState(false);
+  const [activating, setActivating] = useState(false);
 
   const handleSaveName = async () => {
     const trimmed = editName.trim();
@@ -260,6 +264,34 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
                   <RotateCcw className="w-4 h-4" />
                 </button>
               )}
+              {/* Восстановить paused → active (manual fallback после auto-reactivation) */}
+              {account.status === 'paused' && (
+                <button
+                  type="button"
+                  disabled={activating}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    setActivating(true);
+                    try {
+                      await activateAccount({
+                        accountId: account._id as Id<"adAccounts">,
+                        userId: userId as Id<"users">,
+                      });
+                      onActivated?.('Кабинет активирован. Данные обновятся в течение 5 минут.');
+                    } catch (err) {
+                      const msg = err instanceof Error ? err.message : 'Ошибка активации';
+                      onActivationError?.(msg);
+                    } finally {
+                      setActivating(false);
+                    }
+                  }}
+                  className="p-1.5 rounded-md text-muted-foreground hover:text-green-600 hover:bg-green-50 transition-colors disabled:opacity-50"
+                  title="Активировать кабинет"
+                  data-testid={`activate-account-${account.vkAccountId}`}
+                >
+                  {activating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setShowDisconnectConfirm(true)}
@@ -281,8 +313,9 @@ export const AccountCard = memo(function AccountCard({ account, userId, onSync, 
           onConfirm={() => { setShowDisconnectConfirm(false); onDisconnect(account._id); }}
         />
 
-        {/* Sync */}
-        {account.status !== 'abandoned' && (
+        {/* Sync — скрыт для paused (sync на paused упрётся в updateStatus guard,
+            юзеру нужна кнопка «Активировать») и abandoned (требуется переподключение). */}
+        {account.status !== 'abandoned' && account.status !== 'paused' && (
           <div className="mt-3 pt-3 border-t">
             <SyncButton
               onSync={() => onSync(account._id)}

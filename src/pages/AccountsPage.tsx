@@ -323,6 +323,15 @@ export function AccountsPage() {
               userId={user.userId}
               onSync={handleSync}
               onDisconnect={handleDisconnect}
+              onActivated={(msg) => {
+                setError(null);
+                setSuccess(msg);
+                setTimeout(() => setSuccess(null), 5000);
+              }}
+              onActivationError={(msg) => {
+                setSuccess(null);
+                setError(msg);
+              }}
               isAdmin={isAdmin}
               sessionToken={isAdmin ? (localStorage.getItem('adpilot_session') || undefined) : undefined}
             />
