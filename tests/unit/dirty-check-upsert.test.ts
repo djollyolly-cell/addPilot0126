@@ -46,4 +46,48 @@ describe("hasCampaignChanged", () => {
   });
 });
 
-// TODO Task 2: hasAdChanged tests go here
+describe("hasAdChanged", () => {
+  const base = {
+    name: "Объявление 1",
+    status: "active",
+    approved: "yes",
+    campaignId: "camp_1",
+  };
+
+  it("returns false when nothing changed", () => {
+    expect(hasAdChanged(base, { ...base })).toBe(false);
+  });
+
+  it("detects name change", () => {
+    expect(hasAdChanged(base, { ...base, name: "Другое объявление" })).toBe(true);
+  });
+
+  it("detects status change", () => {
+    expect(hasAdChanged(base, { ...base, status: "blocked" })).toBe(true);
+  });
+
+  it("detects approved change", () => {
+    expect(hasAdChanged(base, { ...base, approved: "no" })).toBe(true);
+  });
+
+  it("detects campaignId change", () => {
+    expect(hasAdChanged(base, { ...base, campaignId: "camp_2" })).toBe(true);
+  });
+
+  it("ignores incoming approved=undefined", () => {
+    const incoming = { name: base.name, status: base.status };
+    expect(hasAdChanged(base, incoming)).toBe(false);
+  });
+
+  it("ignores incoming campaignId=undefined", () => {
+    const incoming = { name: base.name, status: base.status };
+    expect(hasAdChanged(base, incoming)).toBe(false);
+  });
+
+  it("returns false when all fields identical including approved and campaignId", () => {
+    expect(hasAdChanged(
+      { name: "Ad", status: "active", approved: "yes", campaignId: "camp_1" },
+      { name: "Ad", status: "active", approved: "yes", campaignId: "camp_1" }
+    )).toBe(false);
+  });
+});

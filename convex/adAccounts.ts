@@ -1907,15 +1907,16 @@ export const upsertAd = mutation({
       .first();
 
     if (existing) {
-      const patch: Record<string, unknown> = {
-        name: args.name,
-        status: args.status,
-        updatedAt: Date.now(),
-      };
-      if (args.approved !== undefined) {
-        patch.approved = args.approved;
+      if (hasAdChanged(existing, { name: args.name, status: args.status, approved: args.approved, campaignId: args.campaignId as string })) {
+        const patch: Record<string, unknown> = {
+          name: args.name,
+          status: args.status,
+          updatedAt: Date.now(),
+        };
+        if (args.approved !== undefined) patch.approved = args.approved;
+        patch.campaignId = args.campaignId; // must patch or dirty-check loops forever
+        await ctx.db.patch(existing._id, patch);
       }
-      await ctx.db.patch(existing._id, patch);
       return existing._id;
     }
 
@@ -1931,6 +1932,19 @@ export const upsertAd = mutation({
     });
   },
 });
+
+/** Returns true if any synced field changed and a DB patch is needed. */
+export function hasAdChanged(
+  existing: { name: string; status: string; approved?: string; campaignId?: string },
+  incoming: { name: string; status: string; approved?: string; campaignId?: string }
+): boolean {
+  if (existing.name !== incoming.name) return true;
+  if (existing.status !== incoming.status) return true;
+  // undefined means "caller did not provide this field" — treat as no change requested
+  if (incoming.approved !== undefined && existing.approved !== incoming.approved) return true;
+  if (incoming.campaignId !== undefined && existing.campaignId !== incoming.campaignId) return true;
+  return false;
+}
 
 /** Batch upsert ads — includes campaign lookup inside mutation to eliminate separate queries */
 export const upsertAdsBatch = internalMutation({
@@ -1972,13 +1986,16 @@ export const upsertAdsBatch = internalMutation({
         .first();
 
       if (existing) {
-        const patch: Record<string, unknown> = {
-          name: ad.name,
-          status: ad.status,
-          updatedAt: now,
-        };
-        if (ad.approved !== undefined) patch.approved = ad.approved;
-        await ctx.db.patch(existing._id, patch);
+        if (hasAdChanged(existing, { ...ad, campaignId: campaignId ?? undefined })) {
+          const patch: Record<string, unknown> = {
+            name: ad.name,
+            status: ad.status,
+            updatedAt: now,
+          };
+          if (ad.approved !== undefined) patch.approved = ad.approved;
+          if (campaignId !== undefined) patch.campaignId = campaignId; // must patch or dirty-check loops forever
+          await ctx.db.patch(existing._id, patch);
+        }
       } else {
         await ctx.db.insert("ads", {
           accountId: args.accountId,
