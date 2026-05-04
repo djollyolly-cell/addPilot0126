@@ -62,6 +62,19 @@ export const saveDaily = internalMutation({
       .first();
 
     if (existing) {
+      const metricsChanged =
+        existing.impressions !== args.impressions ||
+        existing.clicks !== args.clicks ||
+        existing.spent !== args.spent ||
+        existing.leads !== args.leads ||
+        (args.vkResult !== undefined && existing.vkResult !== args.vkResult) ||
+        (args.reach !== undefined && existing.reach !== args.reach) ||
+        (args.campaignType !== undefined && existing.campaignType !== args.campaignType) ||
+        (args.formEvents !== undefined && existing.formEvents !== args.formEvents) ||
+        (args.campaignId !== undefined && existing.campaignId !== args.campaignId);
+
+      if (!metricsChanged) return existing._id;
+
       // Update existing record (overwrite with latest API data)
       const patch: Record<string, unknown> = {
         impressions: args.impressions,
@@ -161,6 +174,19 @@ export const saveDailyBatch = internalMutation({
         .first();
 
       if (existing) {
+        const metricsChanged =
+          existing.impressions !== item.impressions ||
+          existing.clicks !== item.clicks ||
+          existing.spent !== item.spent ||
+          existing.leads !== item.leads ||
+          (item.vkResult !== undefined && existing.vkResult !== item.vkResult) ||
+          (item.reach !== undefined && existing.reach !== item.reach) ||
+          (item.campaignType !== undefined && existing.campaignType !== item.campaignType) ||
+          (item.formEvents !== undefined && existing.formEvents !== item.formEvents) ||
+          (item.campaignId !== undefined && existing.campaignId !== item.campaignId);
+
+        if (!metricsChanged) continue;
+
         const patch: Record<string, unknown> = {
           impressions: item.impressions,
           clicks: item.clicks,
@@ -247,6 +273,16 @@ export const saveDailyPublic = mutation({
       .first();
 
     if (existing) {
+      const metricsChanged =
+        existing.impressions !== args.impressions ||
+        existing.clicks !== args.clicks ||
+        existing.spent !== args.spent ||
+        existing.leads !== args.leads ||
+        (args.reach !== undefined && existing.reach !== args.reach) ||
+        (args.vkResult !== undefined && existing.vkResult !== args.vkResult);
+
+      if (!metricsChanged) return existing._id;
+
       const patch: Record<string, unknown> = {
         impressions: args.impressions,
         clicks: args.clicks,
