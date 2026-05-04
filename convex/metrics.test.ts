@@ -404,3 +404,40 @@ describe("metrics", () => {
     expect(result.hasMore).toBe(false);
   });
 });
+
+describe("saveDailyBatch — dirty-check", () => {
+  test("first call → inserted=1", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+    const r = await t.mutation(internal.metrics.saveDailyBatch, {
+      accountId,
+      items: [{ adId: "ad1", date: "2026-05-04", impressions: 100, clicks: 5, spent: 50, leads: 1 }],
+    });
+    expect(r).toEqual({ inserted: 1, patched: 0, skipped: 0 });
+  });
+
+  test("same metrics → skipped=1", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+    const item = { adId: "ad1", date: "2026-05-04", impressions: 100, clicks: 5, spent: 50, leads: 1 };
+    await t.mutation(internal.metrics.saveDailyBatch, { accountId, items: [item] });
+
+    const r = await t.mutation(internal.metrics.saveDailyBatch, { accountId, items: [item] });
+    expect(r).toEqual({ inserted: 0, patched: 0, skipped: 1 });
+  });
+
+  test("changed spent → patched=1", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+    await t.mutation(internal.metrics.saveDailyBatch, {
+      accountId,
+      items: [{ adId: "ad1", date: "2026-05-04", impressions: 100, clicks: 5, spent: 50, leads: 1 }],
+    });
+
+    const r = await t.mutation(internal.metrics.saveDailyBatch, {
+      accountId,
+      items: [{ adId: "ad1", date: "2026-05-04", impressions: 100, clicks: 5, spent: 75, leads: 1 }],
+    });
+    expect(r).toEqual({ inserted: 0, patched: 1, skipped: 0 });
+  });
+});

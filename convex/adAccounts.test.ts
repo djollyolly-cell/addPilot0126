@@ -1,5 +1,5 @@
 import { convexTest } from "convex-test";
-import { expect, test, describe } from "vitest";
+import { expect, test, describe, vi } from "vitest";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import { groupBannersByAdPlan } from "./adAccounts";
@@ -1096,5 +1096,163 @@ describe("adAccounts — activate (Task 3)", () => {
     });
     const after = await t.run(async (ctx) => ctx.db.get(accountId));
     expect(after?.status).toBe("paused");
+  });
+});
+
+describe("upsertCampaignsBatch — dirty-check", () => {
+  async function makeAccount(t: ReturnType<typeof convexTest>) {
+    const userId = await createTestUser(t);
+    return t.run((ctx) => ctx.db.insert("adAccounts", {
+      userId, vkAccountId: "acc_dc", name: "DC Test",
+      accessToken: "tok", status: "active", createdAt: Date.now(),
+    }));
+  }
+
+  test("first call → inserted=1", async () => {
+    const t = convexTest(schema);
+    const accountId = await makeAccount(t);
+    const r = await t.mutation(internal.adAccounts.upsertCampaignsBatch, {
+      accountId,
+      campaigns: [{ vkCampaignId: "c1", name: "Кампания", status: "active" }],
+    });
+    expect(r).toEqual({ inserted: 1, patched: 0, skipped: 0 });
+  });
+
+  test("same data → skipped=1, updatedAt не изменился", async () => {
+    const t = convexTest(schema);
+    const accountId = await makeAccount(t);
+    const campaign = { vkCampaignId: "c1", name: "Кампания", status: "active" };
+    await t.mutation(internal.adAccounts.upsertCampaignsBatch, { accountId, campaigns: [campaign] });
+
+    const before = await t.run((ctx) =>
+      ctx.db.query("campaigns").withIndex("by_accountId_vkCampaignId",
+        (q) => q.eq("accountId", accountId).eq("vkCampaignId", "c1")).first()
+    );
+
+    const r = await t.mutation(internal.adAccounts.upsertCampaignsBatch, { accountId, campaigns: [campaign] });
+    expect(r).toEqual({ inserted: 0, patched: 0, skipped: 1 });
+
+    const after = await t.run((ctx) =>
+      ctx.db.query("campaigns").withIndex("by_accountId_vkCampaignId",
+        (q) => q.eq("accountId", accountId).eq("vkCampaignId", "c1")).first()
+    );
+    expect(after!.updatedAt).toBe(before!.updatedAt);
+  });
+
+  test("changed status → patched=1, updatedAt обновился", async () => {
+    vi.useFakeTimers();
+    try {
+      const t = convexTest(schema);
+      const accountId = await makeAccount(t);
+      await t.mutation(internal.adAccounts.upsertCampaignsBatch, {
+        accountId, campaigns: [{ vkCampaignId: "c1", name: "Кампания", status: "active" }],
+      });
+      const before = await t.run((ctx) =>
+        ctx.db.query("campaigns").withIndex("by_accountId_vkCampaignId",
+          (q) => q.eq("accountId", accountId).eq("vkCampaignId", "c1")).first()
+      );
+
+      vi.advanceTimersByTime(1);
+      const r = await t.mutation(internal.adAccounts.upsertCampaignsBatch, {
+        accountId, campaigns: [{ vkCampaignId: "c1", name: "Кампания", status: "blocked" }],
+      });
+      expect(r).toEqual({ inserted: 0, patched: 1, skipped: 0 });
+
+      const after = await t.run((ctx) =>
+        ctx.db.query("campaigns").withIndex("by_accountId_vkCampaignId",
+          (q) => q.eq("accountId", accountId).eq("vkCampaignId", "c1")).first()
+      );
+      expect(after!.updatedAt).toBeGreaterThan(before!.updatedAt);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("upsertAdsBatch — dirty-check", () => {
+  async function makeAccountWith2Campaigns(t: ReturnType<typeof convexTest>) {
+    const userId = await createTestUser(t);
+    return t.run(async (ctx) => {
+      const accountId = await ctx.db.insert("adAccounts", {
+        userId, vkAccountId: "acc_dc2", name: "DC Test2",
+        accessToken: "tok", status: "active", createdAt: Date.now(),
+      });
+      await ctx.db.insert("campaigns", {
+        accountId, vkCampaignId: "c1", name: "C1", status: "active",
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      await ctx.db.insert("campaigns", {
+        accountId, vkCampaignId: "c2", name: "C2", status: "active",
+        createdAt: Date.now(), updatedAt: Date.now(),
+      });
+      return accountId;
+    });
+  }
+
+  test("first call → inserted=1", async () => {
+    const t = convexTest(schema);
+    const accountId = await makeAccountWith2Campaigns(t);
+    const r = await t.mutation(internal.adAccounts.upsertAdsBatch, {
+      accountId, ads: [{ vkAdId: "a1", campaignVkId: "c1", name: "Объявление", status: "active" }],
+    });
+    expect(r).toEqual({ inserted: 1, patched: 0, skipped: 0 });
+  });
+
+  test("same data → skipped=1, updatedAt не изменился", async () => {
+    const t = convexTest(schema);
+    const accountId = await makeAccountWith2Campaigns(t);
+    const ad = { vkAdId: "a1", campaignVkId: "c1", name: "Объявление", status: "active" };
+    await t.mutation(internal.adAccounts.upsertAdsBatch, { accountId, ads: [ad] });
+
+    const before = await t.run((ctx) =>
+      ctx.db.query("ads").withIndex("by_accountId_vkAdId",
+        (q) => q.eq("accountId", accountId).eq("vkAdId", "a1")).first()
+    );
+
+    const r = await t.mutation(internal.adAccounts.upsertAdsBatch, { accountId, ads: [ad] });
+    expect(r).toEqual({ inserted: 0, patched: 0, skipped: 1 });
+
+    const after = await t.run((ctx) =>
+      ctx.db.query("ads").withIndex("by_accountId_vkAdId",
+        (q) => q.eq("accountId", accountId).eq("vkAdId", "a1")).first()
+    );
+    expect(after!.updatedAt).toBe(before!.updatedAt);
+  });
+
+  test("changed status → patched=1", async () => {
+    const t = convexTest(schema);
+    const accountId = await makeAccountWith2Campaigns(t);
+    await t.mutation(internal.adAccounts.upsertAdsBatch, {
+      accountId, ads: [{ vkAdId: "a1", campaignVkId: "c1", name: "Объявление", status: "active" }],
+    });
+
+    const r = await t.mutation(internal.adAccounts.upsertAdsBatch, {
+      accountId, ads: [{ vkAdId: "a1", campaignVkId: "c1", name: "Объявление", status: "blocked" }],
+    });
+    expect(r).toEqual({ inserted: 0, patched: 1, skipped: 0 });
+  });
+
+  test("переезд в другую кампанию → patched=1, campaignId обновился в БД", async () => {
+    const t = convexTest(schema);
+    const accountId = await makeAccountWith2Campaigns(t);
+
+    await t.mutation(internal.adAccounts.upsertAdsBatch, {
+      accountId, ads: [{ vkAdId: "a1", campaignVkId: "c1", name: "Объявление", status: "active" }],
+    });
+
+    const r = await t.mutation(internal.adAccounts.upsertAdsBatch, {
+      accountId, ads: [{ vkAdId: "a1", campaignVkId: "c2", name: "Объявление", status: "active" }],
+    });
+    expect(r).toEqual({ inserted: 0, patched: 1, skipped: 0 });
+
+    const ad = await t.run((ctx) =>
+      ctx.db.query("ads").withIndex("by_accountId_vkAdId",
+        (q) => q.eq("accountId", accountId).eq("vkAdId", "a1")).first()
+    );
+    const c2 = await t.run((ctx) =>
+      ctx.db.query("campaigns").withIndex("by_accountId_vkCampaignId",
+        (q) => q.eq("accountId", accountId).eq("vkCampaignId", "c2")).first()
+    );
+    expect(ad!.campaignId).toBe(c2!._id);
   });
 });
