@@ -873,18 +873,26 @@ export const dispatchSyncBatches = internalMutation({
  * Per-account sync logic extracted from the former syncOneAccount.
  * Called sequentially by syncBatchWorker for each account in its chunk.
  */
+type SyncCounters = { inserted: number; patched: number; skipped: number };
+type SyncResult = { campaigns: SyncCounters; ads: SyncCounters; metrics: SyncCounters };
+
 async function syncSingleAccount(
   ctx: ActionCtx,
   accountId: Id<"adAccounts">
-): Promise<void> {
+): Promise<SyncResult> {
+    const syncResult: SyncResult = {
+      campaigns: { inserted: 0, patched: 0, skipped: 0 },
+      ads: { inserted: 0, patched: 0, skipped: 0 },
+      metrics: { inserted: 0, patched: 0, skipped: 0 },
+    };
     // Load account
     const account = await ctx.runQuery(internal.adAccounts.getInternal, { accountId });
     if (!account) {
       // Account not found — skip silently
-      return;
+      return syncResult;
     }
     if (account.status !== "active" && account.status !== "error") {
-      return;
+      return syncResult;
     }
 
     // Auto-abandon: error accounts with unrecoverable token errors for 7+ days
@@ -929,7 +937,7 @@ async function syncSingleAccount(
         });
       } catch { /* non-critical */ }
 
-      return;
+      return syncResult;
     }
 
     // Escalation: if account stuck in error for >2h, notify admin
@@ -957,7 +965,7 @@ async function syncSingleAccount(
 
     // Double-check SKIP_IF_SYNCED_WITHIN_MS (another worker may have synced it)
     if (account.lastSyncAt && Date.now() - account.lastSyncAt < SKIP_IF_SYNCED_WITHIN_MS) {
-      return;
+      return syncResult;
     }
 
     const date = todayStr();
@@ -1159,6 +1167,9 @@ async function syncSingleAccount(
               });
               cTotal.inserted += r.inserted; cTotal.patched += r.patched; cTotal.skipped += r.skipped;
             }
+            syncResult.campaigns.inserted += cTotal.inserted;
+            syncResult.campaigns.patched += cTotal.patched;
+            syncResult.campaigns.skipped += cTotal.skipped;
             if (cTotal.inserted + cTotal.patched > 0) {
               console.log(`[syncBatch] campaigns «${account.name}»: inserted=${cTotal.inserted} patched=${cTotal.patched} skipped=${cTotal.skipped}`);
             }
@@ -1183,6 +1194,9 @@ async function syncSingleAccount(
               });
               aTotal.inserted += r.inserted; aTotal.patched += r.patched; aTotal.skipped += r.skipped;
             }
+            syncResult.ads.inserted += aTotal.inserted;
+            syncResult.ads.patched += aTotal.patched;
+            syncResult.ads.skipped += aTotal.skipped;
             if (aTotal.inserted + aTotal.patched > 0) {
               console.log(`[syncBatch] ads «${account.name}»: inserted=${aTotal.inserted} patched=${aTotal.patched} skipped=${aTotal.skipped}`);
             }
@@ -1272,6 +1286,9 @@ async function syncSingleAccount(
             });
             mTotal.inserted += r.inserted; mTotal.patched += r.patched; mTotal.skipped += r.skipped;
           }
+          syncResult.metrics.inserted += mTotal.inserted;
+          syncResult.metrics.patched += mTotal.patched;
+          syncResult.metrics.skipped += mTotal.skipped;
           if (mTotal.inserted + mTotal.patched > 0) {
             console.log(`[syncBatch] metrics «${account.name}»: inserted=${mTotal.inserted} patched=${mTotal.patched} skipped=${mTotal.skipped}`);
           }
@@ -1416,6 +1433,7 @@ async function syncSingleAccount(
         }
       }
     }
+    return syncResult;
 }
 
 /**
@@ -1432,6 +1450,11 @@ export const syncBatchWorker = internalAction({
     const workerStart = Date.now();
     let synced = 0;
     let errors = 0;
+    const wTotal: SyncResult = {
+      campaigns: { inserted: 0, patched: 0, skipped: 0 },
+      ads: { inserted: 0, patched: 0, skipped: 0 },
+      metrics: { inserted: 0, patched: 0, skipped: 0 },
+    };
 
     for (const accountId of args.accountIds) {
       // Worker-level timeout check: stop if approaching 9 min
@@ -1441,15 +1464,18 @@ export const syncBatchWorker = internalAction({
       }
 
       try {
-        await syncSingleAccount(ctx, accountId);
+        const r = await syncSingleAccount(ctx, accountId);
         synced++;
+        wTotal.campaigns.inserted += r.campaigns.inserted; wTotal.campaigns.patched += r.campaigns.patched; wTotal.campaigns.skipped += r.campaigns.skipped;
+        wTotal.ads.inserted += r.ads.inserted; wTotal.ads.patched += r.ads.patched; wTotal.ads.skipped += r.ads.skipped;
+        wTotal.metrics.inserted += r.metrics.inserted; wTotal.metrics.patched += r.metrics.patched; wTotal.metrics.skipped += r.metrics.skipped;
       } catch (err) {
         errors++;
         console.error(`[syncBatch#${args.workerIndex}] Account ${accountId} failed: ${err instanceof Error ? err.message : err}`);
       }
     }
 
-    console.log(`[syncBatch#${args.workerIndex}] Done: ${synced} synced, ${errors} errors out of ${args.accountIds.length}`);
+    console.log(`[syncBatch#${args.workerIndex}] Done: ${synced} synced, ${errors} errors | campaigns inserted=${wTotal.campaigns.inserted} patched=${wTotal.campaigns.patched} skipped=${wTotal.campaigns.skipped} | ads inserted=${wTotal.ads.inserted} patched=${wTotal.ads.patched} skipped=${wTotal.ads.skipped} | metrics inserted=${wTotal.metrics.inserted} patched=${wTotal.metrics.patched} skipped=${wTotal.metrics.skipped}`);
   },
 });
 
