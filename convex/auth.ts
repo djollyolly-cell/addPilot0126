@@ -1864,6 +1864,22 @@ export const proactiveTokenRefresh = internalAction({
 // ─── Fan-Out: Token Refresh Dispatch + Worker ────────────────────
 
 const TOKEN_ALERT_COOLDOWN_MS = 30 * 60_000;
+const DEFAULT_MAX_CONCURRENT_V8_ACTIONS = 32;
+const TOKEN_REFRESH_STAGGER_DELAY_MS = 3_000;
+
+function getMaxConcurrentV8Actions(): number {
+  const configured = Number(process.env.APPLICATION_MAX_CONCURRENT_V8_ACTIONS);
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.floor(configured);
+  }
+  return DEFAULT_MAX_CONCURRENT_V8_ACTIONS;
+}
+
+function getTokenRefreshDelayMs(index: number): number {
+  const immediateSlots = Math.max(1, Math.floor(getMaxConcurrentV8Actions() / 2));
+  if (index < immediateSlots) return 0;
+  return (Math.floor((index - immediateSlots) / immediateSlots) + 1) * TOKEN_REFRESH_STAGGER_DELAY_MS;
+}
 
 /** Schedule tokenRefreshOne workers. Must be mutation for ctx.scheduler. */
 export const dispatchTokenBatch = internalMutation({
@@ -1873,26 +1889,24 @@ export const dispatchTokenBatch = internalMutation({
     vkUsers: v.array(v.id("users")),
   },
   handler: async (ctx, args) => {
-    const STAGGER_BATCH = 8;
-    const STAGGER_DELAY_MS = 3_000;
     let idx = 0;
 
     for (const accountId of args.accounts) {
-      const delayMs = idx < 16 ? 0 : (Math.floor((idx - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      const delayMs = getTokenRefreshDelayMs(idx);
       await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOneV2, {
         targetType: "account", targetId: accountId,
       });
       idx++;
     }
     for (const userId of args.users) {
-      const delayMs = idx < 16 ? 0 : (Math.floor((idx - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      const delayMs = getTokenRefreshDelayMs(idx);
       await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOneV2, {
         targetType: "user_vkads", targetId: userId,
       });
       idx++;
     }
     for (const userId of args.vkUsers) {
-      const delayMs = idx < 16 ? 0 : (Math.floor((idx - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
+      const delayMs = getTokenRefreshDelayMs(idx);
       await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOneV2, {
         targetType: "user_vk", targetId: userId,
       });
