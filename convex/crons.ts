@@ -142,19 +142,19 @@ void internal;
 //   internal.auth.tokenRefreshDispatch
 // );
 //
-// // Cleanup stuck pending payments — every 2 hours
-// crons.interval(
-//   "cleanup-stuck-payments",
-//   { hours: 2 },
-//   internal.billing.cleanupStuckPayments
-// );
-//
-// // Clean up old audit/system logs — daily at 02:00 UTC
-// crons.cron(
-//   "cleanup-old-logs",
-//   "0 2 * * *",
-//   internal.logCleanup.runDaily
-// );
+// PHASE 1 RESTORED: Cleanup stuck pending payments — every 2 hours
+crons.interval(
+  "cleanup-stuck-payments",
+  { hours: 2 },
+  internal.billing.cleanupStuckPayments
+);
+
+// PHASE 1 RESTORED: Clean up old audit/system logs — daily at 02:00 UTC
+crons.cron(
+  "cleanup-old-logs",
+  "0 2 * * *",
+  internal.logCleanup.runDaily
+);
 //
 // // Clean up old metricsDaily (older than 90 days) — every 15 min, 500/batch (gradual)
 // // 48K deletes/day = 3% of metricsRealtime churn. Backlog ~720K clears in ~15 days.
@@ -179,12 +179,12 @@ void internal;
 //   internal.vkApiLimits.probeThrottling
 // );
 //
-// // Cleanup expired org invites — daily at 05:30 UTC
-// crons.cron(
-//   "cleanup-expired-invites",
-//   "30 5 * * *",
-//   internal.orgAuth.cleanupExpiredInvites
-// );
+// PHASE 1 RESTORED: Cleanup expired org invites — daily at 05:30 UTC
+crons.cron(
+  "cleanup-expired-invites",
+  "30 5 * * *",
+  internal.orgAuth.cleanupExpiredInvites
+);
 //
 // // Daily load units recalc — 01:00 UTC (04:00 MSK)
 // crons.cron(
