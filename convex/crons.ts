@@ -31,6 +31,15 @@ void internal;
 // //   - V1 (syncDispatch / syncBatchWorker) stays no-op-effective and must
 // //     NOT be re-enabled while V1 backlog risk remains (10k+ historical
 // //     success rows in _scheduled_jobs).
+//
+// V1 5-min registration kept here as historical reference. DO NOT ACTIVATE.
+// Activating V1 would:
+//   - resurrect any dormant pending V1 schedules (queue drain risk);
+//   - bypass the V2 fail-closed gate and Phase 6 canary plan;
+//   - re-introduce the 5-min cadence that contributed to the
+//     2026-05-04/05 incident WAL pressure.
+// If you need to re-enable sync, use the Phase 6b V2 registration above
+// (uzBudgetDispatchV2 / syncDispatchV2 with 45 min interval).
 // crons.interval(
 //   "sync-metrics",
 //   { minutes: 5 },

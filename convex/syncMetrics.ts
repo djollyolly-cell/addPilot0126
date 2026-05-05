@@ -1555,17 +1555,30 @@ export const syncDispatch = internalAction({
 // pollAiBannerModeration runs only when SYNC_METRICS_V2_POLL_MODERATION=1
 // (also fail-closed). Cron in convex/crons.ts remains commented out.
 
-// SYNC V2 constants. Worker/batch sizes are env-clamped so operators can
-// reduce without redeploy but never raise above the safe ceilings established
-// by the canary analysis (slotsPerWorker=3 at concurrency=8 -> 2 workers max).
-const SYNC_WORKER_COUNT_V2 = Math.min(
-  2,
-  Math.max(1, Number(process.env.SYNC_WORKER_COUNT_V2) || 2)
-);
-const SYNC_BATCH_SIZE_V2 = Math.min(
-  20,
-  Math.max(1, Number(process.env.SYNC_BATCH_SIZE_V2) || 20)
-);
+// SYNC V2 sizing. Worker/batch sizes are env-clamped so operators can
+// reduce without redeploy but never raise above the safe ceilings
+// established by the canary analysis (slotsPerWorker=3 at concurrency=8
+// -> 2 workers max).
+//
+// READ AT CALL TIME, not at module load. Module-level `const` would
+// snapshot process.env at V8 isolate startup; if the operator runs
+// `npx convex env set SYNC_WORKER_COUNT_V2 1` between deploy and the
+// first manual canary, a cached const would still read 2. Functions
+// re-read process.env on every invocation and pick up the latest value
+// (subject to the same best-effort caveat documented on
+// isSyncMetricsV2Enabled).
+function getSyncWorkerCountV2(): number {
+  return Math.min(
+    2,
+    Math.max(1, Number(process.env.SYNC_WORKER_COUNT_V2) || 2)
+  );
+}
+function getSyncBatchSizeV2(): number {
+  return Math.min(
+    20,
+    Math.max(1, Number(process.env.SYNC_BATCH_SIZE_V2) || 20)
+  );
+}
 // Worker stops between accounts when this elapsed. Same as V1: 9.5 min,
 // 30s margin under the Convex action 10-min hard limit. Remaining accounts
 // will be picked up on the next cron tick via lastSyncAt ordering.
@@ -1666,7 +1679,7 @@ export const dispatchSyncBatchesV2 = internalMutation({
     const total = args.accountIds.length;
     if (total === 0) return;
 
-    const workerCount = Math.min(SYNC_WORKER_COUNT_V2, total);
+    const workerCount = Math.min(getSyncWorkerCountV2(), total);
     const chunkSize = Math.ceil(total / workerCount);
 
     for (let i = 0; i < workerCount; i++) {
@@ -1756,23 +1769,24 @@ export const syncDispatchV2 = internalAction({
         };
       }
 
-      // listSyncableAccounts already sorts oldest lastSyncAt first; slice
-      // preserves order. Logging both numbers shows backlog coverage.
-      const accounts = allEligible.slice(0, SYNC_BATCH_SIZE_V2);
+      // listSyncableAccounts already sorts oldest lastSyncAt first and
+      // applies its own .slice(0, 100) cap, so allEligible.length is at
+      // most 100 — NOT the absolute backlog. Treat "Selected X/Y" as
+      // "of the top-100 oldest eligible accounts, picked X".
+      const batchSize = getSyncBatchSizeV2();
+      const workerCount = getSyncWorkerCountV2();
+      const accounts = allEligible.slice(0, batchSize);
       console.log(
-        `[syncDispatchV2] Selected ${accounts.length}/${allEligible.length} eligible accounts`
+        `[syncDispatchV2] Selected ${accounts.length}/${allEligible.length} eligible accounts (top-100 cap from listSyncableAccounts)`
       );
 
       const accountIds = accounts.map((a) => a._id);
       await ctx.runMutation(internal.syncMetrics.dispatchSyncBatchesV2, {
         accountIds,
       });
-      const workersDispatched = Math.min(
-        SYNC_WORKER_COUNT_V2,
-        accountIds.length
-      );
+      const workersDispatched = Math.min(workerCount, accountIds.length);
       console.log(
-        `[syncDispatchV2] Dispatched ${workersDispatched} V2 batch workers for ${accountIds.length} accounts (worker_count=${SYNC_WORKER_COUNT_V2}, batch_size=${SYNC_BATCH_SIZE_V2})`
+        `[syncDispatchV2] Dispatched ${workersDispatched} V2 batch workers for ${accountIds.length} accounts (worker_count=${workerCount}, batch_size=${batchSize})`
       );
 
       // Optional: poll AI banner moderation. Default off for the first
