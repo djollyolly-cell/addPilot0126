@@ -1865,7 +1865,7 @@ export const proactiveTokenRefresh = internalAction({
 
 const TOKEN_ALERT_COOLDOWN_MS = 30 * 60_000;
 const DEFAULT_MAX_CONCURRENT_V8_ACTIONS = 32;
-const TOKEN_REFRESH_STAGGER_DELAY_MS = 3_000;
+const FANOUT_STAGGER_MS = 3_000;
 
 function getMaxConcurrentV8Actions(): number {
   const configured = Number(process.env.APPLICATION_MAX_CONCURRENT_V8_ACTIONS);
@@ -1875,10 +1875,14 @@ function getMaxConcurrentV8Actions(): number {
   return DEFAULT_MAX_CONCURRENT_V8_ACTIONS;
 }
 
-function getTokenRefreshDelayMs(index: number): number {
-  const immediateSlots = Math.max(1, Math.floor(getMaxConcurrentV8Actions() / 2));
+// slotsPerWorker = peak V8 slots a worker holds simultaneously
+// (1 = leaf action, 2 = action with one nested ctx.runAction at peak).
+// Reserves 50% of concurrency for non-fanout work.
+function getFanoutDelayMs(index: number, slotsPerWorker: number = 1): number {
+  const concurrency = getMaxConcurrentV8Actions();
+  const immediateSlots = Math.max(1, Math.floor(concurrency / (slotsPerWorker * 2)));
   if (index < immediateSlots) return 0;
-  return (Math.floor((index - immediateSlots) / immediateSlots) + 1) * TOKEN_REFRESH_STAGGER_DELAY_MS;
+  return (Math.floor((index - immediateSlots) / immediateSlots) + 1) * FANOUT_STAGGER_MS;
 }
 
 /** Schedule tokenRefreshOne workers. Must be mutation for ctx.scheduler. */
@@ -1892,21 +1896,21 @@ export const dispatchTokenBatch = internalMutation({
     let idx = 0;
 
     for (const accountId of args.accounts) {
-      const delayMs = getTokenRefreshDelayMs(idx);
+      const delayMs = getFanoutDelayMs(idx, 2);
       await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOneV2, {
         targetType: "account", targetId: accountId,
       });
       idx++;
     }
     for (const userId of args.users) {
-      const delayMs = getTokenRefreshDelayMs(idx);
+      const delayMs = getFanoutDelayMs(idx, 2);
       await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOneV2, {
         targetType: "user_vkads", targetId: userId,
       });
       idx++;
     }
     for (const userId of args.vkUsers) {
-      const delayMs = getTokenRefreshDelayMs(idx);
+      const delayMs = getFanoutDelayMs(idx, 2);
       await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOneV2, {
         targetType: "user_vk", targetId: userId,
       });
