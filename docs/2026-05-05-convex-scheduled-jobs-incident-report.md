@@ -395,6 +395,92 @@ curl -I --max-time 10 https://aipilot.by
 
 Вывод: стратегия V2 сработала лучше, чем показывал старый мониторинг. Дальше решения нужно принимать по latest-version queries, а не по raw history rows.
 
+Фактический результат после первого полного token refresh тика:
+
+- `tokenRefreshDispatch` heartbeat: `completed`, без `error`, duration около `605ms`.
+- `/version` отвечал `HTTP 200`.
+- Pending по dispatcher не рос.
+- Критерий "нет новых Too many concurrent requests" не прошел: в окне тика появилось `4` ошибки `Too many concurrent requests` в token refresh worker'ах.
+- Примеры источника: `auth` / VK token refresh failures для `user_vk` targets.
+
+Причина: commit `4373678` считал immediate fan-out как `floor(APPLICATION_MAX_CONCURRENT_V8_ACTIONS / 2)`. При concurrency `8` это давало `4` immediate workers. Но `tokenRefreshOneV2` внутри worker вызывает nested `ctx.runAction` (`getValidTokenForAccount`, `getValidVkAdsToken`, `getValidVkToken`), поэтому один worker может занимать больше одного V8 action slot в пике. `4 workers * 2 slots` насыщают весь лимит `8`, не оставляя headroom для других system actions/crons.
+
+Корректирующий hotfix:
+
+- Commit: `c34bbc3` (`fix: account for sub-action V8 slots in token refresh fan-out stagger`)
+- Branch push: `emergency/drain-scheduled-jobs` `4373678..c34bbc3`
+- Convex deploy: успешно задеплоено на `https://convex.aipilot.by`
+- `/version` после deploy: `HTTP 200`, около `1.37-1.46s`
+- Время deploy/checkpoint: около `2026-05-05 05:49 UTC`
+
+Новая формула:
+
+```text
+immediate = floor(concurrency / (slotsPerWorker * 2))
+```
+
+Для token refresh:
+
+```text
+concurrency = 8
+slotsPerWorker = 2
+immediate = floor(8 / (2 * 2)) = 2 workers
+```
+
+Следующий gate:
+
+- last successful `tokenRefreshDispatch`: `2026-05-05 05:09:36 UTC`
+- interval: `2h`
+- next tick: около `2026-05-05 07:09:36 UTC`
+- окно проверки: `07:08-07:20 UTC`
+
+Критерий clean:
+
+- `cronHeartbeats[name=tokenRefreshDispatch]`: `status=completed`, `error=null`, `finishedAt > 2026-05-05 07:09 UTC`
+- `systemLogs` за окно `07:08-07:20 UTC`: `0` записей с `Too many concurrent requests`
+- `systemLogs` за окно `07:08-07:20 UTC`: `0` новых `level=error`, `source=auth` про token refresh failures
+- `/version`: `HTTP 200`
+
+Пока этот gate не пройден, не переходить к UZ/sync восстановлению.
+
+Фактический результат контрольного тика `2026-05-05 07:09 UTC`:
+
+- `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8` подтверждено в контейнере.
+- Backend не рестартовался; Convex deploy выполнялся hot-load.
+- Latest-state `_scheduled_jobs`: текущих `pending/inProgress` для token refresh нет; проблема не в очереди, а в peak saturation во время тика.
+- `auth.js:tokenRefreshOneV2`: `236 success`, `14 failed`, `0 pending`, `0 inProgress` на момент проверки.
+- Backend stdout в окне `07:09:30-07:10:30 UTC` показал десятки `Too many concurrent requests`, больше чем попало в `systemLogs`.
+- Первый warning появился около `07:09:42 UTC`, примерно через `6s` после старта dispatch.
+- Waves шли каждые `5-7s`, что больше прежнего `FANOUT_STAGGER_MS=3000`; batch'и накладывались.
+
+Уточненная причина:
+
+```text
+tokenRefreshOneV2                         slot 1
+  -> getValidVkToken/getValidVkAdsToken/
+     getValidTokenForAccount              slot 2
+       -> refreshVkToken/refreshVkAdsToken/
+          refreshTokenForAccount          slot 3
+```
+
+Для account-ветки fallback-пути могут вызывать и другие provider actions, поэтому `slotsPerWorker=3` - минимально подтвержденная безопасная оценка, а не верхняя граница для всех веток.
+
+Что не подтвердилось:
+
+- `retryRecovery` не был главным потребителем slots;
+- старый `proactiveTokenRefresh` V1 не запускался параллельно;
+- user-facing requests не были основной причиной;
+- stagger работает, но был откалиброван неправильно.
+
+Новый корректирующий hotfix:
+
+- `slotsPerWorker` для token refresh: `2 -> 3`
+- `FANOUT_STAGGER_MS`: `3000 -> 7000`
+- При concurrency `8`: `immediate = floor(8 / (3 * 2)) = 1 worker`
+- Ожидаемое время dispatch для `80-90` targets: около `9-10 min`
+
+Пока этот hotfix не пройдет clean тик, UZ/sync остаются заблокированы.
+
 ## Решение после медленного drain
 
 Не ждать полного опустошения `_scheduled_jobs` перед частичным восстановлением пользовательского сервиса.
