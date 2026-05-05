@@ -2,6 +2,15 @@ import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
 
+// EMERGENCY: when set, suppress auto-scheduling adminAlerts.notify on every error log.
+// Reason: while adminAlerts.notify is drain-mode no-op, each schedule still occupies a V8 slot
+// during dispatch. A "Too many concurrent" error → systemLogger.log(error) → scheduled notify
+// → competes for slots with token-refresh workers → more errors. Self-feeding amplification.
+// Restore: unset together with adminAlerts.notify body restoration.
+const DISABLE_ERROR_ALERT_FANOUT =
+  process.env.DISABLE_ERROR_ALERT_FANOUT === "1" ||
+  process.env.DISABLE_ERROR_ALERT_FANOUT === "true";
+
 // ─── Запись системного лога ───
 
 export const log = internalMutation({
@@ -34,7 +43,7 @@ export const log = internalMutation({
     });
 
     // Авто-алерт админам при критических ошибках
-    if (args.level === "error") {
+    if (args.level === "error" && !DISABLE_ERROR_ALERT_FANOUT) {
       try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
         category: "criticalErrors",
         dedupKey: `${args.source}:${args.accountId ?? "global"}:${args.message.slice(0, 50)}`,
