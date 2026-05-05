@@ -8,7 +8,29 @@ const crons = cronJobs();
 // `internal` import retained for the commented cron registrations.
 void internal;
 
-// // Sync ad metrics every 5 minutes (fan-out: dispatch + per-account workers)
+// // Sync ad metrics — Phase 6 plan.
+// //
+// // RECOVERY NOTE (Phase 6):
+// //   - Phase 6a = manual one-time trigger of internal.syncMetrics.syncDispatchV2
+// //     with SYNC_WORKER_COUNT_V2=1 (env override) for clean baseline timing.
+// //     SYNC_METRICS_V2_POLL_MODERATION stays 0 (poll disabled) for first runs.
+// //     DO NOT enable this cron until 6a observed clean.
+// //   - Phase 6b candidate registration (kept commented):
+// //         crons.interval(
+// //           "sync-metrics",
+// //           { minutes: 45 },
+// //           internal.syncMetrics.syncDispatchV2
+// //         );
+// //     45 min interval (not 5 min) is mandated by:
+// //       - V2 worker can run up to ~9.5 min (heavy account 2000+ campaigns);
+// //       - dispatcher heartbeat guard does NOT prevent worker overlap;
+// //       - sync writes generate WAL pressure (V1 5-min interval was a
+// //         primary contributor to the 2026-05-04/05 incident);
+// //       - 2-hour token refresh cron (proactive-token-refresh) competes
+// //         for V8 slots — 45 min keeps overlap rare.
+// //   - V1 (syncDispatch / syncBatchWorker) stays no-op-effective and must
+// //     NOT be re-enabled while V1 backlog risk remains (10k+ historical
+// //     success rows in _scheduled_jobs).
 // crons.interval(
 //   "sync-metrics",
 //   { minutes: 5 },

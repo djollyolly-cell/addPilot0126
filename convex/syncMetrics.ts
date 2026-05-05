@@ -6,6 +6,8 @@ import { api, internal } from "./_generated/api";
 import type { MtVideoStats, MtCampaign, MtStatItem } from "./vkApi";
 import { withTimeout } from "./vkApi";
 import { quickTokenCheck } from "./tokenRecovery";
+import { getFanoutDelayMs } from "./_helpers/fanout";
+import { tryAcquireHeartbeat } from "./_helpers/heartbeatGuard";
 
 const ACCOUNT_TIMEOUT_MS = 400_000; // 400s default per account
 const TRANSIENT_ERROR_THRESHOLD = 3; // error status only after 3 consecutive transient failures
@@ -1527,6 +1529,296 @@ export const syncDispatch = internalAction({
         name: "syncDispatch",
         status: syncError ? "failed" : "completed",
         error: syncError,
+      });
+    }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
+// SYNC V2: emergency-recovery entrypoints
+// ═══════════════════════════════════════════════════════════
+//
+// V1 (syncBatchWorker / dispatchSyncBatches / syncDispatch) remains as
+// no-op / unchanged. New work goes through V2 names so that any leftover
+// pending V1 schedules cannot resurrect the old fan-out behaviour.
+//
+// Phase 6 plan:
+//   6a — manual one-time trigger of internal.syncMetrics.syncDispatchV2
+//        with SYNC_WORKER_COUNT_V2=1 for a clean baseline.
+//   6b — cron candidate at 45 min interval -> syncDispatchV2,
+//        SYNC_WORKER_COUNT_V2=2.
+//   6c — production tuning only after 2-3 clean 6b ticks: revisit
+//        worker count, batch size, interval; consider splitting
+//        pollAiBannerModeration to its own cron.
+//
+// All entrypoints are FAIL-CLOSED on SYNC_METRICS_V2_ENABLED.
+// pollAiBannerModeration runs only when SYNC_METRICS_V2_POLL_MODERATION=1
+// (also fail-closed). Cron in convex/crons.ts remains commented out.
+
+// SYNC V2 constants. Worker/batch sizes are env-clamped so operators can
+// reduce without redeploy but never raise above the safe ceilings established
+// by the canary analysis (slotsPerWorker=3 at concurrency=8 -> 2 workers max).
+const SYNC_WORKER_COUNT_V2 = Math.min(
+  2,
+  Math.max(1, Number(process.env.SYNC_WORKER_COUNT_V2) || 2)
+);
+const SYNC_BATCH_SIZE_V2 = Math.min(
+  20,
+  Math.max(1, Number(process.env.SYNC_BATCH_SIZE_V2) || 20)
+);
+// Worker stops between accounts when this elapsed. Same as V1: 9.5 min,
+// 30s margin under the Convex action 10-min hard limit. Remaining accounts
+// will be picked up on the next cron tick via lastSyncAt ordering.
+const SYNC_WORKER_TIMEOUT_MS_V2 = 570_000;
+// Stale dispatcher heartbeat threshold. Dispatcher itself is fast (<5s in
+// practice), 60s is 12x normal. Note: this guards stuck DISPATCHER only,
+// NOT worker overlap — that requires sufficient cron interval headroom.
+const SYNC_DISPATCH_SAFETY_TIMEOUT_MS = 60_000;
+
+// Fail-closed: must be explicitly enabled via Convex deployment env.
+//
+// KILL SWITCH NOTE (best-effort): same caveat as UZ V2 — `process.env` reads
+// inside one V8 isolate invocation may be cached, and a worker mid-await on
+// a VK API call cannot be interrupted by env change alone. Layered checks
+// at every cheap boundary (worker start, between accounts, between
+// scheduler.runAfter calls) maximise responsiveness.
+function isSyncMetricsV2Enabled(): boolean {
+  return process.env.SYNC_METRICS_V2_ENABLED === "1";
+}
+
+// Separate gate for pollAiBannerModeration. Default off for the first sync
+// canaries so we observe sync workers in isolation; enable later via
+// `npx convex env set SYNC_METRICS_V2_POLL_MODERATION 1` once sync is stable.
+function isModerationPollEnabled(): boolean {
+  return process.env.SYNC_METRICS_V2_POLL_MODERATION === "1";
+}
+
+/**
+ * V2 batch worker for metrics sync. Same body as V1, gated on env flag,
+ * with in-loop kill switch and worker-level timeout between accounts.
+ */
+export const syncBatchWorkerV2 = internalAction({
+  args: {
+    accountIds: v.array(v.id("adAccounts")),
+    workerIndex: v.number(),
+  },
+  handler: async (ctx, args) => {
+    if (!isSyncMetricsV2Enabled()) {
+      console.log(
+        `[syncBatchV2#${args.workerIndex}] SYNC_METRICS_V2_ENABLED!=1, no-op`
+      );
+      return;
+    }
+
+    const workerStart = Date.now();
+    let synced = 0;
+    let errors = 0;
+
+    for (const accountId of args.accountIds) {
+      // Best-effort mid-run kill switch (see isSyncMetricsV2Enabled comment).
+      if (!isSyncMetricsV2Enabled()) {
+        console.log(
+          `[syncBatchV2#${args.workerIndex}] kill switch disabled mid-run; synced=${synced}; remaining=${args.accountIds.length - synced}`
+        );
+        break;
+      }
+      if (Date.now() - workerStart > SYNC_WORKER_TIMEOUT_MS_V2) {
+        console.log(
+          `[syncBatchV2#${args.workerIndex}] Worker timeout after ${synced} synced, ${args.accountIds.length - synced} remaining`
+        );
+        break;
+      }
+
+      try {
+        await syncSingleAccount(ctx, accountId);
+        synced++;
+      } catch (err) {
+        errors++;
+        console.error(
+          `[syncBatchV2#${args.workerIndex}] Account ${accountId} failed: ${err instanceof Error ? err.message : err}`
+        );
+      }
+    }
+
+    console.log(
+      `[syncBatchV2#${args.workerIndex}] Done: ${synced} synced, ${errors} errors out of ${args.accountIds.length}`
+    );
+  },
+});
+
+/**
+ * V2 dispatch mutation. Splits accounts into SYNC_WORKER_COUNT_V2 chunks and
+ * schedules workers with slot-aware stagger.
+ *
+ * NOTE: stagger here defends only the startup burst. With long-lived workers
+ * holding 1 base slot each, saturation can still happen later when several
+ * workers concurrently enter nested auth/VK actions. Mitigation: keep
+ * SYNC_WORKER_COUNT_V2 small (default/clamped at 2).
+ */
+export const dispatchSyncBatchesV2 = internalMutation({
+  args: { accountIds: v.array(v.id("adAccounts")) },
+  handler: async (ctx, args) => {
+    if (!isSyncMetricsV2Enabled()) {
+      console.log(`[dispatchSyncBatchesV2] SYNC_METRICS_V2_ENABLED!=1, no-op`);
+      return;
+    }
+
+    const total = args.accountIds.length;
+    if (total === 0) return;
+
+    const workerCount = Math.min(SYNC_WORKER_COUNT_V2, total);
+    const chunkSize = Math.ceil(total / workerCount);
+
+    for (let i = 0; i < workerCount; i++) {
+      // Re-check kill switch between scheduler.runAfter calls. The loop is
+      // fast (<100 ms) but still gives one more cancellation window.
+      if (!isSyncMetricsV2Enabled()) {
+        console.log(
+          `[dispatchSyncBatchesV2] kill switch disabled mid-dispatch; scheduled=${i}/${workerCount}`
+        );
+        break;
+      }
+      const chunk = args.accountIds.slice(i * chunkSize, (i + 1) * chunkSize);
+      if (chunk.length === 0) break;
+      const delayMs = getFanoutDelayMs(i, 3);
+      await ctx.scheduler.runAfter(
+        delayMs,
+        internal.syncMetrics.syncBatchWorkerV2,
+        { accountIds: chunk, workerIndex: i }
+      );
+    }
+  },
+});
+
+/**
+ * V2 dispatcher action with heartbeat guard against stuck previous dispatcher.
+ * Heartbeat name `syncDispatch` is reused on purpose — healthCheck.ts
+ * already references it and we do not want to fragment monitoring.
+ */
+export const syncDispatchV2 = internalAction({
+  args: {},
+  handler: async (
+    ctx
+  ): Promise<{
+    skipped: boolean;
+    reason?: string;
+    selected?: number;
+    eligible?: number;
+    workersDispatched?: number;
+    moderationPollRan?: boolean;
+  }> => {
+    if (!isSyncMetricsV2Enabled()) {
+      console.log(`[syncDispatchV2] SYNC_METRICS_V2_ENABLED!=1, no-op`);
+      return { skipped: true, reason: "v2_disabled" };
+    }
+
+    const now = Date.now();
+    const prev = await ctx.runQuery(internal.syncMetrics.getCronHeartbeat, {
+      name: "syncDispatch",
+    });
+    const decision = tryAcquireHeartbeat(
+      prev,
+      now,
+      SYNC_DISPATCH_SAFETY_TIMEOUT_MS
+    );
+
+    if (decision === "skip_fresh") {
+      console.log(
+        `[syncDispatchV2] skip: previous dispatcher still running (startedAt=${prev?.startedAt})`
+      );
+      return { skipped: true, reason: "fresh_running" };
+    }
+    if (decision === "takeover_stale") {
+      console.warn(
+        `[syncDispatchV2] takeover: stale running heartbeat (startedAt=${prev?.startedAt}, ageMs=${now - (prev?.startedAt ?? 0)})`
+      );
+    }
+
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+      name: "syncDispatch",
+      status: "running",
+    });
+
+    let cronError: string | undefined;
+    let moderationPollRan = false;
+    try {
+      const allEligible = await ctx.runQuery(
+        internal.syncMetrics.listSyncableAccounts
+      );
+      if (allEligible.length === 0) {
+        console.log("[syncDispatchV2] No syncable accounts");
+        return {
+          skipped: false,
+          selected: 0,
+          eligible: 0,
+          workersDispatched: 0,
+          moderationPollRan: false,
+        };
+      }
+
+      // listSyncableAccounts already sorts oldest lastSyncAt first; slice
+      // preserves order. Logging both numbers shows backlog coverage.
+      const accounts = allEligible.slice(0, SYNC_BATCH_SIZE_V2);
+      console.log(
+        `[syncDispatchV2] Selected ${accounts.length}/${allEligible.length} eligible accounts`
+      );
+
+      const accountIds = accounts.map((a) => a._id);
+      await ctx.runMutation(internal.syncMetrics.dispatchSyncBatchesV2, {
+        accountIds,
+      });
+      const workersDispatched = Math.min(
+        SYNC_WORKER_COUNT_V2,
+        accountIds.length
+      );
+      console.log(
+        `[syncDispatchV2] Dispatched ${workersDispatched} V2 batch workers for ${accountIds.length} accounts (worker_count=${SYNC_WORKER_COUNT_V2}, batch_size=${SYNC_BATCH_SIZE_V2})`
+      );
+
+      // Optional: poll AI banner moderation. Default off for the first
+      // sync canaries so we test sync workers in isolation.
+      if (isModerationPollEnabled()) {
+        try {
+          await ctx.runAction(internal.syncMetrics.pollAiBannerModeration, {});
+          moderationPollRan = true;
+        } catch (error) {
+          const errMsg = error instanceof Error ? error.message : String(error);
+          console.error(
+            "[syncDispatchV2] Error polling AI banner moderation:",
+            errMsg
+          );
+          try {
+            await ctx.runMutation(internal.systemLogger.log, {
+              level: "warn",
+              source: "syncMetrics",
+              message: `[V2] AI banner moderation poll failed: ${errMsg.slice(0, 180)}`,
+            });
+          } catch {
+            /* non-critical */
+          }
+        }
+      } else {
+        console.log(
+          "[syncDispatchV2] moderation poll skipped (SYNC_METRICS_V2_POLL_MODERATION!=1)"
+        );
+      }
+
+      return {
+        skipped: false,
+        selected: accounts.length,
+        eligible: allEligible.length,
+        workersDispatched,
+        moderationPollRan,
+      };
+    } catch (err) {
+      cronError = err instanceof Error ? err.message : "Unknown error";
+      console.error("[syncDispatchV2] Fatal error:", cronError);
+      throw err;
+    } finally {
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "syncDispatch",
+        status: cronError ? "failed" : "completed",
+        error: cronError,
       });
     }
   },
