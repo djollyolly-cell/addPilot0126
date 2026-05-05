@@ -1909,83 +1909,9 @@ export const tokenRefreshOne = internalAction({
     targetType: v.union(v.literal("account"), v.literal("user_vkads"), v.literal("user_vk")),
     targetId: v.string(),
   },
-  handler: async (ctx, args) => {
-    const now = Date.now();
-
-    if (args.targetType === "account") {
-      const accountId = args.targetId as Id<"adAccounts">;
-      const acc = await ctx.runQuery(internal.adAccounts.getInternal, { accountId });
-      const label = acc?.name || accountId;
-
-      try {
-        await ctx.runAction(internal.auth.getValidTokenForAccount, { accountId });
-        const updated = await ctx.runQuery(internal.auth.getAccountTokenExpiry, { accountId });
-        if (updated && updated > now) {
-          console.log(`[tokenRefreshOne] Account "${label}": refreshed, expires ${new Date(updated).toISOString()}`);
-        } else {
-          console.log(`[tokenRefreshOne] Account "${label}": refresh returned OK but token not updated`);
-          try {
-            await ctx.runAction(internal.telegram.sendMessage, {
-              chatId: ADMIN_CHAT_ID,
-              text: `🔑 Account "${label}": refresh OK but token not updated`,
-            });
-          } catch { /* non-critical */ }
-        }
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.log(`[tokenRefreshOne] Account "${label}": failed -- ${errMsg}`);
-        if (isUnrecoverable(err)) {
-          await ctx.runMutation(internal.auth.clearAccountRefreshToken, { accountId });
-          try {
-            const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId });
-            if (recovered) {
-              console.log(`[tokenRefreshOne] Account "${label}": recovered via cascade after ${errMsg}`);
-              return; // success via recovery
-            }
-          } catch (recoveryErr) {
-            console.error(`[tokenRefreshOne] Account "${label}": recovery failed: ${recoveryErr}`);
-          }
-        }
-        // Direct Telegram removed — already alerted via systemLogger in getValidTokenForAccount/tryRecoverToken
-      }
-    } else if (args.targetType === "user_vkads") {
-      const userId = args.targetId as Id<"users">;
-      const user = await ctx.runQuery(internal.users.getById, { userId });
-      const label = user?.name || user?.email || userId;
-
-      try {
-        await ctx.runAction(internal.auth.getValidVkAdsToken, { userId });
-        const updated = await ctx.runQuery(internal.auth.getUserVkAdsTokenExpiry, { userId });
-        if (updated && updated > now) {
-          console.log(`[tokenRefreshOne] User "${label}": VK Ads token refreshed, expires ${new Date(updated).toISOString()}`);
-        } else {
-          console.log(`[tokenRefreshOne] User "${label}": VK Ads refresh OK but token not updated`);
-        }
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.log(`[tokenRefreshOne] User "${label}": VK Ads refresh failed -- ${errMsg}`);
-        if (isUnrecoverable(err)) {
-          await ctx.runMutation(internal.auth.clearUserVkAdsRefreshToken, { userId });
-        }
-        // Direct Telegram removed — already alerted via systemLogger in getValidVkAdsToken
-      }
-    } else if (args.targetType === "user_vk") {
-      const userId = args.targetId as Id<"users">;
-      const user = await ctx.runQuery(internal.users.getById, { userId });
-      const label = user?.name || user?.email || userId;
-
-      try {
-        await ctx.runAction(internal.auth.getValidVkToken, { userId });
-        console.log(`[tokenRefreshOne] User "${label}": VK ID token refreshed`);
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        console.log(`[tokenRefreshOne] User "${label}": VK ID refresh failed -- ${errMsg}`);
-        if (isUnrecoverable(err)) {
-          await ctx.runMutation(internal.auth.clearUserVkRefreshToken, { userId });
-        }
-        // Direct Telegram removed — already alerted via systemLogger in getValidVkToken
-      }
-    }
+  handler: async (_ctx, _args) => {
+    // EMERGENCY DRAIN MODE: no-op. Restore body after pending queue drains.
+    return;
   },
 });
 

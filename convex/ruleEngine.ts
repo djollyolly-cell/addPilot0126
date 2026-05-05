@@ -3218,27 +3218,9 @@ export const uzBudgetBatchWorker = internalAction({
     accountIds: v.array(v.id("adAccounts")),
     workerIndex: v.number(),
   },
-  handler: async (ctx, args) => {
-    const workerStart = Date.now();
-    let processed = 0;
-    let errors = 0;
-
-    for (const accountId of args.accountIds) {
-      if (Date.now() - workerStart > UZ_WORKER_TIMEOUT_MS) {
-        console.log(`[uzBatch#${args.workerIndex}] Worker timeout after ${processed} accounts`);
-        break;
-      }
-
-      try {
-        await processUzBudgetForAccount(ctx, accountId);
-        processed++;
-      } catch (err) {
-        errors++;
-        console.error(`[uzBatch#${args.workerIndex}] Account ${accountId} failed: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-
-    console.log(`[uzBatch#${args.workerIndex}] Done: ${processed} processed, ${errors} errors out of ${args.accountIds.length}`);
+  handler: async (_ctx, _args) => {
+    // EMERGENCY DRAIN MODE: no-op. Restore body after pending queue drains.
+    return;
   },
 });
 

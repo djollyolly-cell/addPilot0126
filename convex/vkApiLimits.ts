@@ -21,21 +21,9 @@ export const recordRateLimit = internalMutation({
     dailyRemaining: v.optional(v.number()),
     statusCode: v.number(),
   },
-  handler: async (ctx, args) => {
-    const hasAnyData =
-      args.rpsLimit !== undefined ||
-      args.rpsRemaining !== undefined ||
-      args.hourlyLimit !== undefined ||
-      args.hourlyRemaining !== undefined ||
-      args.dailyLimit !== undefined ||
-      args.dailyRemaining !== undefined;
-    if (!hasAnyData && args.statusCode !== 429) {
-      return null; // skip noise — no headers and not a rate-limit event
-    }
-    return await ctx.db.insert("vkApiLimits", {
-      ...args,
-      capturedAt: Date.now(),
-    });
+  handler: async (_ctx, _args) => {
+    // EMERGENCY DRAIN MODE: no-op. Restore body after pending queue drains.
+    return null;
   },
 });
 

@@ -1446,36 +1446,9 @@ export const syncBatchWorker = internalAction({
     accountIds: v.array(v.id("adAccounts")),
     workerIndex: v.number(),
   },
-  handler: async (ctx, args) => {
-    const workerStart = Date.now();
-    let synced = 0;
-    let errors = 0;
-    const wTotal: SyncResult = {
-      campaigns: { inserted: 0, patched: 0, skipped: 0 },
-      ads: { inserted: 0, patched: 0, skipped: 0 },
-      metrics: { inserted: 0, patched: 0, skipped: 0 },
-    };
-
-    for (const accountId of args.accountIds) {
-      // Worker-level timeout check: stop if approaching 9 min
-      if (Date.now() - workerStart > WORKER_TIMEOUT_MS) {
-        console.log(`[syncBatch#${args.workerIndex}] Worker timeout reached after ${synced} accounts, ${args.accountIds.length - synced} remaining`);
-        break;
-      }
-
-      try {
-        const r = await syncSingleAccount(ctx, accountId);
-        synced++;
-        wTotal.campaigns.inserted += r.campaigns.inserted; wTotal.campaigns.patched += r.campaigns.patched; wTotal.campaigns.skipped += r.campaigns.skipped;
-        wTotal.ads.inserted += r.ads.inserted; wTotal.ads.patched += r.ads.patched; wTotal.ads.skipped += r.ads.skipped;
-        wTotal.metrics.inserted += r.metrics.inserted; wTotal.metrics.patched += r.metrics.patched; wTotal.metrics.skipped += r.metrics.skipped;
-      } catch (err) {
-        errors++;
-        console.error(`[syncBatch#${args.workerIndex}] Account ${accountId} failed: ${err instanceof Error ? err.message : err}`);
-      }
-    }
-
-    console.log(`[syncBatch#${args.workerIndex}] Done: ${synced} synced, ${errors} errors | campaigns inserted=${wTotal.campaigns.inserted} patched=${wTotal.campaigns.patched} skipped=${wTotal.campaigns.skipped} | ads inserted=${wTotal.ads.inserted} patched=${wTotal.ads.patched} skipped=${wTotal.ads.skipped} | metrics inserted=${wTotal.metrics.inserted} patched=${wTotal.metrics.patched} skipped=${wTotal.metrics.skipped}`);
+  handler: async (_ctx, _args) => {
+    // EMERGENCY DRAIN MODE: no-op. Restore body after pending queue drains.
+    return;
   },
 });
 

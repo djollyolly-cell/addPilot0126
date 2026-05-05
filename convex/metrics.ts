@@ -410,54 +410,11 @@ export const triggerMassCleanup = mutation({
 
 export const manualMassCleanup = internalAction({
   args: { runNumber: v.optional(v.number()) },
-  handler: async (ctx, args) => {
-    const run = args.runNumber ?? 1;
-    const startedAt = Date.now();
-    let totalDeleted = 0;
-    let occErrors = 0;
-
-    // Reset heartbeat on first run
-    if (run === 1) {
-      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
-        name: "cleanup-realtime-metrics",
-        status: "running",
-      });
-    }
-
-    while (Date.now() - startedAt < MASS_TIME_BUDGET_MS) {
-      try {
-        const batch = await ctx.runMutation(internal.metrics.deleteRealtimeBatch, {
-          batchSize: MASS_BATCH_SIZE,
-        });
-        totalDeleted += batch.deleted;
-
-        if (!batch.hasMore) {
-          console.log(`[mass-cleanup] DONE! Run #${run}: deleted ${totalDeleted} total. Table is clean.`);
-          await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
-            name: "cleanup-realtime-metrics",
-            status: "completed",
-          });
-          return;
-        }
-        // 2s pause between batches — gentle on server
-        await sleep(MASS_BATCH_DELAY_MS);
-      } catch {
-        occErrors++;
-        if (occErrors > 5) {
-          console.warn(`[mass-cleanup] Run #${run}: too many OCC errors (${occErrors}), pausing. Deleted ${totalDeleted}.`);
-          break;
-        }
-        await sleep(MASS_OCC_RETRY_DELAY_MS);
-      }
-    }
-
-    const elapsed = Math.round((Date.now() - startedAt) / 1000);
-    console.log(`[mass-cleanup] Run #${run}: deleted ${totalDeleted} in ${elapsed}s. Next run in 60s...`);
-
-    // 60s rest before next run
-    await ctx.scheduler.runAfter(MASS_REST_BETWEEN_RUNS_MS, internal.metrics.manualMassCleanup, {
-      runNumber: run + 1,
-    });
+  handler: async (_ctx, _args) => {
+    // EMERGENCY DRAIN MODE: no-op. Self-rescheduling chain stops naturally
+    // because this no-op does NOT call ctx.scheduler.runAfter at the end.
+    // Restore body after pending queue drains.
+    return;
   },
 });
 

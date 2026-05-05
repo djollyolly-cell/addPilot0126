@@ -543,7 +543,9 @@ export const getMtStatistics = action({
           info.rateLimits.rpsLimit !== undefined ||
           info.rateLimits.dailyRemaining !== undefined ||
           info.statusCode === 429;
-        if (hasData) {
+        if (false && hasData) {
+          // EMERGENCY DRAIN MODE: producer disabled to prevent queue refill.
+          // Restore (remove `false &&`) after pending queue drains.
           void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
             accountId: args.accountId,
             endpoint: info.endpoint,
@@ -671,7 +673,9 @@ export const getCampaignsSpentTodayBatch = internalAction({
           info.rateLimits.rpsLimit !== undefined ||
           info.rateLimits.dailyRemaining !== undefined ||
           info.statusCode === 429;
-        if (hasData) {
+        if (false && hasData) {
+          // EMERGENCY DRAIN MODE: producer disabled to prevent queue refill.
+          // Restore (remove `false &&`) after pending queue drains.
           void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
             accountId: args.accountId,
             endpoint: info.endpoint,
@@ -864,7 +868,9 @@ export const getMtLeadCounts = action({
           info.rateLimits.rpsLimit !== undefined ||
           info.rateLimits.dailyRemaining !== undefined ||
           info.statusCode === 429;
-        if (hasData) {
+        if (false && hasData) {
+          // EMERGENCY DRAIN MODE: producer disabled to prevent queue refill.
+          // Restore (remove `false &&`) after pending queue drains.
           void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
             accountId: args.accountId,
             endpoint: info.endpoint,
@@ -1076,7 +1082,9 @@ export const getMtBanners = action({
           info.rateLimits.rpsLimit !== undefined ||
           info.rateLimits.dailyRemaining !== undefined ||
           info.statusCode === 429;
-        if (hasData) {
+        if (false && hasData) {
+          // EMERGENCY DRAIN MODE: producer disabled to prevent queue refill.
+          // Restore (remove `false &&`) after pending queue drains.
           void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
             accountId: args.accountId,
             endpoint: info.endpoint,
