@@ -85,22 +85,29 @@ void internal;
 //   internal.aiRecommendations.checkAllCampaigns
 // );
 //
-// // UZ budget increase — fan-out: dispatch + per-account workers
-// //
-// // RECOVERY NOTE (Phase 5):
-// //   - Phase 5a = manual one-time trigger of internal.ruleEngine.uzBudgetDispatchV2 only.
-// //     DO NOT enable this cron until 5a observed clean.
-// //   - Phase 5b candidate registration (kept commented):
-// //         crons.interval(
-// //           "uz-budget-increase",
-// //           { minutes: 30 },
-// //           internal.ruleEngine.uzBudgetDispatchV2
-// //         );
-// //     30 min interval (not 5 min) is mandated because UZ V2 workers
-// //     can run several minutes and can overlap themselves, which the
-// //     dispatcher heartbeat guard does NOT prevent.
-// //   - V1 (uzBudgetDispatch) stays no-op-effective and must NOT be
-// //     re-enabled while V1 backlog risk remains.
+// UZ budget increase — Phase 5b CRON CANARY (active, 45 min interval).
+//
+// Gate remains fail-closed via UZ_BUDGET_V2_ENABLED Convex deployment env:
+// the dispatcher returns { skipped: true, reason: "v2_disabled" } unless the
+// flag is set to "1". Deploy must happen with gate disabled and gate is only
+// opened after fail-closed verification.
+//
+// History:
+//   - Originally registered every 5 min on internal.ruleEngine.uzBudgetDispatch (V1).
+//   - Disabled during emergency drain (commit f452348).
+//   - Re-enabled as V2 entrypoint after manual canary 5a verified clean.
+//   - Interval bumped from 30 to 45 min to keep ~22 min worker headroom
+//     observed in 5a. V1 (uzBudgetDispatch) stays no-op-effective and
+//     must NOT be re-enabled while V1 backlog risk remains.
+crons.interval(
+  "uz-budget-increase",
+  { minutes: 45 },
+  internal.ruleEngine.uzBudgetDispatchV2,
+);
+
+// V1 5-min registration kept here as historical reference. Do NOT activate.
+// Convex backlog of V1 jobs may still exist; activating V1 risks resurrecting
+// the drained queue.
 // crons.interval(
 //   "uz-budget-increase",
 //   { minutes: 5 },
