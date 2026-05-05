@@ -221,7 +221,20 @@ async function postCheck(startIso, endIso, client) {
     const errCount = ssh(
       `docker logs adpilot-convex-backend --since ${startIso} --until ${endIso} 2>&1 | grep -cE 'Too many concurrent|Transient error|TOKEN_EXPIRED' || true`
     );
-    console.log(`    error-line count: ${errCount}`);
+    console.log(`    V8/transient error-line count: ${errCount}`);
+    // syncBatchV2 catches per-account errors and continues — worker can
+    // report success while individual accounts failed. Surface those.
+    const accountFailCount = ssh(
+      `docker logs adpilot-convex-backend --since ${startIso} --until ${endIso} 2>&1 | grep -cE 'syncBatchV2.*Account .* failed' || true`
+    );
+    console.log(`    syncBatchV2 per-account failures: ${accountFailCount}`);
+    if (Number(accountFailCount) > 0) {
+      const sample = ssh(
+        `docker logs adpilot-convex-backend --since ${startIso} --until ${endIso} 2>&1 | grep -E 'syncBatchV2.*Account .* failed' | head -10 || true`
+      );
+      console.log(`    --- per-account failure samples ---`);
+      for (const l of sample.split("\n")) console.log(`    ${l}`);
+    }
     const v2Lines = ssh(
       `docker logs adpilot-convex-backend --since ${startIso} --until ${endIso} 2>&1 | grep -E 'syncBatchV2|syncDispatchV2|dispatchSyncBatchesV2' | head -30 || true`
     );
@@ -303,11 +316,14 @@ async function postCheck(startIso, endIso, client) {
 
   console.log(`=== END ===`);
   console.log(`Clean criteria for sync canary:`);
-  console.log(`  [1] backend stdout: 0 'Too many concurrent', 0 'Transient error'`);
-  console.log(`  [2] heartbeat: status=completed, error=null, in window`);
-  console.log(`  [3] V2 worker: success increments, 0 new failed`);
-  console.log(`  [4] pg_wal delta: < 200 MB for canary tick`);
-  console.log(`  [5] adminAlerts.notify: 0 in window`);
+  console.log(`  [1a] backend stdout: 0 'Too many concurrent', 0 'Transient error'`);
+  console.log(`  [1b] backend stdout: 0 'syncBatchV2 ... Account ... failed'`);
+  console.log(`  [2]  heartbeat: status=completed, error=null, in window`);
+  console.log(`       (heartbeat reflects DISPATCHER completion only,`);
+  console.log(`        not worker completion — workers run async)`);
+  console.log(`  [3]  V2 worker schedules: success increments, 0 new failed`);
+  console.log(`  [4]  pg_wal delta: < 200 MB for canary tick`);
+  console.log(`  [5]  adminAlerts.notify: 0 in window`);
 }
 
 async function baselineMode(client) {

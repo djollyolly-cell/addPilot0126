@@ -8,42 +8,30 @@ const crons = cronJobs();
 // `internal` import retained for the commented cron registrations.
 void internal;
 
-// // Sync ad metrics — Phase 6 plan.
-// //
-// // RECOVERY NOTE (Phase 6):
-// //   - Phase 6a = manual one-time trigger of internal.syncMetrics.syncDispatchV2
-// //     with SYNC_WORKER_COUNT_V2=1 (env override) for clean baseline timing.
-// //     SYNC_METRICS_V2_POLL_MODERATION stays 0 (poll disabled) for first runs.
-// //     DO NOT enable this cron until 6a observed clean.
-// //   - Phase 6b candidate registration (kept commented):
-// //         crons.interval(
-// //           "sync-metrics",
-// //           { minutes: 45 },
-// //           internal.syncMetrics.syncDispatchV2
-// //         );
-// //     45 min interval (not 5 min) is mandated by:
-// //       - V2 worker can run up to ~9.5 min (heavy account 2000+ campaigns);
-// //       - dispatcher heartbeat guard does NOT prevent worker overlap;
-// //       - sync writes generate WAL pressure (V1 5-min interval was a
-// //         primary contributor to the 2026-05-04/05 incident);
-// //       - 2-hour token refresh cron (proactive-token-refresh) competes
-// //         for V8 slots — 45 min keeps overlap rare.
-// //   - V1 (syncDispatch / syncBatchWorker) stays no-op-effective and must
-// //     NOT be re-enabled while V1 backlog risk remains (10k+ historical
-// //     success rows in _scheduled_jobs).
+// Sync ad metrics — Phase 6 plan.
 //
-// V1 5-min registration kept here as historical reference. DO NOT ACTIVATE.
-// Activating V1 would:
-//   - resurrect any dormant pending V1 schedules (queue drain risk);
-//   - bypass the V2 fail-closed gate and Phase 6 canary plan;
-//   - re-introduce the 5-min cadence that contributed to the
-//     2026-05-04/05 incident WAL pressure.
-// If you need to re-enable sync, use the Phase 6b V2 registration above
-// (uzBudgetDispatchV2 / syncDispatchV2 with 45 min interval).
+// RECOVERY NOTE (Phase 6):
+//   - Phase 6a = manual one-time trigger of internal.syncMetrics.syncDispatchV2
+//     with SYNC_WORKER_COUNT_V2=1 (env override) for clean baseline timing.
+//     SYNC_METRICS_V2_POLL_MODERATION stays 0 (poll disabled) for first runs.
+//     DO NOT enable this cron until 6a observed clean.
+//   - Phase 6b CANARY CRON registration is below (kept commented).
+//     Uncomment when Phase 6a observed clean. 45 min interval is mandated by:
+//       * V2 worker can run up to ~9.5 min (heavy account 2000+ campaigns);
+//       * dispatcher heartbeat guard does NOT prevent worker overlap;
+//       * sync writes generate WAL pressure (V1 5-min interval was a
+//         primary contributor to the 2026-05-04/05 incident);
+//       * 2-hour token refresh cron (proactive-token-refresh) competes
+//         for V8 slots — 45 min keeps overlap rare.
+//   - V1 references (syncDispatch, 5-min interval) are NOT kept here as a
+//     ready-to-uncomment block. V1 must NOT be re-enabled: dormant pending
+//     V1 schedules carry queue-drain risk, and the 5-min cadence was a
+//     primary contributor to the 2026-05-04/05 incident WAL pressure. Any
+//     future "re-enable sync" must go through V2 (`syncDispatchV2`).
 // crons.interval(
 //   "sync-metrics",
-//   { minutes: 5 },
-//   internal.syncMetrics.syncDispatch
+//   { minutes: 45 },
+//   internal.syncMetrics.syncDispatchV2,
 // );
 //
 // // Daily digest at 06:00 UTC (09:00 MSK)
