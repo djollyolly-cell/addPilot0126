@@ -7,6 +7,8 @@ Emergency branch: `emergency/drain-scheduled-jobs`
 Emergency commit: `f4523486aa5ed399a4b676afbd4b76411df21b5d` (`emergency: drain-mode no-op handlers for scheduled jobs queue`)
 Phase 1 commit: `7aa2170` (safe cleanup crons restored)
 
+Связанный отчет по выполнению плана восстановления: `docs/2026-05-05-convex-recovery-plan-execution-report.md`.
+
 ## Кратко
 
 Сервис стал недоступен снаружи: `aipilot.by`, `convex.aipilot.by` и прямой Convex endpoint таймаутились. SSH также был нестабилен: TCP-порт принимал соединение, но SSH banner часто не отдавался.
@@ -427,7 +429,7 @@ slotsPerWorker = 2
 immediate = floor(8 / (2 * 2)) = 2 workers
 ```
 
-Следующий gate:
+Исторический gate после `c34bbc3`:
 
 - last successful `tokenRefreshDispatch`: `2026-05-05 05:09:36 UTC`
 - interval: `2h`
@@ -442,6 +444,8 @@ immediate = floor(8 / (2 * 2)) = 2 workers
 - `/version`: `HTTP 200`
 
 Пока этот gate не пройден, не переходить к UZ/sync восстановлению.
+
+Итог: этот gate не был пройден. Результат зафиксирован ниже.
 
 Фактический результат контрольного тика `2026-05-05 07:09 UTC`:
 
@@ -481,6 +485,167 @@ tokenRefreshOneV2                         slot 1
 
 Пока этот hotfix не пройдет clean тик, UZ/sync остаются заблокированы.
 
+Требование к закрытию Phase 2:
+
+- пройти `2` clean token refresh тика подряд;
+- проверять both sources: backend stdout и `systemLogs`;
+- окно проверки каждого тика держать не меньше `11-12 min`;
+- до этого не bump'ать concurrency `8 -> 16`;
+- до этого не merge'ить emergency branch в `main`;
+- до этого не включать UZ/sync.
+
+Команда для проверки backend stdout:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_server root@178.172.235.49 \
+  "docker logs adpilot-convex-backend --since <window-start> --until <window-end> 2>&1 \
+   | grep -cE 'Too many concurrent|Transient error'"
+```
+
+Риск cron collision: token refresh теперь может занимать около `9-10 min`, поэтому другие crons, попавшие в это окно, могут конкурировать за V8 action slots. Если будет overlap, не считать это автоматически поломкой token refresh; сначала проверить, какие crons работали в том же окне. Возможные решения: фиксированное cron-расписание со смещением вместо `crons.interval({ hours: 2 })`, если поддерживается текущим setup, или guard/skip при занятости.
+
+Дополнительная причина amplification loop:
+
+В окне тика `09:09 UTC` найдено точное совпадение между token refresh errors и scheduled jobs `adminAlerts.js:notify`. Причина в `convex/systemLogger.ts`: при `level="error"` он автоматически schedule'ит `internal.adminAlerts.notify` через `runAfter(0)`.
+
+В drain-mode `adminAlerts.notify` является no-op, но scheduled action все равно не бесплатный: он занимает V8 action slot, загружает функцию и завершает job. Поэтому каждая token refresh ошибка могла создавать дополнительный no-op alert worker, который конкурировал с последующими token refresh workers и усиливал `Too many concurrent`.
+
+Корректирующий gate:
+
+- Commit: `9aa3a68` (`fix: env-gated guard for error alert fan-out`)
+- Флаг: `DISABLE_ERROR_ALERT_FANOUT=1`
+- Место фикса: `convex/systemLogger.ts`
+- Смысл: error logs продолжают записываться, но больше не создают `adminAlerts.notify` fan-out при включенном флаге.
+
+Урок по env scope:
+
+- container env через compose был добавлен и backend был пересоздан;
+- после первого теста выяснилось, что этого недостаточно для Convex function env: `systemLog` в `09:52 UTC` все еще создал `adminAlerts.notify` schedule;
+- после установки флага в Convex deployment env второй тест в `09:53 UTC` создал `systemLog`, но `adminAlerts.notify` schedule уже не создался;
+- значит для таких function-level guards нужно проверять именно Convex deployment env, а не только container env;
+- такой же флаг оставлен в compose как fallback, но compose правился напрямую; после стабилизации продублировать в Dokploy UI.
+
+Текущий статус после `9aa3a68`:
+
+- branch `emergency/drain-scheduled-jobs` pushed;
+- Convex deploy live;
+- backend healthy;
+- `/version` отвечает `HTTP 200`;
+- `DISABLE_ERROR_ALERT_FANOUT=1` verified working;
+- после restart с `09:34 UTC` backend stdout не показывал `Too many concurrent` / `Transient error`;
+- после `09:34 UTC` новых `adminAlerts.js:notify` schedules не найдено.
+
+Restore-drain checklist:
+
+- когда `adminAlerts.notify` будет восстановлен из no-op в настоящий handler, одновременно снять `DISABLE_ERROR_ALERT_FANOUT`;
+- иначе Telegram/admin alerts могут работать частично, но error-fanout из `systemLogger` останется тихо выключенным;
+- при восстановлении пройти остальные direct call-sites `adminAlerts.notify`;
+- долгосрочно заменить auto-schedule на каждый error log на batch/dedup alert queue.
+
+## Phase 2 V2 верификация: хронология коммитов и тиков
+
+После начального деплоя Phase 2 V2 (commit `02bcfbb`) для отладки фан-аут механики потребовалось четыре последовательных коммита, каждый верифицированный отдельным тиком cron `proactive-token-refresh` (2h interval).
+
+Условные обозначения:
+- "Too many concurrent" в `docker logs adpilot-convex-backend` — реальные ошибки backend isolate'ов
+- "errors" в `systemLogs` — ошибки, дошедшие до catch-блоков с явной записью через `systemLogger.log({level: "error"})`
+- `adminAlerts.notify scheduled` — записи в `_scheduled_jobs` с `udfPath = adminAlerts.js:notify` в окне тика
+
+| Тик UTC | Commit before | docker logs errors | systemLogs errors | adminAlerts.notify scheduled | Вывод |
+|---|---|---|---|---|---|
+| 03:09 | `02bcfbb` (V2 без stagger fix?) | n/a | 5 | n/a | пре-фикс baseline |
+| 05:09 | `4373678` (stagger /2, 3s) | 40+ | 4 | n/a | первый эффект stagger, но не достаточно |
+| 07:09 | `c34bbc3` (slotsPerWorker=2, 3s) | 40+ | 4 | n/a | формула ошибочная — реальная глубина 3 |
+| 09:09 | `31cf100` (slotsPerWorker=3, stagger 7s) | 11 | 4 | **8** | сильное улучшение, но не clean. Найдена amplification loop по совпадению timestamps |
+| 11:09 | `9aa3a68` (`DISABLE_ERROR_ALERT_FANOUT=1` gate) | 27 | n/a | 0 | diagnostic tick: alert fan-out gate работает, но code считал concurrency=32 из-за отсутствия Convex env |
+| 13:09 | `f2c9042` (`diagFanoutConfig`, Convex env fixed) | pending verification | pending | expected 0 | первый валидный clean-кандидат после env fix |
+
+Ключевые наблюдения:
+
+- `systemLogs.error` показывает только верхушку айсберга. В тике `07:09` `docker logs` зафиксировал около `40` warnings `Too many concurrent`, в `systemLogs` дошло только `4` (через `try/catch` в `getValidVkToken`). Остальные обрабатывались Convex internally и не записывались в нашу таблицу.
+- Поэтому критерий clean должен проверять оба источника: `docker logs` через SSH + `systemLogs` через `systemLogger:getRecentByLevel`.
+- Тик `09:09` зафиксировал точное соответствие: `adminAlerts.notify` schedules в те же миллисекунды (±50ms), что и `Too many concurrent` errors. 4 errors at 09:11:20.014-043 → 4 schedules at 09:11:20.015-045. Это и есть подпись feedback loop.
+- Тик `11:09` доказал, что `DISABLE_ERROR_ALERT_FANOUT` работает (`adminAlerts.notify scheduled=0`), но также выявил второй env-scope разрыв: application code не видел `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8` и шедулил fan-out как при default `32`.
+
+## Методология диагностики (что использовать в следующий раз)
+
+Для воспроизведения такого диагноза без чужой помощи в подобных инцидентах:
+
+1. **SSH к серверу:** `ssh -i ~/.ssh/id_ed25519_server root@178.172.235.49`
+2. **Поиск compose контекста:** `docker inspect adpilot-convex-backend --format '{{range $k,$v := .Config.Labels}}{{$k}}={{$v}}{{println}}{{end}}'` — даёт `com.docker.compose.project.config_files=...` с путём к compose-файлу.
+3. **Backend stdout:** `docker logs adpilot-convex-backend --since <ISO> --until <ISO> 2>&1 | grep -cE 'Too many concurrent|Transient error'`. Окно — минимум `dispatch_duration + 5min` (для текущей конфигурации stagger 7s, slotsPerWorker=3 это около 11 минут).
+4. **`_scheduled_jobs` latest-state:** `docker exec adpilot-postgres psql -U convex -d adpilot_prod -t -c "<SQL>"`. База называется `adpilot_prod`, table_id `_scheduled_jobs` — `decode('7ee519d746cd4bc3221534e5d95c5010','hex')`. Готовый запрос в `docs/sql/convex-scheduled-jobs-latest-state.sql`.
+5. **Heartbeats + admin queries:** через `ConvexHttpClient` с admin auth, ключ генерируется `node gen-admin-key.cjs` (использует `INSTANCE_NAME=adpilot-prod` и `INSTANCE_SECRET`). Системные таблицы доступны через `/api/list_snapshot`, public/internal queries — через `client.query()`.
+6. **Cross-correlation:** ключевая техника — сравнить временные метки errors из `docker logs` с метками `_creationTime` записей в `_scheduled_jobs`. Если в одни и те же миллисекунды (±50ms) появляются `adminAlerts.notify` schedules, это amplification loop.
+7. **Аудит глубины nested actions:**
+   ```bash
+   awk '/^export const FUNCTION_NAME = internalAction/,/^}\)/' convex/auth.ts | grep -E 'ctx\.runAction|ctx\.runMutation'
+   ```
+   Считать peak `ctx.runAction` calls (mutations не занимают V8 slot).
+
+## Урок: Convex deployment env vs container env
+
+В self-hosted Convex backend container env **не пробрасывается автоматически** в V8 isolate, исполняющий functions. Convex backend infra может читать `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8` из container env и реально лимитить backend до `8`, но application code внутри V8 isolate через `process.env.APPLICATION_MAX_CONCURRENT_V8_ACTIONS` этого не видел и считал default `32`. Любые env vars, которые нужны именно application code, должны быть установлены через `convex env set <KEY> <VALUE>`.
+
+Доказательство в реальности (тик `09:53`):
+
+| Время | Действие | Где env | Test result |
+|---|---|---|---|
+| 09:34:22 | Backend recreated с container env `DISABLE_ERROR_ALERT_FANOUT=1` | container only | — |
+| 09:35 | `npx convex deploy` — код с гейтом задеплоен | code live | — |
+| 09:52:04 | Synthetic error log → `systemLogger:log({level: "error"})` | container only | **adminAlerts.notify scheduled = 1** ❌ gate не сработал |
+| 09:52:30 | `npx convex env set DISABLE_ERROR_ALERT_FANOUT 1` (без рестарта) | container + Convex env | — |
+| 09:53:03 | Повторный synthetic error log | container + Convex env | **adminAlerts.notify scheduled = 0** ✅ gate работает |
+
+Выводы:
+- `convex env set` применяется **мгновенно** без рестарта backend container.
+- Container env для `DISABLE_ERROR_ALERT_FANOUT` после установки Convex env стал избыточным.
+- Решение по чистоте: **container env удалён** из `docker-compose.yml` после стабилизации; единственный источник истины — Convex deployment env. Backup compose-файла сохранён: `/etc/dokploy/compose/adpilot-convex-gwoqbn/code/docker-compose.yml.bak.2026-05-05-pre-fanout-fix`.
+- `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` также установлен в Convex deployment env, потому что application code использует его в формуле fan-out.
+- Аналогичные ошибки могут повторяться при будущих emergency: всегда проверять оба слоя env при добавлении функционального флага или при использовании infra-настройки в application code.
+
+## Текущий статус и pending verification
+
+Состояние на момент последнего обновления отчёта (`11:35 UTC` / `14:35 MSK`):
+
+- Branch `emergency/drain-scheduled-jobs` HEAD = `f2c9042` (pushed)
+- Convex deploy live на `https://convex.aipilot.by`
+- `DISABLE_ERROR_ALERT_FANOUT=1` в Convex deployment env (verified working through synthetic test)
+- `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8` в Convex deployment env
+- Container `adpilot-convex-backend`: started `09:34:22`, healthy
+- Compose-файл идентичен pre-fix backup'у
+- `/version` HTTP 200, ~1.4s
+- backend stdout с `09:34:22` до `09:50`: 0 `Too many concurrent`, 0 `Transient error`, 0 ERROR-level
+
+Тик `11:09 UTC` был диагностическим и не является clean-кандидатом: application code еще считал concurrency как default `32`, потому что `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` не был установлен в Convex deployment env. После `npx convex env set APPLICATION_MAX_CONCURRENT_V8_ACTIONS 8` формула fan-out наконец совпадает с фактическим backend limit.
+
+Commit `f2c9042` добавил live diagnostic action `auth.diagFanoutConfig`. Проверка прошла:
+
+```json
+{
+  "env_max_concurrent": "8",
+  "env_disable_alert_fanout": "1",
+  "computed_concurrency": 8,
+  "computed_immediate_slots_for_3": 1,
+  "fanout_stagger_ms": 7000,
+  "sample_delays_at_3": [0, 7000, 14000, 21000, 28000, 35000]
+}
+```
+
+Следующий verification gate: **тик `proactive-token-refresh` в `13:09:36 UTC` / `16:09:36 MSK`**. Это первый валидный clean-кандидат после настоящего env fix.
+
+Критерий clean (все условия одновременно):
+
+1. `cronHeartbeats[name=tokenRefreshDispatch]`: `status=completed`, `error=null`, `finishedAt > 13:09:36`
+2. `docker logs adpilot-convex-backend --since 2026-05-05T13:09:00Z --until 2026-05-05T13:22:00Z`: 0 `Too many concurrent`, 0 `Transient error`
+3. `systemLogger:getRecentByLevel({level: "error", since: <13:08>})`: 0 token-related errors
+4. `_scheduled_jobs` latest-state в окне `13:09-13:22`: 0 `adminAlerts.js:notify` schedules
+5. scheduledTime distribution для `auth.js:tokenRefreshOneV2`: примерно `1` worker каждые `7s`, не пачки по `5`.
+
+Если тик `13:09` clean — ждать второй тик (`15:09 UTC` / `18:09 MSK`) для подтверждения. Только после **двух clean тиков подряд после env fix** считать token refresh closed и переходить к audit `syncBatchWorker` / `uzBudgetBatchWorker`.
+
+Если тик не clean — НЕ продолжать к Phase 5/6. Отдельная диагностика по тому же протоколу (cross-correlation between `docker logs` and `_scheduled_jobs` timestamps).
+
 ## Решение после медленного drain
 
 Не ждать полного опустошения `_scheduled_jobs` перед частичным восстановлением пользовательского сервиса.
@@ -516,3 +681,4 @@ tokenRefreshOneV2                         slot 1
 - Переписать `vkApiLimits.recordRateLimit`, чтобы не создавать scheduled job на каждый API response.
 - Добавить retention/cleanup для scheduled job history, если Convex self-hosted не чистит ее достаточно агрессивно.
 - Добавить мониторинг количества `_scheduled_jobs` по state: `pending`, `inProgress`, `failed`, `success`.
+- Long-term TODO: уменьшить V8 slot depth token refresh. Сейчас `tokenRefreshOneV2` вызывает `getValid*`, а тот вызывает `refresh*`, поэтому пиковая глубина около `3` action slots. После emergency можно рассмотреть inline/refactor refresh logic в один action или выделение pure helpers, чтобы снизить `slotsPerWorker` и ускорить dispatch без повышения concurrency.

@@ -5,6 +5,8 @@
 
 Цель этого плана: вернуть сервис в штатную работу по фазам, не включив обратно все producers/fan-out jobs одновременно.
 
+Отчет по фактическому выполнению этого плана: `docs/2026-05-05-convex-recovery-plan-execution-report.md`.
+
 Post-deploy update: drain-mode стабилизировал backend. Сначала scheduler дренил очередь только около `10-12 jobs/min`; после Phase 1 скорость выросла примерно до `25-30 jobs/min`, но полный drain `268k pending` все равно занял бы дни. Поэтому план меняется с "ждать полного drain" на controlled degraded restore + V2 versioned restore: вернуть базовую работу сервиса, оставив опасные backlog handlers no-op.
 
 Текущее состояние после Phase 1:
@@ -153,9 +155,99 @@ Guardrails для V2:
 - `systemLogs` за окно тика: `0` новых `level=error`, `source=auth` про token refresh failures;
 - `/version` отвечает `HTTP 200`.
 
+Проверять backend stdout обязательно, не только `systemLogs`:
+
+```bash
+ssh -i ~/.ssh/id_ed25519_server root@178.172.235.49 \
+  "docker logs adpilot-convex-backend --since <window-start> --until <window-end> 2>&1 \
+   | grep -cE 'Too many concurrent|Transient error'"
+```
+
+Окно проверки token refresh тика должно быть не меньше `11-12 min`: тик + полный dispatch около `9-10 min` + buffer.
+
 Команды `node check-token-refresh-tick.cjs` и `node check-token-refresh-errors.cjs` использовать как diagnostic output. Они помогают быстро увидеть heartbeat/logs, но результат нужно сверять глазами по критериям выше, если скрипты не возвращают строгий non-zero exit на нарушениях.
 
+Phase 2 считается закрытой только после `2` clean token refresh тиков подряд. До этого:
+
+- не включать UZ/sync;
+- не bump'ать `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` с `8` до `16`;
+- не merge'ить emergency branch в `main`.
+
 Только после стабильности переходить к следующей области, например `syncBatchWorkerV2`.
+
+## Риск cron collision
+
+Token refresh после hotfix может занимать около `9-10 min`. В это окно остаются ограниченные V8 action slots для пользовательских actions и других crons. Перед включением следующих фаз проверить overlap в `convex/crons.ts`.
+
+Если token refresh конфликтует с другим тяжелым cron:
+
+- не считать это ошибкой token refresh;
+- проверить backend stdout в общем окне overlap;
+- рассмотреть перевод `proactive-token-refresh` с `crons.interval({ hours: 2 })` на фиксированное расписание со смещением, если текущий Convex self-hosted setup это поддерживает;
+- либо добавить guard/skip при занятости, если фиксированное смещение неудобно.
+
+Не обещать "сместить на xx:11" как простое действие, пока cron API и текущая регистрация не проверены.
+
+## Error alert fan-out gate
+
+Обнаружена amplification loop:
+
+```text
+systemLogger.log(level="error")
+  -> ctx.scheduler.runAfter(0, internal.adminAlerts.notify)
+  -> adminAlerts.notify no-op в drain-mode, но все равно занимает V8 action slot
+  -> меньше свободных slots для token refresh workers
+  -> новые Too many concurrent / Transient error
+  -> новые systemLogger.log(level="error")
+```
+
+Фикс:
+
+- commit `9aa3a68`;
+- `convex/systemLogger.ts` получил env-gated guard;
+- флаг: `DISABLE_ERROR_ALERT_FANOUT=1`;
+- `adminAlerts.notify` остается no-op в drain-mode.
+
+Важный урок по env scope:
+
+- container env через compose сам по себе оказался недостаточным для Convex function env;
+- `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8` в container env реально применялся Convex backend infra как внутренний лимит, но application code внутри V8 isolate его не видел через `process.env` и считал default `32`;
+- `DISABLE_ERROR_ALERT_FANOUT` должен быть установлен в Convex deployment env;
+- `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` тоже должен быть продублирован через Convex deployment env, если application code использует его в формулах fan-out;
+- первый тест `09:52 UTC` создал `systemLog` и `adminAlerts.notify` schedule, потому что Convex env еще не был применен;
+- второй тест `09:53 UTC` создал `systemLog`, но не создал `adminAlerts.notify` schedule, что подтвердило работающий gate;
+- top-level const читает env при загрузке модуля/isolate, поэтому изменение env не считать обычным runtime toggle.
+
+Текущий production state после `f2c9042`:
+
+- branch `emergency/drain-scheduled-jobs` pushed;
+- Convex deploy live;
+- backend `/version` отвечает `HTTP 200`;
+- `DISABLE_ERROR_ALERT_FANOUT=1` есть в Convex deployment env;
+- `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8` есть в Convex deployment env;
+- compose-файл вернут к pre-fix состоянию; единственный источник истины для `DISABLE_ERROR_ALERT_FANOUT` - Convex deployment env.
+
+Pre-check перед следующим тиком:
+
+- commit `f2c9042` добавил `auth.diagFanoutConfig`;
+- live diagnostic PASS:
+  - `env_max_concurrent="8"`;
+  - `env_disable_alert_fanout="1"`;
+  - `computed_concurrency=8`;
+  - `computed_immediate_slots_for_3=1`;
+  - `fanout_stagger_ms=7000`;
+  - `sample_delays_at_3=[0,7000,14000,21000,28000,35000]`.
+
+Значит тик `13:09 UTC` - первый валидный clean-кандидат после настоящего env fix. Если он clean, вторым подтверждающим тиком будет `15:09 UTC`.
+
+После стабилизации удалить или закрыть `diagFanoutConfig`; это временная diagnostic action.
+
+Restore-drain checklist:
+
+- когда `adminAlerts.notify` возвращается из no-op в настоящий handler, одновременно снять `DISABLE_ERROR_ALERT_FANOUT`;
+- пройти остальные direct call-sites `adminAlerts.notify` и добавить dedup/guard перед полным восстановлением alert fan-out;
+- долгосрочно заменить `runAfter(0)` на каждый error log на batched/dedup alert queue.
+- провести audit `process.env.*` в `convex/`: все значения, нужные application code внутри V8 isolate, должны быть доступны через Convex deployment env, не только container env.
 
 ## Фаза 0: зафиксировать drain baseline
 
@@ -330,6 +422,13 @@ APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8
 
 Перед включением желательно уже иметь фикс: stagger вместо `runAfter(0)`.
 Не переносить старый паттерн `runAfter(0)` из `dispatchUzBatches`; Phase 5 blocked, пока UZ dispatcher не получит stagger, рассчитанный от `APPLICATION_MAX_CONCURRENT_V8_ACTIONS`.
+Перед патчем UZ сделать audit именно worker body:
+
+```bash
+grep -n "ctx\\.runAction" convex/ruleEngine.ts | head -20
+```
+
+Для UZ/sync `slotsPerWorker` нельзя автоматически брать из token refresh. Там fan-out идет по chunk workers, а worker может держать action slot долго.
 
 Включить:
 
@@ -357,7 +456,14 @@ APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8
 - добавить stagger;
 - считать immediate/stagger batch от `APPLICATION_MAX_CONCURRENT_V8_ACTIONS`, а не хардкодить под `32`;
 - добавить guard: если предыдущий `syncDispatch` еще не завершен, новый dispatch делает skip;
+- guard должен читать предыдущий `cronHeartbeats[name=syncDispatch]` до собственной записи `status=running`;
 - временно снизить `WORKER_COUNT` с `6` до `2`, если нужен дополнительный safety margin.
+
+Перед патчем sync сделать audit именно worker body:
+
+```bash
+grep -n "ctx\\.runAction" convex/syncMetrics.ts | head -20
+```
 
 Включить:
 
