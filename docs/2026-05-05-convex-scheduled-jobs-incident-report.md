@@ -558,7 +558,8 @@ Restore-drain checklist:
 | 07:09 | `c34bbc3` (slotsPerWorker=2, 3s) | 40+ | 4 | n/a | формула ошибочная — реальная глубина 3 |
 | 09:09 | `31cf100` (slotsPerWorker=3, stagger 7s) | 11 | 4 | **8** | сильное улучшение, но не clean. Найдена amplification loop по совпадению timestamps |
 | 11:09 | `9aa3a68` (`DISABLE_ERROR_ALERT_FANOUT=1` gate) | 27 | n/a | 0 | diagnostic tick: alert fan-out gate работает, но code считал concurrency=32 из-за отсутствия Convex env |
-| 13:09 | `f2c9042` (`diagFanoutConfig`, Convex env fixed) | pending verification | pending | expected 0 | первый валидный clean-кандидат после env fix |
+| 13:09 | `f2c9042` (`diagFanoutConfig`, Convex env fixed) | 0 | 0 | 0 | первый clean тик после env fix |
+| 15:09 | `f2c9042` live / prepare commits `3abc818` + `ba5cf83` not deployed | 0 | 0 | 0 | второй clean тик подряд; Phase 2 closed |
 
 Ключевые наблюдения:
 
@@ -604,7 +605,7 @@ Restore-drain checklist:
 - `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` также установлен в Convex deployment env, потому что application code использует его в формуле fan-out.
 - Аналогичные ошибки могут повторяться при будущих emergency: всегда проверять оба слоя env при добавлении функционального флага или при использовании infra-настройки в application code.
 
-## Текущий статус и pending verification
+## Текущий статус и verification
 
 Состояние на момент последнего обновления отчёта (`11:35 UTC` / `14:35 MSK`):
 
@@ -632,19 +633,55 @@ Commit `f2c9042` добавил live diagnostic action `auth.diagFanoutConfig`. 
 }
 ```
 
-Следующий verification gate: **тик `proactive-token-refresh` в `13:09:36 UTC` / `16:09:36 MSK`**. Это первый валидный clean-кандидат после настоящего env fix.
+Verification gates `13:09 UTC` and `15:09 UTC`: **CLEAN**.
 
-Критерий clean (все условия одновременно):
+Результат первого clean тика после env fix:
 
-1. `cronHeartbeats[name=tokenRefreshDispatch]`: `status=completed`, `error=null`, `finishedAt > 13:09:36`
-2. `docker logs adpilot-convex-backend --since 2026-05-05T13:09:00Z --until 2026-05-05T13:22:00Z`: 0 `Too many concurrent`, 0 `Transient error`
-3. `systemLogger:getRecentByLevel({level: "error", since: <13:08>})`: 0 token-related errors
-4. `_scheduled_jobs` latest-state в окне `13:09-13:22`: 0 `adminAlerts.js:notify` schedules
-5. scheduledTime distribution для `auth.js:tokenRefreshOneV2`: примерно `1` worker каждые `7s`, не пачки по `5`.
+1. `cronHeartbeats[name=tokenRefreshDispatch]`: started `2026-05-05T13:09:36.646Z`, completed `2026-05-05T13:09:37.338Z`, `error=null`.
+2. `docker logs adpilot-convex-backend --since 2026-05-05T13:09:00Z --until 2026-05-05T13:22:00Z`: `0` `Too many concurrent`, `0` `Transient error`.
+3. `systemLogger:getRecentByLevel({level: "error"})`: `0` error-level записей за 2 часа на момент проверки.
+4. `_scheduled_jobs` latest-state в окне `13:09-13:22`: `0` `adminAlerts.js:notify` schedules.
+5. `_scheduled_jobs` latest-state в окне `13:09-13:22`: `67` новых `auth.js:tokenRefreshOneV2` jobs, все `success`; общий счетчик `auth.js:tokenRefreshOneV2` остался `failed=14`, `success=480`.
+6. `/version`: `HTTP 200`.
 
-Если тик `13:09` clean — ждать второй тик (`15:09 UTC` / `18:09 MSK`) для подтверждения. Только после **двух clean тиков подряд после env fix** считать token refresh closed и переходить к audit `syncBatchWorker` / `uzBudgetBatchWorker`.
+Нюанс: `_creationTime` показывает время создания jobs dispatcher'ом, поэтому все `67` token workers видны в одну секунду. Это не опровергает stagger, потому что delayed execution хранится в `originalScheduledTs` в Convex integer encoding. Для clean-решения использованы реальные runtime-сигналы: backend stdout, `systemLogs`, отсутствие `adminAlerts.notify` schedules и successful completion всех новых V2 jobs.
 
-Если тик не clean — НЕ продолжать к Phase 5/6. Отдельная диагностика по тому же протоколу (cross-correlation between `docker logs` and `_scheduled_jobs` timestamps).
+Второй clean тик `15:09 UTC`:
+
+1. `cronHeartbeats[name=tokenRefreshDispatch]`: started `2026-05-05T15:09:36.639Z`, completed `2026-05-05T15:09:37.059Z`, `status=completed`, `error=null`.
+2. Backend stdout `15:09-15:22 UTC`: `0` `Too many concurrent`, `0` `Transient error`.
+3. `systemLogger:getRecentByLevel({level: "error"})`: `0` error-level записей за 2 часа на момент проверки.
+4. `_scheduled_jobs` latest-state в окне `15:09-15:22`: `0` `adminAlerts.js:notify` schedules.
+5. `_scheduled_jobs` latest-state в окне `15:09-15:22`: `30` новых `auth.js:tokenRefreshOneV2` jobs, все `success`; общий счетчик `auth.js:tokenRefreshOneV2`: `failed=14`, `success=510`.
+6. `/version`: `HTTP 200`, около `0.09s`.
+
+Итог: **Phase 2 token refresh closed**. Разблокирована только Phase 5a manual UZ canary. Sync metrics, `recordRateLimit`, restore `adminAlerts.notify` и bump concurrency остаются отдельными решениями.
+
+Phase 5a manual UZ canary позже прошла clean: `2` `ruleEngine.js:uzBudgetBatchWorkerV2` jobs завершились `success`, V2 failed не появился, `adminAlerts.notify` schedules в окне = `0`, backend stdout дал `0` `Too many concurrent` / `Transient error`, heartbeat `uzBudgetDispatch` completed/error=null.
+
+Phase 5b cron canary затем была подготовлена, развернута и прошла clean:
+
+- `a52a2a3` (`prepare(uz): enable 45m V2 cron canary registration`) pushed и deployed;
+- cron `uz-budget-increase` активен на V2 dispatcher с interval `45 min`;
+- deploy был выполнен при `UZ_BUDGET_V2_ENABLED=0`;
+- fail-closed smoke после deploy: `{ "skipped": true, "reason": "v2_disabled" }`;
+- gate открыт в `2026-05-05T18:19:48Z` через `UZ_BUDGET_V2_ENABLED=1`;
+- manual trigger после открытия gate не выполнялся;
+- organic cron tick `2026-05-05T18:57:10Z`: `2` V2 workers `success`;
+- organic cron tick `2026-05-05T19:42:10Z`: `2` V2 workers `success`;
+- итоговый V2 worker total: `ruleEngine.js:uzBudgetBatchWorkerV2|success|6`;
+- backend stdout после gate open: `0` `Too many concurrent`, `0` `Transient error`;
+- `systemLogs`: `0` errors;
+- gate закрыт обратно (`UZ_BUDGET_V2_ENABLED=0`) после наблюдения.
+
+Phase 6 sync metrics после этого начата только как local prepare, без prod push/deploy:
+
+- `e478dcb` (`prepare(sync): V2 entrypoints + moderation gate (NOT enabled)`) добавляет `syncDispatchV2`, `dispatchSyncBatchesV2`, `syncBatchWorkerV2`, fail-closed gate `SYNC_METRICS_V2_ENABLED`, отдельный gate `SYNC_METRICS_V2_POLL_MODERATION` для `pollAiBannerModeration`, и `check-sync-tick.cjs`;
+- `ed5d5bf` (`prepare(sync): runtime env reads + explicit V1 cron warning`) переносит `SYNC_WORKER_COUNT_V2` / `SYNC_BATCH_SIZE_V2` на runtime env reads и фиксирует предупреждение не включать V1 5-min sync cron;
+- `a510695` (`prepare(sync): per-account failure check + drop V1 ready-to-uncomment block`) добавляет явный мониторинг `syncBatchV2.*Account .* failed` и удаляет готовый к раскомментированию V1 5-min sync cron block из `convex/crons.ts`;
+- на момент записи эти коммиты являются prepare-only и не считаются production restore.
+
+Дополнительный clean-критерий для Phase 6: scheduled job `success` для `syncBatchWorkerV2` не гарантирует отсутствие частичных ошибок. Worker ловит per-account exceptions и может завершиться successfully, если отдельные аккаунты упали внутри цикла. Поэтому Phase 6 monitoring обязан считать backend stdout `syncBatchV2.*Account .* failed`; любое ненулевое значение означает, что sync canary не clean, даже если `_scheduled_jobs` показывает worker `success`.
 
 ## Решение после медленного drain
 
