@@ -18,6 +18,8 @@ import {
   type UzRule,
   type VkCampaign,
 } from "./uzBudgetHelpers";
+import { getFanoutDelayMs } from "./_helpers/fanout";
+import { tryAcquireHeartbeat } from "./_helpers/heartbeatGuard";
 
 const ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account
 
@@ -25,6 +27,28 @@ const ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account
 const UZ_WORKER_COUNT = 6;
 const UZ_WORKER_TIMEOUT_MS = 540_000; // 9 min
 const UZ_BATCH_ACCOUNT_TIMEOUT_MS = 90_000; // 90s per account (same as current)
+
+// ─── UZ V2 constants ────────────────────────────────────────────
+// Default 2 workers, hard-clamped at 2 to keep V8 saturation safe at concurrency=8
+// with slotsPerWorker=3 (worker -> getValidTokenForAccount -> refresh chain).
+// Math: WORKER_COUNT + slotsPerWorker - 1 ≤ concurrency_for_dispatch.
+// After Phase 8 (concurrency 16) the clamp ceiling can be reconsidered.
+const UZ_WORKER_COUNT_V2 = Math.min(
+  2,
+  Math.max(1, Number(process.env.UZ_WORKER_COUNT_V2) || 2)
+);
+// Per-worker timeout informational only — hard limit is the Convex action timeout.
+// First canary run is source of truth on actual worker duration.
+const UZ_WORKER_TIMEOUT_MS_V2 = 25 * 60_000; // 25 min
+// Stale dispatcher heartbeat threshold. Dispatcher itself completes in <5s,
+// so 60s is 12x normal. Note: this guards stuck DISPATCHER only,
+// NOT worker overlap — that requires sufficient cron interval headroom.
+const UZ_DISPATCH_SAFETY_TIMEOUT_MS = 60_000;
+
+function isUzV2Enabled(): boolean {
+  // Fail-closed: must be explicitly enabled via Convex deployment env.
+  return process.env.UZ_BUDGET_V2_ENABLED === "1";
+}
 
 // ═══════════════════════════════════════════════════════════
 // Pure functions — exported for direct unit testing
@@ -3253,6 +3277,192 @@ export const uzBudgetDispatch = internalAction({
     } catch (err) {
       cronError = err instanceof Error ? err.message : "Unknown error";
       console.error("[uzBudgetDispatch] Fatal error:", cronError);
+    } finally {
+      await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+        name: "uzBudgetDispatch",
+        status: cronError ? "failed" : "completed",
+        error: cronError,
+      });
+    }
+  },
+});
+
+// ═══════════════════════════════════════════════════════════
+// UZ V2: emergency-recovery entrypoints
+// ═══════════════════════════════════════════════════════════
+//
+// V1 (uzBudgetBatchWorker / dispatchUzBatches / uzBudgetDispatch) remains as
+// no-op / unchanged. New work goes through V2 names so that any leftover
+// pending V1 schedules cannot resurrect the old fan-out behaviour.
+//
+// Phase 5 plan:
+//   5a — manual one-time trigger of uzBudgetDispatchV2, observe.
+//   5b — cron candidate: crons.interval({ minutes: 30 }) -> uzBudgetDispatchV2.
+//   5c — production tuning only after two clean 5b ticks.
+//
+// All entrypoints are FAIL-CLOSED on UZ_BUDGET_V2_ENABLED. Cron in crons.ts
+// remains commented out.
+
+/**
+ * V2 batch worker for UZ budget rules. Same body as V1, gated on env flag.
+ */
+export const uzBudgetBatchWorkerV2 = internalAction({
+  args: {
+    accountIds: v.array(v.id("adAccounts")),
+    workerIndex: v.number(),
+  },
+  handler: async (ctx, args) => {
+    if (!isUzV2Enabled()) {
+      console.log(
+        `[uzBatchV2#${args.workerIndex}] UZ_BUDGET_V2_ENABLED!=1, no-op`
+      );
+      return;
+    }
+
+    const workerStart = Date.now();
+    let processed = 0;
+    let errors = 0;
+
+    for (const accountId of args.accountIds) {
+      if (Date.now() - workerStart > UZ_WORKER_TIMEOUT_MS_V2) {
+        console.log(
+          `[uzBatchV2#${args.workerIndex}] Worker timeout after ${processed} accounts`
+        );
+        break;
+      }
+
+      try {
+        await processUzBudgetForAccount(ctx, accountId);
+        processed++;
+      } catch (err) {
+        errors++;
+        console.error(
+          `[uzBatchV2#${args.workerIndex}] Account ${accountId} failed: ${
+            err instanceof Error ? err.message : err
+          }`
+        );
+      }
+    }
+
+    console.log(
+      `[uzBatchV2#${args.workerIndex}] Done: ${processed} processed, ${errors} errors out of ${args.accountIds.length}`
+    );
+  },
+});
+
+/**
+ * V2 dispatch mutation. Splits accounts into UZ_WORKER_COUNT_V2 chunks and
+ * schedules workers with slot-aware stagger.
+ *
+ * NOTE: stagger here defends only the startup burst. With long-lived workers
+ * holding 1 base slot each, saturation can still happen later when several
+ * workers concurrently enter nested auth/VK actions. Mitigation: keep
+ * UZ_WORKER_COUNT_V2 small (default/clamped at 2).
+ */
+export const dispatchUzBatchesV2 = internalMutation({
+  args: { accountIds: v.array(v.id("adAccounts")) },
+  handler: async (ctx, args) => {
+    if (!isUzV2Enabled()) {
+      console.log(`[dispatchUzBatchesV2] UZ_BUDGET_V2_ENABLED!=1, no-op`);
+      return;
+    }
+
+    const total = args.accountIds.length;
+    if (total === 0) return;
+
+    const workerCount = Math.min(UZ_WORKER_COUNT_V2, total);
+    const chunkSize = Math.ceil(total / workerCount);
+
+    for (let i = 0; i < workerCount; i++) {
+      const chunk = args.accountIds.slice(i * chunkSize, (i + 1) * chunkSize);
+      if (chunk.length === 0) break;
+      const delayMs = getFanoutDelayMs(i, 3);
+      await ctx.scheduler.runAfter(
+        delayMs,
+        internal.ruleEngine.uzBudgetBatchWorkerV2,
+        { accountIds: chunk, workerIndex: i }
+      );
+    }
+  },
+});
+
+/**
+ * V2 dispatcher action with heartbeat guard against stuck previous dispatcher.
+ * Heartbeat name `uzBudgetDispatch` is reused on purpose — healthCheck.ts
+ * already references it and we do not want to fragment monitoring.
+ */
+export const uzBudgetDispatchV2 = internalAction({
+  args: {},
+  handler: async (
+    ctx
+  ): Promise<{
+    skipped: boolean;
+    reason?: string;
+    dispatched?: number;
+    accounts?: number;
+    rules?: number;
+  }> => {
+    if (!isUzV2Enabled()) {
+      console.log(`[uzBudgetDispatchV2] UZ_BUDGET_V2_ENABLED!=1, no-op`);
+      return { skipped: true, reason: "v2_disabled" };
+    }
+
+    const now = Date.now();
+    const prev = await ctx.runQuery(internal.syncMetrics.getCronHeartbeat, {
+      name: "uzBudgetDispatch",
+    });
+    const decision = tryAcquireHeartbeat(
+      prev,
+      now,
+      UZ_DISPATCH_SAFETY_TIMEOUT_MS
+    );
+
+    if (decision === "skip_fresh") {
+      console.log(
+        `[uzBudgetDispatchV2] skip: previous dispatcher still running (startedAt=${prev?.startedAt})`
+      );
+      return { skipped: true, reason: "fresh_running" };
+    }
+    if (decision === "takeover_stale") {
+      console.warn(
+        `[uzBudgetDispatchV2] takeover: stale running heartbeat (startedAt=${prev?.startedAt}, ageMs=${now - (prev?.startedAt ?? 0)})`
+      );
+    }
+
+    await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
+      name: "uzBudgetDispatch",
+      status: "running",
+    });
+
+    let cronError: string | undefined;
+    try {
+      const uzRules = await ctx.runQuery(internal.ruleEngine.getActiveUzRules);
+      if (uzRules.length === 0) {
+        console.log("[uzBudgetDispatchV2] No active UZ rules");
+        return { skipped: false, dispatched: 0, accounts: 0, rules: 0 };
+      }
+
+      const rulesByAccount = groupRulesByAccount(uzRules as UzRule[]);
+      const accountIds = [...rulesByAccount.keys()] as Id<"adAccounts">[];
+
+      await ctx.runMutation(internal.ruleEngine.dispatchUzBatchesV2, {
+        accountIds,
+      });
+
+      const workersDispatched = Math.min(UZ_WORKER_COUNT_V2, accountIds.length);
+      console.log(
+        `[uzBudgetDispatchV2] Dispatched ${workersDispatched} V2 batch workers for ${accountIds.length} accounts (${uzRules.length} rules)`
+      );
+      return {
+        skipped: false,
+        dispatched: workersDispatched,
+        accounts: accountIds.length,
+        rules: uzRules.length,
+      };
+    } catch (err) {
+      cronError = err instanceof Error ? err.message : "Unknown error";
+      console.error("[uzBudgetDispatchV2] Fatal error:", cronError);
+      throw err;
     } finally {
       await ctx.runMutation(internal.syncMetrics.upsertCronHeartbeat, {
         name: "uzBudgetDispatch",

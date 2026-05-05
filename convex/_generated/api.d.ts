@@ -8,6 +8,8 @@
  * @module
  */
 
+import type * as _helpers_fanout from "../_helpers/fanout.js";
+import type * as _helpers_heartbeatGuard from "../_helpers/heartbeatGuard.js";
 import type * as accessControl from "../accessControl.js";
 import type * as adAccounts from "../adAccounts.js";
 import type * as admin from "../admin.js";
@@ -40,6 +42,7 @@ import type * as email from "../email.js";
 import type * as healthCheck from "../healthCheck.js";
 import type * as healthReport from "../healthReport.js";
 import type * as http from "../http.js";
+import type * as imageProviders from "../imageProviders.js";
 import type * as loadUnits from "../loadUnits.js";
 import type * as logCleanup from "../logCleanup.js";
 import type * as metrics from "../metrics.js";
@@ -79,6 +82,8 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  "_helpers/fanout": typeof _helpers_fanout;
+  "_helpers/heartbeatGuard": typeof _helpers_heartbeatGuard;
   accessControl: typeof accessControl;
   adAccounts: typeof adAccounts;
   admin: typeof admin;
@@ -111,6 +116,7 @@ declare const fullApi: ApiFromModules<{
   healthCheck: typeof healthCheck;
   healthReport: typeof healthReport;
   http: typeof http;
+  imageProviders: typeof imageProviders;
   loadUnits: typeof loadUnits;
   logCleanup: typeof logCleanup;
   metrics: typeof metrics;

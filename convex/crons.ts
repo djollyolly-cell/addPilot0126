@@ -86,7 +86,21 @@ void internal;
 // );
 //
 // // UZ budget increase — fan-out: dispatch + per-account workers
-// // Uses interval (not cron) so it naturally staggers with sync — starts after previous run finishes
+// //
+// // RECOVERY NOTE (Phase 5):
+// //   - Phase 5a = manual one-time trigger of internal.ruleEngine.uzBudgetDispatchV2 only.
+// //     DO NOT enable this cron until 5a observed clean.
+// //   - Phase 5b candidate registration (kept commented):
+// //         crons.interval(
+// //           "uz-budget-increase",
+// //           { minutes: 30 },
+// //           internal.ruleEngine.uzBudgetDispatchV2
+// //         );
+// //     30 min interval (not 5 min) is mandated because UZ V2 workers
+// //     can run several minutes and can overlap themselves, which the
+// //     dispatcher heartbeat guard does NOT prevent.
+// //   - V1 (uzBudgetDispatch) stays no-op-effective and must NOT be
+// //     re-enabled while V1 backlog risk remains.
 // crons.interval(
 //   "uz-budget-increase",
 //   { minutes: 5 },
