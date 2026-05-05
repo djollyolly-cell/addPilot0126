@@ -1885,6 +1885,27 @@ function getFanoutDelayMs(index: number, slotsPerWorker: number = 1): number {
   return (Math.floor((index - immediateSlots) / immediateSlots) + 1) * FANOUT_STAGGER_MS;
 }
 
+// TEMP DIAGNOSTIC: verify V8 isolate sees expected env vars and formula state.
+// Remove after fanout stabilization.
+export const diagFanoutConfig = action({
+  args: {},
+  handler: async (): Promise<{
+    env_max_concurrent: string | null;
+    env_disable_alert_fanout: string | null;
+    computed_concurrency: number;
+    computed_immediate_slots_for_3: number;
+    sample_delays_at_3: number[];
+    fanout_stagger_ms: number;
+  }> => ({
+    env_max_concurrent: process.env.APPLICATION_MAX_CONCURRENT_V8_ACTIONS ?? null,
+    env_disable_alert_fanout: process.env.DISABLE_ERROR_ALERT_FANOUT ?? null,
+    computed_concurrency: getMaxConcurrentV8Actions(),
+    computed_immediate_slots_for_3: Math.max(1, Math.floor(getMaxConcurrentV8Actions() / (3 * 2))),
+    sample_delays_at_3: [0, 1, 2, 3, 4, 5].map((i) => getFanoutDelayMs(i, 3)),
+    fanout_stagger_ms: FANOUT_STAGGER_MS,
+  }),
+});
+
 /** Schedule tokenRefreshOne workers. Must be mutation for ctx.scheduler. */
 export const dispatchTokenBatch = internalMutation({
   args: {
