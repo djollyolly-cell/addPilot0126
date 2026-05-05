@@ -135,12 +135,13 @@ void internal;
 //   internal.healthCheck.runFunctionCheck
 // );
 //
-// // Proactive token refresh — every 2 hours (fan-out), refreshes tokens expiring within 12h
-// crons.interval(
-//   "proactive-token-refresh",
-//   { hours: 2 },
-//   internal.auth.tokenRefreshDispatch
-// );
+// PHASE 2 RESTORED: Proactive token refresh — every 2 hours (fan-out), refreshes tokens expiring within 12h
+// Dispatcher now schedules tokenRefreshOneV2 (V1 stays no-op for old pending backlog).
+crons.interval(
+  "proactive-token-refresh",
+  { hours: 2 },
+  internal.auth.tokenRefreshDispatch
+);
 //
 // PHASE 1 RESTORED: Cleanup stuck pending payments — every 2 hours
 crons.interval(

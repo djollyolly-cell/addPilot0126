@@ -1879,21 +1879,21 @@ export const dispatchTokenBatch = internalMutation({
 
     for (const accountId of args.accounts) {
       const delayMs = idx < 16 ? 0 : (Math.floor((idx - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
-      await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOne, {
+      await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOneV2, {
         targetType: "account", targetId: accountId,
       });
       idx++;
     }
     for (const userId of args.users) {
       const delayMs = idx < 16 ? 0 : (Math.floor((idx - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
-      await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOne, {
+      await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOneV2, {
         targetType: "user_vkads", targetId: userId,
       });
       idx++;
     }
     for (const userId of args.vkUsers) {
       const delayMs = idx < 16 ? 0 : (Math.floor((idx - 16) / STAGGER_BATCH) + 1) * STAGGER_DELAY_MS;
-      await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOne, {
+      await ctx.scheduler.runAfter(delayMs, internal.auth.tokenRefreshOneV2, {
         targetType: "user_vk", targetId: userId,
       });
       idx++;
@@ -1910,8 +1910,96 @@ export const tokenRefreshOne = internalAction({
     targetId: v.string(),
   },
   handler: async (_ctx, _args) => {
-    // EMERGENCY DRAIN MODE: no-op. Restore body after pending queue drains.
+    // EMERGENCY DRAIN MODE: no-op. Old pending jobs drain through here.
+    // Live work uses tokenRefreshOneV2. Delete this function once
+    // _scheduled_jobs no longer has pending entries pointing at this udfPath.
     return;
+  },
+});
+
+/**
+ * V2 of tokenRefreshOne: real handler used by live dispatcher.
+ * V1 is kept as no-op so old pending jobs from before drain can finish without harm.
+ */
+export const tokenRefreshOneV2 = internalAction({
+  args: {
+    targetType: v.union(v.literal("account"), v.literal("user_vkads"), v.literal("user_vk")),
+    targetId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+
+    if (args.targetType === "account") {
+      const accountId = args.targetId as Id<"adAccounts">;
+      const acc = await ctx.runQuery(internal.adAccounts.getInternal, { accountId });
+      const label = acc?.name || accountId;
+
+      try {
+        await ctx.runAction(internal.auth.getValidTokenForAccount, { accountId });
+        const updated = await ctx.runQuery(internal.auth.getAccountTokenExpiry, { accountId });
+        if (updated && updated > now) {
+          console.log(`[tokenRefreshOneV2] Account "${label}": refreshed, expires ${new Date(updated).toISOString()}`);
+        } else {
+          console.log(`[tokenRefreshOneV2] Account "${label}": refresh returned OK but token not updated`);
+          try {
+            await ctx.runAction(internal.telegram.sendMessage, {
+              chatId: ADMIN_CHAT_ID,
+              text: `🔑 Account "${label}": refresh OK but token not updated`,
+            });
+          } catch { /* non-critical */ }
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[tokenRefreshOneV2] Account "${label}": failed -- ${errMsg}`);
+        if (isUnrecoverable(err)) {
+          await ctx.runMutation(internal.auth.clearAccountRefreshToken, { accountId });
+          try {
+            const recovered = await ctx.runAction(internal.tokenRecovery.tryRecoverToken, { accountId });
+            if (recovered) {
+              console.log(`[tokenRefreshOneV2] Account "${label}": recovered via cascade after ${errMsg}`);
+              return;
+            }
+          } catch (recoveryErr) {
+            console.error(`[tokenRefreshOneV2] Account "${label}": recovery failed: ${recoveryErr}`);
+          }
+        }
+      }
+    } else if (args.targetType === "user_vkads") {
+      const userId = args.targetId as Id<"users">;
+      const user = await ctx.runQuery(internal.users.getById, { userId });
+      const label = user?.name || user?.email || userId;
+
+      try {
+        await ctx.runAction(internal.auth.getValidVkAdsToken, { userId });
+        const updated = await ctx.runQuery(internal.auth.getUserVkAdsTokenExpiry, { userId });
+        if (updated && updated > now) {
+          console.log(`[tokenRefreshOneV2] User "${label}": VK Ads token refreshed, expires ${new Date(updated).toISOString()}`);
+        } else {
+          console.log(`[tokenRefreshOneV2] User "${label}": VK Ads refresh OK but token not updated`);
+        }
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[tokenRefreshOneV2] User "${label}": VK Ads refresh failed -- ${errMsg}`);
+        if (isUnrecoverable(err)) {
+          await ctx.runMutation(internal.auth.clearUserVkAdsRefreshToken, { userId });
+        }
+      }
+    } else if (args.targetType === "user_vk") {
+      const userId = args.targetId as Id<"users">;
+      const user = await ctx.runQuery(internal.users.getById, { userId });
+      const label = user?.name || user?.email || userId;
+
+      try {
+        await ctx.runAction(internal.auth.getValidVkToken, { userId });
+        console.log(`[tokenRefreshOneV2] User "${label}": VK ID token refreshed`);
+      } catch (err) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.log(`[tokenRefreshOneV2] User "${label}": VK ID refresh failed -- ${errMsg}`);
+        if (isUnrecoverable(err)) {
+          await ctx.runMutation(internal.auth.clearUserVkRefreshToken, { userId });
+        }
+      }
+    }
   },
 });
 
