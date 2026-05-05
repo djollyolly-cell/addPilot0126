@@ -45,8 +45,21 @@ const UZ_WORKER_TIMEOUT_MS_V2 = 25 * 60_000; // 25 min
 // NOT worker overlap — that requires sufficient cron interval headroom.
 const UZ_DISPATCH_SAFETY_TIMEOUT_MS = 60_000;
 
+// Fail-closed: must be explicitly enabled via Convex deployment env.
+//
+// KILL SWITCH NOTE (best-effort):
+// `process.env.UZ_BUDGET_V2_ENABLED` is re-read on every call so a flip via
+// `npx convex env set UZ_BUDGET_V2_ENABLED 0` can interrupt a long-running
+// worker mid-loop. However:
+//   - V8 isolate caching of process.env between reads inside one action
+//     invocation is implementation-dependent;
+//   - sub-second reaction is NOT guaranteed — a worker mid-await on a VK
+//     API call cannot be interrupted by env change alone.
+// For a hard kill, we would need a DB-backed flag (no suitable global-flags
+// table exists in current schema; intentionally not creating one during
+// emergency). Hence the layered defence: check at every cheap boundary
+// (worker start, between accounts, between scheduler.runAfter calls).
 function isUzV2Enabled(): boolean {
-  // Fail-closed: must be explicitly enabled via Convex deployment env.
   return process.env.UZ_BUDGET_V2_ENABLED === "1";
 }
 
@@ -3324,6 +3337,13 @@ export const uzBudgetBatchWorkerV2 = internalAction({
     let errors = 0;
 
     for (const accountId of args.accountIds) {
+      // Best-effort mid-run kill switch (see isUzV2Enabled comment).
+      if (!isUzV2Enabled()) {
+        console.log(
+          `[uzBatchV2#${args.workerIndex}] kill switch disabled mid-run; processed=${processed}; remaining=${args.accountIds.length - processed}`
+        );
+        break;
+      }
       if (Date.now() - workerStart > UZ_WORKER_TIMEOUT_MS_V2) {
         console.log(
           `[uzBatchV2#${args.workerIndex}] Worker timeout after ${processed} accounts`
@@ -3374,6 +3394,14 @@ export const dispatchUzBatchesV2 = internalMutation({
     const chunkSize = Math.ceil(total / workerCount);
 
     for (let i = 0; i < workerCount; i++) {
+      // Re-check kill switch between scheduler.runAfter calls. The loop is
+      // fast (<100 ms) but still gives one more cancellation window.
+      if (!isUzV2Enabled()) {
+        console.log(
+          `[dispatchUzBatchesV2] kill switch disabled mid-dispatch; scheduled=${i}/${workerCount}`
+        );
+        break;
+      }
       const chunk = args.accountIds.slice(i * chunkSize, (i + 1) * chunkSize);
       if (chunk.length === 0) break;
       const delayMs = getFanoutDelayMs(i, 3);
