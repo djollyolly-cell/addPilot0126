@@ -1,7 +1,29 @@
 # TODO: fix `getAccountAllAdIds` historical metrics timeout
 
 Date opened: 2026-05-06
+Date resolved: 2026-05-06
 Scope: production bug / rule-engine scalability, not incident recovery.
+
+## STATUS: RESOLVED by B1 (Tier 1 / Option A)
+
+Fixed by commit `9768449 fix(rules): query ads table for getAccountAllAdIds` (deployed `2026-05-06T19:53:27Z`).
+
+Solution: replaced unbounded `metricsDaily` collection with `ads.by_accountId_vkAdId.collect()` — bounded by current ad count instead of historical metric rows. Function-level prod verification: Вардек 1327 ads / 1160ms; Интерьер 1136 ads / 1080ms (both previously timed out).
+
+Closure details and follow-up triggers: `memory/b1-closure-2026-05-06.md`.
+
+Tier 2 work deferred (intentionally, per design doc):
+
+- Denormalized account-to-adIds lookup table (`accountAdIndex`).
+- Generic pagination of rule evaluation across `ruleEngine.ts`.
+- Hard time bounds on `since_launch` semantics.
+- Audit of all `.collect()` paths in `ruleEngine.ts`.
+
+These are NOT auto-promoted by B1 closure. Re-evaluate only if Tier 1 turns out insufficient (e.g., new heavy accounts emerge, new `.collect()` timeouts appear elsewhere). One-week post-Tier-1 observation per design doc.
+
+The investigation context below is preserved as historical RCA for the bug surface, not as outstanding work.
+
+---
 
 ## Summary
 
