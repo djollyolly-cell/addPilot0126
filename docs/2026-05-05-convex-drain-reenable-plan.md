@@ -490,11 +490,13 @@ grep -n "ctx\\.runAction" convex/ruleEngine.ts | head -20
 
 Это самая опасная фаза. Возвращать последней из core business jobs.
 
-Статус на `2026-05-05`: Phase 6 находится в local prepare состоянии, не pushed/deployed.
+Статус на `2026-05-06`: Phase 6 sync V2 deployed through manual canary. Phase 6a first run was yellow-clean due sync escalation alert schedules; Phase 6a-bis after guard `9f62cfa` closed clean. Phase 6b cron canary is the next separate prepare step.
 
 - `e478dcb` - V2 entrypoints: `syncDispatchV2`, `dispatchSyncBatchesV2`, `syncBatchWorkerV2`, fail-closed gate `SYNC_METRICS_V2_ENABLED`, separate moderation gate `SYNC_METRICS_V2_POLL_MODERATION`, monitoring script `check-sync-tick.cjs`.
 - `ed5d5bf` - runtime env reads for `SYNC_WORKER_COUNT_V2` / `SYNC_BATCH_SIZE_V2` and explicit V1 cron warning.
 - `a510695` - `check-sync-tick.cjs` counts per-account `syncBatchV2` failures and the ready-to-uncomment V1 5-min sync cron block is physically removed.
+- `3f92025` - docs guardrails for Phase 6 handoff.
+- `9f62cfa` - sync escalation alert guard; suppresses `adminAlerts.notify` scheduling unless `SYNC_ESCALATION_ALERTS_ENABLED=1`.
 
 Перед включением обязательно:
 
@@ -504,7 +506,9 @@ grep -n "ctx\\.runAction" convex/ruleEngine.ts | head -20
 - добавить guard: если предыдущий `syncDispatch` еще не завершен, новый dispatch делает skip;
 - guard должен читать предыдущий `cronHeartbeats[name=syncDispatch]` до собственной записи `status=running`;
 - временно снизить `WORKER_COUNT` с `6` до `2`, если нужен дополнительный safety margin.
-- для Phase 6a поставить `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2<=20`, `SYNC_METRICS_V2_POLL_MODERATION=0`;
+- для первого Phase 6a manual run поставить `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2=10`, `SYNC_METRICS_V2_POLL_MODERATION=0`;
+- держать `SYNC_ESCALATION_ALERTS_ENABLED=0`, пока `adminAlerts.notify` остается no-op в drain-mode;
+- запускать manual trigger только в окне `xx:25-xx:55 UTC`, чтобы не пересекаться с token refresh cron (`xx:09:36 UTC`, около 10 минут dispatching);
 - не считать worker `success` достаточным clean-критерием: `syncBatchWorkerV2` может поймать per-account error, продолжить цикл и завершиться как scheduled job `success`;
 - `check-sync-tick.cjs` должен считать backend stdout `syncBatchV2.*Account .* failed`; любой non-zero count = канарейка не clean.
 
@@ -517,7 +521,7 @@ grep -n "ctx\\.runAction" convex/syncMetrics.ts | head -20
 Включать только V2:
 
 - Phase 6a: manual trigger `internal.syncMetrics.syncDispatchV2` при `SYNC_METRICS_V2_ENABLED=1`.
-- Phase 6b: `sync-metrics` cron только на `internal.syncMetrics.syncDispatchV2`, interval `45 min`.
+- Phase 6b: `sync-metrics` cron только на `internal.syncMetrics.syncDispatchV2`, interval `45 min`; first cron canary should keep `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2=10`, `SYNC_METRICS_V2_POLL_MODERATION=0`, `SYNC_ESCALATION_ALERTS_ENABLED=0`.
 
 Не включать V1:
 

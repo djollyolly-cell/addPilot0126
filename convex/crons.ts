@@ -8,15 +8,18 @@ const crons = cronJobs();
 // `internal` import retained for the commented cron registrations.
 void internal;
 
-// Sync ad metrics — Phase 6 plan.
+// Sync ad metrics — Phase 6b CRON CANARY (active, 45 min interval).
 //
 // RECOVERY NOTE (Phase 6):
-//   - Phase 6a = manual one-time trigger of internal.syncMetrics.syncDispatchV2
-//     with SYNC_WORKER_COUNT_V2=1 (env override) for clean baseline timing.
-//     SYNC_METRICS_V2_POLL_MODERATION stays 0 (poll disabled) for first runs.
-//     DO NOT enable this cron until 6a observed clean.
-//   - Phase 6b CANARY CRON registration is below (kept commented).
-//     Uncomment when Phase 6a observed clean. 45 min interval is mandated by:
+//   - Phase 6a/6a-bis manual canaries observed clean hard criteria after
+//     escalation alerts were gated by SYNC_ESCALATION_ALERTS_ENABLED=0.
+//   - Phase 6b enables the V2 cron registration below, but real work remains
+//     fail-closed unless SYNC_METRICS_V2_ENABLED=1. Deploy this cron while
+//     SYNC_METRICS_V2_ENABLED=0, verify fail-closed smoke, then open the gate
+//     only in a monitored window and wait for an organic cron tick.
+//   - First cron canaries keep SYNC_WORKER_COUNT_V2=1, SYNC_BATCH_SIZE_V2=10,
+//     SYNC_METRICS_V2_POLL_MODERATION=0, SYNC_ESCALATION_ALERTS_ENABLED=0.
+//   - 45 min interval is mandated by:
 //       * V2 worker can run up to ~9.5 min (heavy account 2000+ campaigns);
 //       * dispatcher heartbeat guard does NOT prevent worker overlap;
 //       * sync writes generate WAL pressure (V1 5-min interval was a
@@ -28,11 +31,11 @@ void internal;
 //     V1 schedules carry queue-drain risk, and the 5-min cadence was a
 //     primary contributor to the 2026-05-04/05 incident WAL pressure. Any
 //     future "re-enable sync" must go through V2 (`syncDispatchV2`).
-// crons.interval(
-//   "sync-metrics",
-//   { minutes: 45 },
-//   internal.syncMetrics.syncDispatchV2,
-// );
+crons.interval(
+  "sync-metrics",
+  { minutes: 45 },
+  internal.syncMetrics.syncDispatchV2,
+);
 //
 // // Daily digest at 06:00 UTC (09:00 MSK)
 // crons.cron(

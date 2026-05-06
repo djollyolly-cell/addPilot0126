@@ -3,7 +3,7 @@
 Дата: 5 мая 2026  
 Сервис: AdPilot / `aipilot.by`  
 Ветка: `emergency/drain-scheduled-jobs`  
-Текущий live commit на момент отчета: `f2c9042`
+Текущий live commit на момент отчета: `9f62cfa`
 
 Этот документ фиксирует не сам инцидент и не полный план восстановления, а фактический статус выполнения плана: что уже сделано, что проверено, какие решения приняты и какой следующий gate.
 
@@ -17,7 +17,7 @@
 
 Сервис выведен из crash/drain состояния в controlled degraded mode. Backend отвечает, frontend доступен, опасные backlog handlers оставлены no-op, а новая работа возвращается через versioned V2 entrypoints.
 
-На текущий момент Phase 1 выполнена, Phase 2 token refresh восстановлена через V2 и закрыта после двух clean тиков подряд (`13:09 UTC` и `15:09 UTC`) после настоящего env fix. Phase 5a manual UZ canary прошла clean. Phase 5b cron canary прошла clean на двух органических cron tick'ах (`18:57 UTC`, `19:42 UTC`) с interval `45 min`; gate закрыт обратно (`UZ_BUDGET_V2_ENABLED=0`). Phase 6 sync metrics находится только в local prepare состоянии (`e478dcb` + `ed5d5bf` + `a510695`), не pushed/deployed. `recordRateLimit` остается заблокирован.
+На текущий момент Phase 1 выполнена, Phase 2 token refresh восстановлена через V2 и закрыта после двух clean тиков подряд (`13:09 UTC` и `15:09 UTC`) после настоящего env fix. Phase 5a manual UZ canary прошла clean. Phase 5b cron canary прошла clean на двух органических cron tick'ах (`18:57 UTC`, `19:42 UTC`) с interval `45 min`; gate закрыт обратно (`UZ_BUDGET_V2_ENABLED=0`). Phase 6 sync metrics V2 deployed до `9f62cfa`; Phase 6a-bis manual canary закрыта clean, sync cron еще НЕ включен. `recordRateLimit` остается заблокирован.
 
 Главный последний вывод: `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8` должен быть установлен не только в container env, но и в Convex deployment env. До этого application code внутри V8 isolate видел default `32` и рассчитывал fan-out неправильно, хотя backend infra реально лимитил до `8`.
 
@@ -31,7 +31,7 @@
 | Error alert fan-out gate | выполнено | Добавлен `DISABLE_ERROR_ALERT_FANOUT=1`, `systemLogger` перестал schedule'ить `adminAlerts.notify` на каждый error | При восстановлении `adminAlerts.notify` снять флаг одновременно |
 | Env scope fix | выполнено | `DISABLE_ERROR_ALERT_FANOUT=1` и `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=8` установлены через Convex deployment env | Любые function-level env vars ставить через `convex env set` |
 | UZ budget restore | Phase 5b cron canary clean | `3abc818` + `ba5cf83` deployed; Phase 5a manual canary clean; `a52a2a3` deployed with `45 min` V2 cron; two organic cron ticks clean; gate closed back to `0` | Production unattended UZ remains separate ops/business decision |
-| Sync metrics restore | Phase 6 prepare local only | Подготовлены V2 entrypoints с fail-closed gate, moderation poll gate и monitoring script; не pushed/deployed | Перед Phase 6a поправить/проверить мониторинг per-account errors; затем отдельный go на push/deploy |
+| Sync metrics restore | Phase 6a-bis clean; cron not enabled | V2 entrypoints deployed; escalation alert guard deployed; manual canary clean after guard | Phase 6b cron canary требует отдельный prepare/deploy при `SYNC_METRICS_V2_ENABLED=0` |
 | `recordRateLimit` restore | запрещено в emergency | Producers остаются disabled / handler no-op | Нужен отдельный bounded redesign |
 
 ## Фактическая Хронология Выполнения
@@ -48,9 +48,11 @@
 | `convex env set DISABLE_ERROR_ALERT_FANOUT 1` | Подтверждено: error logs больше не создают `adminAlerts.notify` schedules. |
 | `convex env set APPLICATION_MAX_CONCURRENT_V8_ACTIONS 8` | Исправлен disconnect между backend infra limit `8` и application code default `32`. |
 | `f2c9042` | Добавлен `auth.diagFanoutConfig` для проверки, что V8 isolate видит env и считает fan-out правильно. |
-| `e478dcb` | Local prepare sync V2: `syncDispatchV2`, `dispatchSyncBatchesV2`, `syncBatchWorkerV2`, `SYNC_METRICS_V2_ENABLED`, `SYNC_METRICS_V2_POLL_MODERATION`, `check-sync-tick.cjs`. Not pushed/deployed at time of note. |
-| `ed5d5bf` | Local follow-up: runtime env reads for sync worker/batch sizing and explicit V1 cron warning. Not pushed/deployed at time of note. |
-| `a510695` | Local follow-up: `check-sync-tick.cjs` now counts per-account `syncBatchV2` failures and the ready-to-uncomment V1 5-min sync cron block was removed. Not pushed/deployed at time of note. |
+| `e478dcb` | Prepare sync V2: `syncDispatchV2`, `dispatchSyncBatchesV2`, `syncBatchWorkerV2`, `SYNC_METRICS_V2_ENABLED`, `SYNC_METRICS_V2_POLL_MODERATION`, `check-sync-tick.cjs`. Deployed as part of Phase 6a. |
+| `ed5d5bf` | Prepare follow-up: runtime env reads for sync worker/batch sizing and explicit V1 cron warning. Deployed as part of Phase 6a. |
+| `a510695` | Prepare follow-up: `check-sync-tick.cjs` now counts per-account `syncBatchV2` failures and the ready-to-uncomment V1 5-min sync cron block was removed. Deployed as part of Phase 6a. |
+| `3f92025` | Docs update: record Phase 6 prepare guardrails. Deployed code-wise together with sync V2 prepare. |
+| `9f62cfa` | Sync escalation alert guard; deployed live with gates closed. |
 
 ## Текущий Production State
 
@@ -316,25 +318,58 @@ docs/sql/convex-scheduled-jobs-latest-state.sql
 
 ## Итог На Сейчас
 
-Phase 2 token refresh закрыта. Phase 5a manual UZ canary clean. Phase 5b cron UZ canary clean on two organic ticks. Gate закрыт обратно, поэтому UZ V2 entrypoints и cron live, но fail-closed.
+Phase 2 token refresh закрыта. Phase 5a manual UZ canary clean. Phase 5b cron UZ canary clean on two organic ticks. Gate закрыт обратно, поэтому UZ V2 entrypoints и cron live, но fail-closed. Phase 6a sync manual canary прошла как yellow-clean, затем Phase 6a-bis после escalation alert guard прошла clean по hard criteria.
 
-Следующий этап: Phase 6 sync metrics audit/prep only. Не включать sync metrics без отдельного V2/fail-closed/stagger/worker-count плана. `recordRateLimit`, `adminAlerts.notify` restore, cleanup diagnostics и merge strategy остаются отдельными задачами.
+Следующий этап: Phase 6b sync cron canary prepare. Не включать sync cron без отдельного prepare/deploy при `SYNC_METRICS_V2_ENABLED=0`. `recordRateLimit`, `adminAlerts.notify` restore, cleanup diagnostics и merge strategy остаются отдельными задачами.
 
 ## Phase 6 Sync Prep Notes
 
-Local prepare chain:
+Pushed/deployed prepare chain:
 
 - `e478dcb` - V2 sync entrypoints + moderation gate, not enabled.
 - `ed5d5bf` - runtime env reads for `SYNC_WORKER_COUNT_V2` / `SYNC_BATCH_SIZE_V2` and explicit V1 cron warning.
 - `a510695` - per-account failure check in `check-sync-tick.cjs` and removal of V1 ready-to-uncomment sync cron block.
+- `3f92025` - docs guardrails for Phase 6 handoff.
+- `9f62cfa` - escalation alert guard for sync canary; deployed live with gates closed.
 
-Accepted guardrails before Phase 6a:
+Accepted guardrails:
 
-1. `SYNC_METRICS_V2_ENABLED` stays fail-closed until manual canary.
-2. Phase 6a uses `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2<=20`, `SYNC_METRICS_V2_POLL_MODERATION=0`.
-3. `sync-metrics` cron remains disabled until after manual canary.
-4. Monitoring must not rely only on `_scheduled_jobs` worker `success`. `syncBatchWorkerV2` catches per-account errors and can finish as `success` with internal account failures. `check-sync-tick.cjs` must count backend stdout lines matching `syncBatchV2.*Account .* failed` and treat any non-zero count as not clean.
-5. The ready-to-uncomment V1 `syncDispatch` / 5-min cron registration block has been removed. Phase 6b candidate is V2 `syncDispatchV2` at `45 min`.
+1. `SYNC_METRICS_V2_ENABLED` stays fail-closed until a monitored canary window.
+2. Phase 6a/6a-bis manual runs use `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2=10`, `SYNC_METRICS_V2_POLL_MODERATION=0`.
+3. `SYNC_ESCALATION_ALERTS_ENABLED=0` remains closed while `adminAlerts.notify` is no-op; sync escalation alerts are suppressed before scheduling.
+4. `sync-metrics` cron remains disabled until after manual canary.
+5. Monitoring must not rely only on `_scheduled_jobs` worker `success`. `syncBatchWorkerV2` catches per-account errors and can finish as `success` with internal account failures. `check-sync-tick.cjs` must count backend stdout lines matching `syncBatchV2.*Account .* failed` and treat any non-zero count as not clean.
+6. The ready-to-uncomment V1 `syncDispatch` / 5-min cron registration block has been removed. Phase 6b candidate is V2 `syncDispatchV2` at `45 min`.
+7. Manual trigger must be started only in an `xx:25-xx:55 UTC` window to avoid overlap with token refresh (`xx:09:36 UTC`, about 10 min dispatching).
+
+Phase 6a manual sync canary (`2026-05-06T03:36Z`) result:
+
+- `syncBatchWorkerV2`: `1 success`;
+- backend stdout: `0` `Too many concurrent`, `0` `Transient error`;
+- backend stdout: `0` `syncBatchV2.*Account .* failed`;
+- `pg_wal`: flat (`1.9G -> 1.9G`);
+- `lastSyncAt` stale count improved (`212 -> 203`);
+- `adminAlerts.js:notify`: `5` schedules, attributed to sync escalation / known broken accounts. Because sync mechanics were clean but alert side-effect violated the original hard criterion, Phase 6a was classified yellow-clean.
+
+Follow-up guard:
+
+- `9f62cfa` added `SYNC_ESCALATION_ALERTS_ENABLED` in `syncMetrics.scheduleEscalationAlert`;
+- when the flag is not `"1"`, the mutation returns before `adminAlertDedup` and before scheduling `adminAlerts.notify`;
+- when enabled later, it dedups via existing `adminAlertDedup` using `sync:${dedupKey}` for 30 minutes.
+
+Phase 6a-bis manual sync canary (`2026-05-06T04:31Z`) after `9f62cfa` result:
+
+- live commit: `9f62cfa`;
+- `SYNC_METRICS_V2_ENABLED=0` after run;
+- `SYNC_ESCALATION_ALERTS_ENABLED=0`;
+- `syncBatchWorkerV2`: `1 success`;
+- `adminAlerts.js:notify`: `0` schedules;
+- backend stdout: `0` `Too many concurrent`, `0` `Transient error`;
+- backend stdout: `0` `syncBatchV2.*Account .* failed`;
+- `pg_wal`: flat (`1.9G baseline`, observed `1.7G` after run);
+- `cronHeartbeats[name=syncDispatch]`: `completed`, `error` absent, started `2026-05-06T04:31:01.607Z`, finished `2026-05-06T04:31:01.721Z`.
+
+Conclusion: Phase 6a-bis closed clean by hard criteria. Phase 6b cron canary is unblocked as a separate prepare/deploy decision.
 
 ## Phase 5a Historical Stop Point
 
