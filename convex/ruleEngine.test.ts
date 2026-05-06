@@ -1,6 +1,6 @@
 import { convexTest } from "convex-test";
 import { expect, test, describe } from "vitest";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import schema from "./schema";
 import {
   evaluateCondition,
@@ -2087,5 +2087,134 @@ describe("evaluateCondition — low_impressions", () => {
       { spent: 100, leads: 0, impressions: 1000, clicks: 10 }
     );
     expect(result).toBe(false);
+  });
+});
+
+describe("getAccountAllAdIds", () => {
+  test("returns vkAdIds from ads table for the account", async () => {
+    const t = convexTest(schema);
+
+    const { accountId, expectedVkAdIds } = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        email: "ads-fixture@test.com",
+        createdAt: Date.now(),
+      });
+      const accountId = await ctx.db.insert("adAccounts", {
+        userId,
+        vkAccountId: "acc_b1",
+        name: "B1 fixture",
+        accessToken: "tok",
+        status: "active",
+        createdAt: Date.now(),
+      });
+      const otherAccountId = await ctx.db.insert("adAccounts", {
+        userId,
+        vkAccountId: "acc_b1_other",
+        name: "Other",
+        accessToken: "tok",
+        status: "active",
+        createdAt: Date.now(),
+      });
+      const campaignId = await ctx.db.insert("campaigns", {
+        accountId,
+        vkCampaignId: "c1",
+        name: "C1",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      const otherCampaignId = await ctx.db.insert("campaigns", {
+        accountId: otherAccountId,
+        vkCampaignId: "c_other",
+        name: "Other C",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      // Three ads on the target account
+      const targetVkAdIds = ["ad_alpha", "ad_beta", "ad_gamma"];
+      for (const vkAdId of targetVkAdIds) {
+        await ctx.db.insert("ads", {
+          accountId,
+          campaignId,
+          vkAdId,
+          name: `Ad ${vkAdId}`,
+          status: "active",
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        });
+      }
+      // One ad on a different account — must NOT be returned
+      await ctx.db.insert("ads", {
+        accountId: otherAccountId,
+        campaignId: otherCampaignId,
+        vkAdId: "ad_other",
+        name: "Other ad",
+        status: "active",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+
+      // metricsDaily for the target account, including a historical adId that is NOT in ads.
+      // Pre-fix code returned this historical-only adId; post-fix code must NOT.
+      for (const vkAdId of targetVkAdIds) {
+        await ctx.db.insert("metricsDaily", {
+          accountId,
+          adId: vkAdId,
+          date: "2026-05-01",
+          impressions: 100, clicks: 5, spent: 10, leads: 1,
+        });
+      }
+      await ctx.db.insert("metricsDaily", {
+        accountId,
+        adId: "ad_historical_only",
+        date: "2026-04-01",
+        impressions: 50, clicks: 2, spent: 5, leads: 0,
+      });
+
+      return { accountId, expectedVkAdIds: targetVkAdIds };
+    });
+
+    const fnResult = await t.query(internal.ruleEngine.getAccountAllAdIds, {
+      accountId,
+    });
+
+    const adsTableVkAdIds = await t.run((ctx) =>
+      ctx.db
+        .query("ads")
+        .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", accountId))
+        .collect()
+        .then((rows) => rows.map((r) => r.vkAdId))
+    );
+
+    expect(new Set(fnResult)).toEqual(new Set(adsTableVkAdIds));
+    expect(new Set(fnResult)).toEqual(new Set(expectedVkAdIds));
+    expect(fnResult).not.toContain("ad_historical_only");
+    expect(fnResult).not.toContain("ad_other");
+  });
+
+  test("returns empty array for account with no ads", async () => {
+    const t = convexTest(schema);
+
+    const accountId = await t.run(async (ctx) => {
+      const userId = await ctx.db.insert("users", {
+        email: "empty-ads@test.com",
+        createdAt: Date.now(),
+      });
+      return ctx.db.insert("adAccounts", {
+        userId,
+        vkAccountId: "acc_empty",
+        name: "Empty",
+        accessToken: "tok",
+        status: "active",
+        createdAt: Date.now(),
+      });
+    });
+
+    const result = await t.query(internal.ruleEngine.getAccountAllAdIds, {
+      accountId,
+    });
+    expect(result).toEqual([]);
   });
 });

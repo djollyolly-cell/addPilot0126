@@ -643,19 +643,15 @@ export const getRealtimeHistory = internalQuery({
   },
 });
 
-/** Get all unique ad IDs for an account (from all metricsDaily records) */
+/** Get all currently-known vkAdIds for an account (from ads table). */
 export const getAccountAllAdIds = internalQuery({
   args: { accountId: v.id("adAccounts") },
   handler: async (ctx, args) => {
-    const records = await ctx.db
-      .query("metricsDaily")
-      .withIndex("by_accountId_date", (q) => q.eq("accountId", args.accountId))
+    const ads = await ctx.db
+      .query("ads")
+      .withIndex("by_accountId_vkAdId", (q) => q.eq("accountId", args.accountId))
       .collect();
-    const adIds = new Set<string>();
-    for (const r of records) {
-      adIds.add(r.adId);
-    }
-    return [...adIds];
+    return ads.map((a) => a.vkAdId);
   },
 });
 
