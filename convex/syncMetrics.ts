@@ -774,7 +774,36 @@ export const getCronHeartbeat = internalQuery({
   },
 });
 
-/** Schedule escalation alert via adminAlerts.notify (called from action via runMutation). */
+/**
+ * Schedule escalation alert via adminAlerts.notify (called from action via runMutation).
+ *
+ * Two-stage guard added 2026-05-06 after Phase 6a yellow-clean canary:
+ *
+ *   Stage 1 — fail-closed env gate `SYNC_ESCALATION_ALERTS_ENABLED`.
+ *     Default off. While off, the handler logs and returns without scheduling
+ *     anything. Recovery flow: enable explicitly via `convex env set
+ *     SYNC_ESCALATION_ALERTS_ENABLED 1` after sync canary closes clean.
+ *
+ *   Stage 2 — 30-min dedup via existing `adminAlertDedup` table with key
+ *     prefix `sync:` so it does not collide with other adminAlerts dedup
+ *     users (adminAlerts.checkDedup writes the bare key). Prevents re-firing
+ *     for the same accountId while drain backlog is still being worked off.
+ *
+ * Env read is intentionally inside handler (not module-level const) so that
+ * `convex env set` updates take effect without redeploy — same lesson as
+ * SYNC_METRICS_V2_ENABLED runtime read.
+ *
+ * Each path emits a distinct console.log for backend stdout attribution
+ * (`reason=disabled` | `reason=dedup` | `reason=fresh`). adminAlertDedup
+ * payload is intentionally NOT mirrored to systemLogs — keeps systemLogs
+ * clean of internal guard accounting.
+ */
+const SYNC_ESCALATION_DEDUP_WINDOW_MS = 30 * 60 * 1000;
+
+function isSyncEscalationAlertsEnabled(): boolean {
+  return process.env.SYNC_ESCALATION_ALERTS_ENABLED === "1";
+}
+
 export const scheduleEscalationAlert = internalMutation({
   args: {
     accountId: v.id("adAccounts"),
@@ -782,6 +811,36 @@ export const scheduleEscalationAlert = internalMutation({
     dedupKey: v.string(),
   },
   handler: async (ctx, args) => {
+    if (!isSyncEscalationAlertsEnabled()) {
+      console.log(
+        `[scheduleEscalationAlert] skip accountId=${args.accountId} dedupKey=${args.dedupKey} reason=disabled`
+      );
+      return;
+    }
+
+    const guardKey = `sync:${args.dedupKey}`;
+    const now = Date.now();
+    const existing = await ctx.db
+      .query("adminAlertDedup")
+      .withIndex("by_key", (q) => q.eq("key", guardKey))
+      .first();
+
+    if (existing && now - existing.lastSentAt < SYNC_ESCALATION_DEDUP_WINDOW_MS) {
+      console.log(
+        `[scheduleEscalationAlert] skip accountId=${args.accountId} dedupKey=${args.dedupKey} ageMs=${now - existing.lastSentAt} reason=dedup`
+      );
+      return;
+    }
+
+    if (existing) {
+      await ctx.db.patch(existing._id, { lastSentAt: now });
+    } else {
+      await ctx.db.insert("adminAlertDedup", { key: guardKey, lastSentAt: now });
+    }
+
+    console.log(
+      `[scheduleEscalationAlert] scheduled accountId=${args.accountId} dedupKey=${args.dedupKey} reason=fresh`
+    );
     await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
       category: "criticalErrors",
       dedupKey: args.dedupKey,
