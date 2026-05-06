@@ -4,24 +4,26 @@ Date opened: 2026-05-06
 Date resolved: 2026-05-06
 Scope: production bug / rule-engine scalability, not incident recovery.
 
-## STATUS: RESOLVED by B1 (Tier 1 / Option A)
+## STATUS: production timeout trigger RESOLVED by B1; broader Tier 2 scope remains DEFERRED
 
-Fixed by commit `9768449 fix(rules): query ads table for getAccountAllAdIds` (deployed `2026-05-06T19:53:27Z`).
+What is resolved by B1 (Tier 1 / Option A, commit `9768449`, deployed `2026-05-06T19:53:27Z`):
 
-Solution: replaced unbounded `metricsDaily` collection with `ads.by_accountId_vkAdId.collect()` — bounded by current ad count instead of historical metric rows. Function-level prod verification: Вардек 1327 ads / 1160ms; Интерьер 1136 ads / 1080ms (both previously timed out).
+- The specific production timeout in `getAccountAllAdIds` for heavy accounts (`Вардек мск спб` 1327 ads, `Интерьер` 1136 ads).
+- The downstream `checkRulesForAccount failed: request timed out` symptom for the two known affected accounts.
+- The `cpl_limit since_launch` silent rule failure on those accounts at the function level. (Full organic `syncBatchWorkerV2 → checkRulesForAccount` E2E confirmation was not observed within the post-deploy window — see `memory/b1-closure-2026-05-06.md` for why this is environment, not B1.)
 
 Closure details and follow-up triggers: `memory/b1-closure-2026-05-06.md`.
 
-Tier 2 work deferred (intentionally, per design doc):
+What is NOT resolved by B1 — Tier 2 broader scope remains DEFERRED (intentionally, per `docs/2026-05-06-getAccountAllAdIds-fix-design.md`):
 
 - Denormalized account-to-adIds lookup table (`accountAdIndex`).
 - Generic pagination of rule evaluation across `ruleEngine.ts`.
 - Hard time bounds on `since_launch` semantics.
 - Audit of all `.collect()` paths in `ruleEngine.ts`.
 
-These are NOT auto-promoted by B1 closure. Re-evaluate only if Tier 1 turns out insufficient (e.g., new heavy accounts emerge, new `.collect()` timeouts appear elsewhere). One-week post-Tier-1 observation per design doc.
+These are NOT auto-promoted by B1 closure. Re-evaluate only if Tier 1 proves insufficient (new heavy accounts emerge, new `.collect()` timeouts appear elsewhere). At least one week of post-Tier-1 observation per design doc before Tier 2 decision.
 
-The investigation context below is preserved as historical RCA for the bug surface, not as outstanding work.
+Historical RCA for the original bug surface is preserved below — kept for context, not as outstanding work on the specific timeout trigger.
 
 ---
 
