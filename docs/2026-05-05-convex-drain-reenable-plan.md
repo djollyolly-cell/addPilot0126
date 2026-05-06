@@ -490,13 +490,14 @@ grep -n "ctx\\.runAction" convex/ruleEngine.ts | head -20
 
 Это самая опасная фаза. Возвращать последней из core business jobs.
 
-Статус на `2026-05-06`: Phase 6 sync V2 deployed through manual canary. Phase 6a first run was yellow-clean due sync escalation alert schedules; Phase 6a-bis after guard `9f62cfa` closed clean. Phase 6b cron canary is the next separate prepare step.
+Статус на `2026-05-06`: Phase 6 sync V2 deployed through manual canary. Phase 6a first run was yellow-clean due sync escalation alert schedules; Phase 6a-bis after guard `9f62cfa` closed clean. Phase 6b V2 cron registration `b0258fc` is deployed at `45 min`; two organic cron ticks (`05:34 UTC`, `06:19 UTC`) closed clean, then `SYNC_METRICS_V2_ENABLED` was set back to `0` before the token refresh overlap window. После того как `07:09 UTC` token refresh тик прошёл clean, sync gate переоткрыт в live mode `2026-05-06T08:50Z` (только `SYNC_METRICS_V2_ENABLED 0→1`, остальные gates без изменений); два organic live sync тика `2026-05-06T09:19:10Z` и `2026-05-06T10:04:10Z` прошли acceptance criteria, включая первый реальный production overlap с `09:09Z` token refresh dispatcher (~10 min). Phase 6 sync V2 теперь работает в live production mode на conservative profile.
 
 - `e478dcb` - V2 entrypoints: `syncDispatchV2`, `dispatchSyncBatchesV2`, `syncBatchWorkerV2`, fail-closed gate `SYNC_METRICS_V2_ENABLED`, separate moderation gate `SYNC_METRICS_V2_POLL_MODERATION`, monitoring script `check-sync-tick.cjs`.
 - `ed5d5bf` - runtime env reads for `SYNC_WORKER_COUNT_V2` / `SYNC_BATCH_SIZE_V2` and explicit V1 cron warning.
 - `a510695` - `check-sync-tick.cjs` counts per-account `syncBatchV2` failures and the ready-to-uncomment V1 5-min sync cron block is physically removed.
 - `3f92025` - docs guardrails for Phase 6 handoff.
 - `9f62cfa` - sync escalation alert guard; suppresses `adminAlerts.notify` scheduling unless `SYNC_ESCALATION_ALERTS_ENABLED=1`.
+- `b0258fc` - V2 `sync-metrics` cron registration at `45 min`; deploy smoke passed with closed gate and unchanged heartbeat.
 
 Перед включением обязательно:
 
@@ -522,6 +523,8 @@ grep -n "ctx\\.runAction" convex/syncMetrics.ts | head -20
 
 - Phase 6a: manual trigger `internal.syncMetrics.syncDispatchV2` при `SYNC_METRICS_V2_ENABLED=1`.
 - Phase 6b: `sync-metrics` cron только на `internal.syncMetrics.syncDispatchV2`, interval `45 min`; first cron canary should keep `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2=10`, `SYNC_METRICS_V2_POLL_MODERATION=0`, `SYNC_ESCALATION_ALERTS_ENABLED=0`.
+- Phase 6b gate opened at `2026-05-06T05:29:09Z`; first two organic ticks were clean. Gate was closed back to `0` at `2026-05-06T06:37:51Z` before token refresh overlap.
+- Phase 6 live reopen `2026-05-06T08:50Z` after `07:09Z` token refresh verified clean. Два organic live sync тика — `2026-05-06T09:19:10Z` (overlap с `09:09Z` token refresh, `syncBatchWorkerV2 4→5`, `pg_wal` byte-exact delta `0`) и `2026-05-06T10:04:10Z` (steady-state, `syncBatchWorkerV2 5→6`, `pg_wal` unchanged) — прошли acceptance criteria. Conservative profile сохраняется: `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2=10`, `SYNC_METRICS_V2_POLL_MODERATION=0`, `SYNC_ESCALATION_ALERTS_ENABLED=0`. Future ticks organic only, no manual trigger.
 
 Не включать V1:
 
