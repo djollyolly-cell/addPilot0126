@@ -1,11 +1,12 @@
 # Storage Cleanup V2 — Phase 4 Canary Runbook — 2026-05-07
 
-Status: pre-canary runbook. Written before Phase 1 code is implemented; references design contracts in `memory/storage-cleanup-v2-phase1-design-2026-05-07.md` (commit `b3e4bd4`). Re-verify all function names / args against actually-deployed code before first use.
+Status: pre-canary runbook. Written against design contract from commit `b3e4bd4`; re-verified against actual Phase 1 code in commit `2410f14` (read-only, no drift on the 6 main contracts: 8 V2 exports, args, schema, cutoffMs widening, env var name, log prefix). Re-run the "Re-verification before first use" checklist below before invoking trigger if HEAD has moved.
 
 Related:
 - Plan (hardened runbook): `docs/superpowers/plans/2026-05-07-storage-cleanup-v2.md` (commit `9f6786b`)
 - Preflight baseline: `memory/storage-cleanup-v2-preflight-2026-05-07.md` (commit `ae2506b`)
 - Phase 1 design: `memory/storage-cleanup-v2-phase1-design-2026-05-07.md` (commit `b3e4bd4`)
+- Phase 1 code (source of facts): `convex/{schema,metrics,metrics.test}.ts` at commit `2410f14`
 
 ## What this runbook covers
 
@@ -155,7 +156,7 @@ npx convex run internal.metrics.triggerMassCleanupV2 \
 
 Expected return:
 ```json
-{ "runId": "<epoch-ms>-<6hex>", "status": "scheduled" }
+{ "runId": "<epoch-ms>-<12hex>", "status": "scheduled" }
 ```
 
 Possible non-success returns:
@@ -233,7 +234,7 @@ isActive: false
 batchesRun: 1
 maxRuns: 1
 deletedCount: > 0 (≤ 500)
-cutoffUsed: <Step 2c timestamp - 172_800_000>
+cutoffUsed: <trigger time (Step 4) - 172_800_000>     # set inside triggerMassCleanupV2 handler at insert
 oldestRemainingTimestamp: >= oldestRemainingTimestamp_pre (or undefined only if table emptied)
 durationMs: > 0 (likely 100ms — 30s)
 error: undefined
@@ -459,6 +460,6 @@ This runbook was written against the **design contract**, not against actually-d
 - [ ] Schema table `cleanupRunState` exists with fields and indexes per Decision A.
 - [ ] Env var name is exactly `METRICS_REALTIME_CLEANUP_V2_ENABLED` (typo-resistance).
 - [ ] Heartbeat / log prefix is exactly `[cleanup-v2]` (used in stdout grep).
-- [ ] `gen-admin-key.cjs` exists at repo root and is executable.
+- [ ] `gen-admin-key.cjs` exists at repo root and is runnable via `node gen-admin-key.cjs` (executable bit not required — script is invoked via node loader, not directly).
 
 If any of the above mismatches deployed code → update this runbook BEFORE invoking trigger.
