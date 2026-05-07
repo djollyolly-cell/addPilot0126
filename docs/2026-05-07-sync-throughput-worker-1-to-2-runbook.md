@@ -353,6 +353,87 @@ Rollback is not closed until:
 - Does not run manual sync.
 - Does not deploy/codegen/push as part of the env bump.
 
+## Execution log
+
+Executed on `2026-05-07T03:10Z` after explicit go.
+
+Pre-bump baseline:
+
+- Runbook committed/pushed first: `e777248 docs(sync): add worker throughput bump runbook`.
+- Hard env gate passed:
+  - `SYNC_WORKER_COUNT_V2=1`
+  - `SYNC_BATCH_SIZE_V2=20`
+  - `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=16`
+  - `SYNC_METRICS_V2_ENABLED=1`
+  - `SYNC_METRICS_V2_POLL_MODERATION=0`
+  - `SYNC_ESCALATION_ALERTS_ENABLED=0`
+  - `UZ_BUDGET_V2_ENABLED=1`
+  - `DISABLE_ERROR_ALERT_FANOUT=1`
+- `node check-sync-tick.cjs baseline` captured `2026-05-07T03:09:26Z`:
+  - `/version`: HTTP `200`
+  - `pg_wal`: `1,577,058,304` bytes
+  - `lastSyncAt stale (>20min)`: `212/212`
+  - `syncMetrics.js:syncBatchWorkerV2|success|28`
+  - failed counters baseline: `adminAlerts.js:notify=38`, V1 sync `37`, V1 UZ `36`, `auth.js:tokenRefreshOneV2=14`, `metrics.js:manualMassCleanup=1`
+- Token refresh immediately before bump: `tokenRefreshDispatch` `2026-05-07T03:09:36Z`, completed/error null.
+- Latest UZ before bump: `uzBudgetDispatch` `2026-05-07T02:27:10Z`, completed/error null.
+
+Action:
+
+```bash
+CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
+CONVEX_SELF_HOSTED_ADMIN_KEY="$(node gen-admin-key.cjs)" \
+npx convex env set SYNC_WORKER_COUNT_V2 2
+```
+
+Verification:
+
+- `npx convex env get SYNC_WORKER_COUNT_V2` returned `2`.
+
+First organic worker-count-2 sync tick:
+
+- Window: `2026-05-07T03:18:00Z..03:35:00Z`.
+- `syncDispatch` heartbeat: `2026-05-07T03:19:10Z`, completed/error null.
+- `syncMetrics.js:syncBatchWorkerV2` success `28→30`, failed stayed `0`.
+- Backend stdout rollback grep: `0`.
+- Per-account sync failures: `0`.
+- `adminAlerts.js:notify` schedules: `0`.
+- Failed counters flat.
+- `/version`: HTTP `200`.
+- `pg_wal`: `1,577,058,304 → 1,577,058,304` bytes, delta `0`.
+- Direct account-update audit: `19` accounts updated in the tick window, all with empty `lastError` / `lastSyncError`.
+
+Second organic worker-count-2 sync tick:
+
+- Window: `2026-05-07T04:03:00Z..04:20:00Z`.
+- `syncDispatch` heartbeat: `2026-05-07T04:04:10Z`, completed/error null.
+- `syncMetrics.js:syncBatchWorkerV2` success `30→32`, failed stayed `0`.
+- Backend stdout rollback grep: `0`.
+- Per-account sync failures: `0`.
+- `adminAlerts.js:notify` schedules: `0`.
+- Failed counters flat.
+- `/version`: HTTP `200`.
+- `pg_wal`: `1,577,058,304 → 1,577,058,304` bytes, delta `0`.
+- Direct account-update audit: `19` accounts updated in the tick window, all with empty `lastError` / `lastSyncError`.
+
+Surrounding crons:
+
+- Token refresh inside/adjacent observation: `2026-05-07T03:09:36Z`, completed/error null.
+- UZ inside observation: `uzBudgetDispatch` `2026-05-07T03:57:10Z`, completed/error null; `ruleEngine.js:uzBudgetBatchWorkerV2|success|50`; backend rollback grep `0`.
+
+Closure:
+
+`SYNC_WORKER_COUNT_V2 1→2` closed clean after two organic sync ticks.
+
+Final state:
+
+- `SYNC_WORKER_COUNT_V2=2`
+- `SYNC_BATCH_SIZE_V2=20`
+- `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=16`
+- all other gates unchanged
+
+No rollback executed.
+
 ## Next candidates after this runbook
 
 If worker `2` closes clean but coverage is still insufficient:
@@ -360,4 +441,3 @@ If worker `2` closes clean but coverage is still insufficient:
 1. Code change to raise batch clamp `20 -> 30`, with deploy and separate canary.
 2. Cron cadence reduction from `45 min` to `30 min`, only after WAL and overlap data stay clean.
 3. Cron cadence `5 min` remains last-resort; it resembles the pre-incident pressure profile and needs a separate design.
-

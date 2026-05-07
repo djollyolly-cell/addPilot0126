@@ -2,7 +2,20 @@
 
 Date: 2026-05-07
 Branch: `emergency/drain-scheduled-jobs`
-Current local/remote HEAD: `7cf326e`
+Latest recorded runbook commit before this memory update: `e777248`
+
+## Sync throughput worker bump closed clean (`SYNC_WORKER_COUNT_V2 1 → 2`)
+
+- Runbook: `docs/2026-05-07-sync-throughput-worker-1-to-2-runbook.md`.
+- Runbook committed/pushed first: `e777248 docs(sync): add worker throughput bump runbook`.
+- Env bump executed `2026-05-07T03:10Z` after explicit go: `SYNC_WORKER_COUNT_V2 1 → 2`.
+- Pre-bump baseline `2026-05-07T03:09:26Z`: `/version` HTTP 200, `pg_wal=1,577,058,304` bytes, stale `212/212`, `syncBatchWorkerV2|success|28`, failed counters flat.
+- Hard env gate passed: `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2=20`, `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=16`, `SYNC_METRICS_V2_ENABLED=1`, `SYNC_METRICS_V2_POLL_MODERATION=0`, `SYNC_ESCALATION_ALERTS_ENABLED=0`, `UZ_BUDGET_V2_ENABLED=1`, `DISABLE_ERROR_ALERT_FANOUT=1`.
+- First organic worker-count-2 tick `2026-05-07T03:19:10Z`: `syncDispatch` completed/error null, `syncBatchWorkerV2 28→30`, failed `0`, backend rollback grep `0`, per-account sync failures `0`, `adminAlerts.notify=0`, `/version` HTTP 200, `pg_wal` flat at `1,577,058,304`, direct account-update audit found `19` accounts updated with empty `lastError` / `lastSyncError`.
+- Second organic worker-count-2 tick `2026-05-07T04:04:10Z`: `syncDispatch` completed/error null, `syncBatchWorkerV2 30→32`, failed `0`, backend rollback grep `0`, per-account sync failures `0`, `adminAlerts.notify=0`, `/version` HTTP 200, `pg_wal` flat at `1,577,058,304`, direct account-update audit found `19` accounts updated with empty `lastError` / `lastSyncError`.
+- Surrounding crons clean: token refresh `2026-05-07T03:09:36Z` completed/error null; UZ `2026-05-07T03:57:10Z` completed/error null, `uzBudgetBatchWorkerV2|success|50`, rollback grep `0`.
+- Coverage evidence: `38/212` accounts updated across the two worker-count-2 sync ticks, meeting the `>=30` accepted lower bound.
+- Final state: `SYNC_WORKER_COUNT_V2=2`, `SYNC_BATCH_SIZE_V2=20`, `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=16`; all other gates unchanged. No rollback executed.
 
 ## Sync throughput batch bump closed clean (`SYNC_BATCH_SIZE_V2 10 → 20`)
 
@@ -152,7 +165,7 @@ D1 design (`adminAlerts.notify` redesign) was identified as the highest-value ne
   - `SYNC_METRICS_V2_ENABLED=1` (live conservative profile after two clean live organic ticks)
   - `SYNC_ESCALATION_ALERTS_ENABLED=0`
   - `SYNC_METRICS_V2_POLL_MODERATION=0`
-  - `SYNC_WORKER_COUNT_V2=1`
+  - `SYNC_WORKER_COUNT_V2=2`
   - `SYNC_BATCH_SIZE_V2=20`
   - `DISABLE_ERROR_ALERT_FANOUT=1`
   - `UZ_BUDGET_V2_ENABLED=1`
@@ -167,8 +180,8 @@ No prod-touching step without explicit `go`.
 2. V1 sync cron remains absent; do not restore `internal.syncMetrics.syncDispatch`.
 3. Current state is `SYNC_METRICS_V2_ENABLED=1`; Phase 6b closed clean, the post-token live reopen is clean after two organic ticks, and sync remains in conservative production profile.
 4. Do not manual-trigger sync; future sync runs should be organic cron ticks only.
-5. Current production profile after the first throughput bump: `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2=20`, `SYNC_METRICS_V2_POLL_MODERATION=0`, `SYNC_ESCALATION_ALERTS_ENABLED=0`.
-6. Bumping worker count/batch size, enabling moderation poll, or reopening escalation alerts are separate decisions.
+5. Current production profile after two throughput bumps: `SYNC_WORKER_COUNT_V2=2`, `SYNC_BATCH_SIZE_V2=20`, `SYNC_METRICS_V2_POLL_MODERATION=0`, `SYNC_ESCALATION_ALERTS_ENABLED=0`.
+6. Further throughput changes, enabling moderation poll, or reopening escalation alerts are separate decisions.
 
 ## Rollback triggers
 
