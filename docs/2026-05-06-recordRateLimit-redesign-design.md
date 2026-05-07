@@ -298,6 +298,20 @@ Adopt **Option A** as D2a:
 
 This returns the most important signal (`429`) while eliminating the specific scheduled-job backlog mechanism that made the old design unsafe.
 
+## Current production baseline
+
+As of the post-throughput sync profile, the worst-case overlap model is:
+
+```text
+Token refresh worst-case: 6 V8 action slots
+UZ worst-case:            6 V8 action slots
+Sync current profile:     2 V8 action slots
+Total:                   14 / 16 V8 action slots
+Headroom:                 2 V8 action slots
+```
+
+D2a remains acceptable because it records only `429` events via an awaited mutation on the throttle path. Any implementation that extends recording beyond `429` -- including D2b sampling on `200` responses, D2c aggregated state, or restoring `vk-throttling-probe` -- must revisit the V8 slot math together with mutation latency cost. The current 2-slot headroom does not provide the same margin that Phase 8 had before the sync throughput bumps.
+
 ## D2a implementation boundaries
 
 D2a may touch:
