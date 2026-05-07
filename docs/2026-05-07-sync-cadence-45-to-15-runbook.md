@@ -21,6 +21,18 @@ The objective of this runbook is to reduce rule-evaluation latency by changing t
 
 This is a code/deploy change, not an env-only change.
 
+This runbook changes **sync only**. The UZ budget increase cron remains at `45 min`:
+
+```ts
+crons.interval(
+  "uz-budget-increase",
+  { minutes: 45 },
+  internal.ruleEngine.uzBudgetDispatchV2,
+);
+```
+
+Do not reduce UZ cadence in the same change. UZ is side-effecting: it writes to VK Ads and sends user notifications. Any future `uz-budget-increase` cadence change needs a separate runbook, separate business go, and separate canary.
+
 ## Current production profile
 
 Expected before this runbook:
@@ -75,6 +87,7 @@ Recommendation: use `15 min` if preflight is clean. If preflight shows any unres
 - Does not change `APPLICATION_MAX_CONCURRENT_V8_ACTIONS`.
 - Does not enable moderation polling.
 - Does not enable sync escalation alerts.
+- Does not change `uz-budget-increase` cadence; UZ remains `45 min`.
 - Does not restore `adminAlerts.notify`.
 - Does not restore `recordRateLimit`.
 - Does not run manual sync.
