@@ -1,5 +1,6 @@
 import { convexTest } from "convex-test";
 import { expect, test, describe } from "vitest";
+import { readFileSync } from "node:fs";
 import { api, internal } from "./_generated/api";
 import schema from "./schema";
 
@@ -20,6 +21,103 @@ async function createTestUserWithAccount(t: ReturnType<typeof convexTest>) {
   });
 
   return { userId, accountId };
+}
+
+async function insertRealtimeMetric(
+  t: ReturnType<typeof convexTest>,
+  accountId: string,
+  adId: string,
+  timestamp: number
+) {
+  await t.run(async (ctx) => {
+    await ctx.db.insert("metricsRealtime", {
+      accountId: accountId as any,
+      adId,
+      timestamp,
+      spent: 100,
+      leads: 1,
+      impressions: 500,
+      clicks: 10,
+    });
+  });
+}
+
+async function insertCleanupRunState(
+  t: ReturnType<typeof convexTest>,
+  overrides: Partial<{
+    cleanupName: string;
+    runId: string;
+    state: "claimed" | "running" | "completed" | "failed";
+    isActive: boolean;
+    startedAt: number;
+    lastBatchAt: number;
+    batchesRun: number;
+    maxRuns: number;
+    cutoffUsed: number;
+    deletedCount: number;
+    oldestRemainingTimestamp: number;
+    durationMs: number;
+    error: string;
+    batchSize: number;
+    timeBudgetMs: number;
+    restMs: number;
+  }> = {}
+) {
+  const now = Date.now();
+  const row = {
+    cleanupName: "metrics-realtime-v2",
+    runId: "test-run",
+    state: "claimed" as const,
+    isActive: true,
+    startedAt: now,
+    batchesRun: 0,
+    maxRuns: 1,
+    cutoffUsed: now - 2 * 86_400_000,
+    deletedCount: 0,
+    batchSize: 500,
+    timeBudgetMs: 10_000,
+    restMs: 60_000,
+    ...overrides,
+  };
+  await t.run(async (ctx) => {
+    await ctx.db.insert("cleanupRunState", row);
+  });
+  return row;
+}
+
+async function getCleanupRunState(t: ReturnType<typeof convexTest>, runId: string) {
+  return await t.query(internal.metrics.getCleanupRunStateV2, { runId });
+}
+
+async function countRealtimeMetrics(t: ReturnType<typeof convexTest>) {
+  return await t.run(async (ctx) => {
+    const rows = await ctx.db.query("metricsRealtime").collect();
+    return rows.length;
+  });
+}
+
+async function listScheduledFunctions(t: ReturnType<typeof convexTest>) {
+  return await t.run(async (ctx) => {
+    return await ctx.db.system.query("_scheduled_functions").collect();
+  });
+}
+
+async function withMetricsRealtimeCleanupV2Env<T>(value: string | undefined, fn: () => Promise<T>) {
+  const previous = process.env.METRICS_REALTIME_CLEANUP_V2_ENABLED;
+  try {
+    if (value === undefined) {
+      delete process.env.METRICS_REALTIME_CLEANUP_V2_ENABLED;
+    } else {
+      process.env.METRICS_REALTIME_CLEANUP_V2_ENABLED = value;
+    }
+    return await fn();
+  } finally {
+    if (previous === undefined) {
+      delete process.env.METRICS_REALTIME_CLEANUP_V2_ENABLED;
+    } else {
+      process.env.METRICS_REALTIME_CLEANUP_V2_ENABLED = previous;
+    }
+  }
 }
 
 describe("metrics", () => {
@@ -402,6 +500,186 @@ describe("metrics", () => {
 
     expect(result.deleted).toBe(0);
     expect(result.hasMore).toBe(false);
+  });
+
+  test("manualMassCleanup V1 remains a no-op", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+
+    await insertRealtimeMetric(t, accountId, "ad_v1_noop", Date.now() - 5 * 86_400_000);
+    await t.action(internal.metrics.manualMassCleanup, { runNumber: 1 });
+
+    const oldRecord = await t.query(api.metrics.getRealtimeByAd, { adId: "ad_v1_noop" });
+    expect(oldRecord).toBeDefined();
+  });
+
+  test("triggerMassCleanupV2 schedules manualMassCleanupV2, not V1 manualMassCleanup", () => {
+    const source = readFileSync("convex/metrics.ts", "utf8");
+    const triggerStart = source.indexOf("export const triggerMassCleanupV2");
+    const triggerEnd = source.indexOf("export const getCleanupRunStateV2");
+    expect(triggerStart).toBeGreaterThanOrEqual(0);
+    expect(triggerEnd).toBeGreaterThan(triggerStart);
+
+    const triggerBlock = source.slice(triggerStart, triggerEnd);
+    expect(triggerBlock).toContain("internal.metrics.manualMassCleanupV2");
+    expect(triggerBlock).not.toMatch(/internal\.metrics\.manualMassCleanup\b/);
+  });
+
+  test("manualMassCleanupV2 deletes only rows older than its immutable cutoffMs", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+    const now = Date.now();
+    const runId = "cutoff-run";
+
+    await insertRealtimeMetric(t, accountId, "ad_old_v2", now - 5 * 86_400_000);
+    await insertRealtimeMetric(t, accountId, "ad_fresh_v2", now - 1 * 60 * 60 * 1000);
+    await insertCleanupRunState(t, {
+      runId,
+      cutoffUsed: now - 2 * 86_400_000,
+      batchSize: 500,
+      maxRuns: 1,
+    });
+
+    await withMetricsRealtimeCleanupV2Env("1", async () => {
+      const result = await t.action(internal.metrics.manualMassCleanupV2, { runId });
+      expect(result.status).toBe("complete");
+    });
+
+    expect(await t.query(api.metrics.getRealtimeByAd, { adId: "ad_old_v2" })).toBeNull();
+    expect(await t.query(api.metrics.getRealtimeByAd, { adId: "ad_fresh_v2" })).toBeDefined();
+  });
+
+  test("deleteRealtimeBatch remains backward-compatible without cutoffMs", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+
+    await insertRealtimeMetric(t, accountId, "ad_backcompat_old", Date.now() - 5 * 86_400_000);
+
+    const result = await t.mutation(internal.metrics.deleteRealtimeBatch, {
+      batchSize: 500,
+    });
+
+    expect(result.deleted).toBe(1);
+    expect(await t.query(api.metrics.getRealtimeByAd, { adId: "ad_backcompat_old" })).toBeNull();
+  });
+
+  test("triggerMassCleanupV2 no-ops when env gate is off", async () => {
+    const t = convexTest(schema);
+
+    await withMetricsRealtimeCleanupV2Env(undefined, async () => {
+      const result = await t.mutation(internal.metrics.triggerMassCleanupV2, {
+        batchSize: 500,
+        timeBudgetMs: 10_000,
+        restMs: 60_000,
+        maxRuns: 1,
+      });
+
+      expect(result.status).toBe("disabled");
+      expect(await countRealtimeMetrics(t)).toBe(0);
+      expect(await listScheduledFunctions(t)).toHaveLength(0);
+    });
+  });
+
+  test("triggerMassCleanupV2 refuses active run", async () => {
+    const t = convexTest(schema);
+    const activeRunId = "active-run";
+
+    await insertCleanupRunState(t, {
+      runId: activeRunId,
+      state: "running",
+      isActive: true,
+    });
+
+    await withMetricsRealtimeCleanupV2Env("1", async () => {
+      const blocked = await t.mutation(internal.metrics.triggerMassCleanupV2, {
+        batchSize: 500,
+        timeBudgetMs: 10_000,
+        restMs: 60_000,
+        maxRuns: 1,
+      });
+      expect(blocked).toEqual({ status: "already-running", runId: activeRunId });
+      expect(await listScheduledFunctions(t)).toHaveLength(0);
+    });
+  });
+
+  test("manualMassCleanupV2 enforces maxRuns via batchesRun", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+    const runId = "max-runs";
+    const oldTs = Date.now() - 5 * 86_400_000;
+
+    await insertRealtimeMetric(t, accountId, "ad_max_1", oldTs);
+    await insertRealtimeMetric(t, accountId, "ad_max_2", oldTs + 1000);
+    await insertRealtimeMetric(t, accountId, "ad_max_3", oldTs + 2000);
+    await insertCleanupRunState(t, {
+      runId,
+      cutoffUsed: Date.now() - 2 * 86_400_000,
+      batchSize: 1,
+      maxRuns: 1,
+    });
+
+    await withMetricsRealtimeCleanupV2Env("1", async () => {
+      const result = await t.action(internal.metrics.manualMassCleanupV2, { runId });
+      expect(result.status).toBe("complete");
+    });
+
+    const state = await getCleanupRunState(t, runId);
+    expect(state?.state).toBe("completed");
+    expect(state?.isActive).toBe(false);
+    expect(state?.batchesRun).toBe(1);
+    expect(state?.deletedCount).toBe(1);
+    expect(await countRealtimeMetrics(t)).toBe(2);
+  });
+
+  test("manualMassCleanupV2 records success observability fields", async () => {
+    const t = convexTest(schema);
+    const { accountId } = await createTestUserWithAccount(t);
+    const runId = "success-run";
+
+    await insertRealtimeMetric(t, accountId, "ad_success_old", Date.now() - 5 * 86_400_000);
+    await insertCleanupRunState(t, {
+      runId,
+      cutoffUsed: Date.now() - 2 * 86_400_000,
+      batchSize: 500,
+      maxRuns: 1,
+    });
+
+    await withMetricsRealtimeCleanupV2Env("1", async () => {
+      await t.action(internal.metrics.manualMassCleanupV2, { runId });
+    });
+
+    const state = await getCleanupRunState(t, runId);
+    expect(state?.state).toBe("completed");
+    expect(state?.isActive).toBe(false);
+    expect(state?.cutoffUsed).toBeGreaterThan(0);
+    expect(state?.deletedCount).toBe(1);
+    expect(state?.batchesRun).toBe(1);
+    expect(state?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(state?.error).toBeUndefined();
+  });
+
+  test("manualMassCleanupV2 closes active row when env gate is toggled off mid-chain", async () => {
+    const t = convexTest(schema);
+    const runId = "disabled-run";
+
+    await insertCleanupRunState(t, {
+      runId,
+      state: "running",
+      isActive: true,
+      maxRuns: 5,
+    });
+
+    await withMetricsRealtimeCleanupV2Env("0", async () => {
+      const result = await t.action(internal.metrics.manualMassCleanupV2, { runId });
+      expect(result.status).toBe("disabled_mid_chain");
+    });
+
+    const state = await getCleanupRunState(t, runId);
+    expect(state?.state).toBe("failed");
+    expect(state?.isActive).toBe(false);
+    expect(state?.error).toBe("disabled_mid_chain");
+    expect(state?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(await listScheduledFunctions(t)).toHaveLength(0);
   });
 });
 

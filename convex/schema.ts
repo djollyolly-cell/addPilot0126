@@ -821,6 +821,33 @@ export default defineSchema({
     lastAlertSentAt: v.optional(v.number()),
   }).index("by_name", ["name"]),
 
+  // Persistent run state for bounded storage cleanup V2 chains.
+  cleanupRunState: defineTable({
+    cleanupName: v.string(),
+    runId: v.string(),
+    state: v.union(
+      v.literal("claimed"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed")
+    ),
+    isActive: v.boolean(),
+    startedAt: v.number(),
+    lastBatchAt: v.optional(v.number()),
+    batchesRun: v.number(),
+    maxRuns: v.number(),
+    cutoffUsed: v.number(),
+    deletedCount: v.number(),
+    oldestRemainingTimestamp: v.optional(v.number()),
+    durationMs: v.optional(v.number()),
+    error: v.optional(v.string()),
+    batchSize: v.number(),
+    timeBudgetMs: v.number(),
+    restMs: v.number(),
+  })
+    .index("by_cleanupName_isActive", ["cleanupName", "isActive"])
+    .index("by_runId", ["runId"]),
+
   // Health check results — diagnostic history
   healthCheckResults: defineTable({
     type: v.union(v.literal("system"), v.literal("function"), v.literal("user")),

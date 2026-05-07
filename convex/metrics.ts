@@ -1,12 +1,48 @@
 import { v } from "convex/values";
+import type { FunctionReference } from "convex/server";
 import { mutation, query, internalMutation, internalAction, internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
+import type { Doc } from "./_generated/dataModel";
 
 // ── Cleanup constants ──
 const RETENTION_DAYS = 2;
 const CLEANUP_MAX_RUNNING_MS = 12 * 60 * 60 * 1000; // 12h zombie threshold
+const METRICS_REALTIME_CLEANUP_V2_NAME = "metrics-realtime-v2";
+const METRICS_REALTIME_CLEANUP_V2_CUTOFF_MS = RETENTION_DAYS * 86_400_000;
+type CleanupRunStateV2 = Doc<"cleanupRunState">;
+type DeleteRealtimeBatchResult = { deleted: number; hasMore: boolean };
+type RecordBatchProgressV2Result = {
+  batchesRun: number;
+  deletedCount: number;
+  lastBatchAt: number;
+  hasMore: boolean;
+} | null;
+type ManualMassCleanupV2Result =
+  | { status: "disabled_mid_chain" }
+  | { status: "noop" }
+  | { status: "schedule" | "complete"; deleted: number; hasMore: boolean }
+  | { status: "failed"; error: string };
+type CleanupWorkerV2Ref = FunctionReference<"action", "internal", { runId: string }, unknown>;
+type CleanupStateQueryV2Ref = FunctionReference<"query", "internal", { runId: string }, CleanupRunStateV2 | null>;
+type MarkRunningV2Ref = FunctionReference<"mutation", "internal", { runId: string; lastBatchAt: number }, unknown>;
+type DeleteRealtimeBatchRef = FunctionReference<"mutation", "internal", { batchSize: number; cutoffMs?: number }, DeleteRealtimeBatchResult>;
+type RecordBatchProgressV2Ref = FunctionReference<"mutation", "internal", { runId: string; deleted: number; hasMore: boolean }, RecordBatchProgressV2Result>;
+type ScheduleNextChunkV2Ref = FunctionReference<"mutation", "internal", { runId: string }, unknown>;
+type MarkCompletedV2Ref = FunctionReference<"mutation", "internal", { runId: string }, unknown>;
+type MarkFailedV2Ref = FunctionReference<"mutation", "internal", { runId: string; error: string }, unknown>;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+function isMetricsRealtimeCleanupV2Enabled(): boolean {
+  return process.env.METRICS_REALTIME_CLEANUP_V2_ENABLED === "1";
+}
+
+function makeCleanupRunId(): string {
+  const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  const randomHex = Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+  return `${Date.now()}-${randomHex}`;
+}
 
 // Save a realtime metrics snapshot for a single ad
 export const saveRealtime = internalMutation({
@@ -376,9 +412,12 @@ export const getDailyByAccount = query({
 // ── Cleanup: batch delete old metricsRealtime records ──
 
 export const deleteRealtimeBatch = internalMutation({
-  args: { batchSize: v.number() },
+  args: {
+    batchSize: v.number(),
+    cutoffMs: v.optional(v.number()),
+  },
   handler: async (ctx, args) => {
-    const cutoff = Date.now() - RETENTION_DAYS * 86_400_000;
+    const cutoff = args.cutoffMs ?? Date.now() - METRICS_REALTIME_CLEANUP_V2_CUTOFF_MS;
     const records = await ctx.db
       .query("metricsRealtime")
       .withIndex("by_timestamp", (q) => q.lt("timestamp", cutoff))
@@ -387,6 +426,249 @@ export const deleteRealtimeBatch = internalMutation({
       await ctx.db.delete(record._id);
     }
     return { deleted: records.length, hasMore: records.length === args.batchSize };
+  },
+});
+
+// ── Storage Cleanup V2: bounded metricsRealtime cleanup (env-gated, cron disabled) ──
+
+export const triggerMassCleanupV2 = internalMutation({
+  args: {
+    batchSize: v.number(),
+    timeBudgetMs: v.number(),
+    restMs: v.number(),
+    maxRuns: v.number(),
+  },
+  handler: async (ctx, args) => {
+    if (!isMetricsRealtimeCleanupV2Enabled()) {
+      console.log("[cleanup-v2] skip reason=disabled");
+      return { status: "disabled" as const };
+    }
+
+    const active = await ctx.db
+      .query("cleanupRunState")
+      .withIndex("by_cleanupName_isActive", (q) =>
+        q.eq("cleanupName", METRICS_REALTIME_CLEANUP_V2_NAME).eq("isActive", true)
+      )
+      .first();
+    if (active) {
+      return { status: "already-running" as const, runId: active.runId };
+    }
+
+    const now = Date.now();
+    const runId = makeCleanupRunId();
+    await ctx.db.insert("cleanupRunState", {
+      cleanupName: METRICS_REALTIME_CLEANUP_V2_NAME,
+      runId,
+      state: "claimed",
+      isActive: true,
+      startedAt: now,
+      batchesRun: 0,
+      maxRuns: args.maxRuns,
+      cutoffUsed: now - METRICS_REALTIME_CLEANUP_V2_CUTOFF_MS,
+      deletedCount: 0,
+      batchSize: args.batchSize,
+      timeBudgetMs: args.timeBudgetMs,
+      restMs: args.restMs,
+    });
+    await ctx.scheduler.runAfter(0, internal.metrics.manualMassCleanupV2 as CleanupWorkerV2Ref, { runId });
+    return { status: "scheduled" as const, runId };
+  },
+});
+
+export const getCleanupRunStateV2 = internalQuery({
+  args: { runId: v.string() },
+  handler: async (ctx, args) => {
+    return await ctx.db
+      .query("cleanupRunState")
+      .withIndex("by_runId", (q) => q.eq("runId", args.runId))
+      .first();
+  },
+});
+
+export const markRunningV2 = internalMutation({
+  args: { runId: v.string(), lastBatchAt: v.number() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("cleanupRunState")
+      .withIndex("by_runId", (q) => q.eq("runId", args.runId))
+      .first();
+    if (!row || !row.isActive) return { status: "noop" as const };
+    await ctx.db.patch(row._id, {
+      state: "running",
+      lastBatchAt: args.lastBatchAt,
+    });
+    return { status: "running" as const };
+  },
+});
+
+export const recordBatchProgressV2 = internalMutation({
+  args: {
+    runId: v.string(),
+    deleted: v.number(),
+    hasMore: v.boolean(),
+  },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("cleanupRunState")
+      .withIndex("by_runId", (q) => q.eq("runId", args.runId))
+      .first();
+    if (!row || !row.isActive) return null;
+
+    const now = Date.now();
+    const batchesRun = row.batchesRun + 1;
+    const deletedCount = row.deletedCount + args.deleted;
+    await ctx.db.patch(row._id, {
+      batchesRun,
+      deletedCount,
+      lastBatchAt: now,
+    });
+    return {
+      batchesRun,
+      deletedCount,
+      lastBatchAt: now,
+      hasMore: args.hasMore,
+    };
+  },
+});
+
+export const scheduleNextChunkV2 = internalMutation({
+  args: { runId: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("cleanupRunState")
+      .withIndex("by_runId", (q) => q.eq("runId", args.runId))
+      .first();
+    if (!row || !row.isActive) return { scheduled: false };
+
+    await ctx.scheduler.runAfter(row.restMs, internal.metrics.manualMassCleanupV2 as CleanupWorkerV2Ref, {
+      runId: args.runId,
+    });
+    return { scheduled: true };
+  },
+});
+
+export const markCompletedV2 = internalMutation({
+  args: { runId: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("cleanupRunState")
+      .withIndex("by_runId", (q) => q.eq("runId", args.runId))
+      .first();
+    if (!row || !row.isActive) return { status: "noop" as const };
+
+    const oldestRemaining = await ctx.db
+      .query("metricsRealtime")
+      .withIndex("by_timestamp")
+      .order("asc")
+      .first();
+
+    const patch: {
+      state: "completed";
+      isActive: false;
+      durationMs: number;
+      oldestRemainingTimestamp?: number;
+    } = {
+      state: "completed",
+      isActive: false,
+      durationMs: Date.now() - row.startedAt,
+    };
+    if (oldestRemaining) {
+      patch.oldestRemainingTimestamp = oldestRemaining.timestamp;
+    }
+    await ctx.db.patch(row._id, patch);
+    return { status: "completed" as const };
+  },
+});
+
+export const markFailedV2 = internalMutation({
+  args: { runId: v.string(), error: v.string() },
+  handler: async (ctx, args) => {
+    const row = await ctx.db
+      .query("cleanupRunState")
+      .withIndex("by_runId", (q) => q.eq("runId", args.runId))
+      .first();
+    if (!row || !row.isActive) return { status: "noop" as const };
+
+    await ctx.db.patch(row._id, {
+      state: "failed",
+      isActive: false,
+      error: args.error,
+      durationMs: Date.now() - row.startedAt,
+    });
+    return { status: "failed" as const };
+  },
+});
+
+export const manualMassCleanupV2 = internalAction({
+  args: { runId: v.string() },
+  handler: async (ctx, args): Promise<ManualMassCleanupV2Result> => {
+    if (!isMetricsRealtimeCleanupV2Enabled()) {
+      await ctx.runMutation(internal.metrics.markFailedV2 as MarkFailedV2Ref, {
+        runId: args.runId,
+        error: "disabled_mid_chain",
+      });
+      console.log(`[cleanup-v2] runId=${args.runId} skip reason=disabled_mid_chain`);
+      return { status: "disabled_mid_chain" as const };
+    }
+
+    const startedAt = Date.now();
+    try {
+      const state = await ctx.runQuery(internal.metrics.getCleanupRunStateV2 as CleanupStateQueryV2Ref, {
+        runId: args.runId,
+      });
+      if (!state || !state.isActive || state.state === "completed" || state.state === "failed") {
+        return { status: "noop" as const };
+      }
+
+      console.log(
+        `[cleanup-v2] start runId=${args.runId} batchesRun_pre=${state.batchesRun} cutoffUsed=${state.cutoffUsed} batchSize=${state.batchSize}`
+      );
+      await ctx.runMutation(internal.metrics.markRunningV2 as MarkRunningV2Ref, {
+        runId: args.runId,
+        lastBatchAt: startedAt,
+      });
+
+      const result = await ctx.runMutation(internal.metrics.deleteRealtimeBatch as DeleteRealtimeBatchRef, {
+        batchSize: state.batchSize,
+        cutoffMs: state.cutoffUsed,
+      });
+      const updated = await ctx.runMutation(internal.metrics.recordBatchProgressV2 as RecordBatchProgressV2Ref, {
+        runId: args.runId,
+        deleted: result.deleted,
+        hasMore: result.hasMore,
+      });
+
+      if (!updated) {
+        return { status: "noop" as const };
+      }
+
+      const shouldSchedule = updated.batchesRun < state.maxRuns && result.hasMore;
+      if (shouldSchedule) {
+        await ctx.runMutation(internal.metrics.scheduleNextChunkV2 as ScheduleNextChunkV2Ref, { runId: args.runId });
+      } else {
+        await ctx.runMutation(internal.metrics.markCompletedV2 as MarkCompletedV2Ref, { runId: args.runId });
+      }
+
+      const decision = shouldSchedule ? "schedule" : "complete";
+      console.log(
+        `[cleanup-v2] end runId=${args.runId} deleted=${result.deleted} durationMs=${Date.now() - startedAt} hasMore=${result.hasMore} decision=${decision}`
+      );
+      return {
+        status: decision as "schedule" | "complete",
+        deleted: result.deleted,
+        hasMore: result.hasMore,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await ctx.runMutation(internal.metrics.markFailedV2 as MarkFailedV2Ref, {
+        runId: args.runId,
+        error: message,
+      });
+      console.log(
+        `[cleanup-v2] end runId=${args.runId} deleted=0 durationMs=${Date.now() - startedAt} hasMore=false decision=failed`
+      );
+      return { status: "failed" as const, error: message };
+    }
   },
 });
 
