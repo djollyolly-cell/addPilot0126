@@ -5,9 +5,8 @@ import { internal } from "./_generated/api";
 import { extractRateLimitHeaders } from "./vkApi";
 
 /**
- * Record VK API rate-limit headers from a single response.
- * Called by callMtApi after parsing X-RateLimit-* headers.
- * Skips insert if all 6 numeric fields are undefined (no headers).
+ * Record a VK API rate-limit event. D2a predicate: insert only on 429.
+ * Defense-in-depth — primary one-row-per-logical-call guard lives in callMtApi.
  */
 export const recordRateLimit = internalMutation({
   args: {
@@ -21,9 +20,12 @@ export const recordRateLimit = internalMutation({
     dailyRemaining: v.optional(v.number()),
     statusCode: v.number(),
   },
-  handler: async (_ctx, _args) => {
-    // EMERGENCY DRAIN MODE: no-op. Restore body after pending queue drains.
-    return null;
+  handler: async (ctx, args) => {
+    if (args.statusCode !== 429) return null;
+    return await ctx.db.insert("vkApiLimits", {
+      ...args,
+      capturedAt: Date.now(),
+    });
   },
 });
 

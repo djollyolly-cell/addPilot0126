@@ -251,59 +251,73 @@ export async function callMtApi<T>(
   accessToken: string,
   params?: Record<string, string>,
   options?: {
-    /** Called after every response (success or error). Fire-and-forget from caller. */
-    onResponse?: (info: CallMtApiResponseInfo) => void;
+    /**
+     * Throttle hook. Called at most once per logical callMtApi call,
+     * only when at least one 429 was observed during the retry loop.
+     * Awaited inside try/catch — failures are swallowed via console.warn.
+     */
+    onResponse?: (info: CallMtApiResponseInfo) => void | Promise<void>;
   }
 ): Promise<T> {
   let lastError: Error | null = null;
+  let saw429 = false;
+  let last429RateLimits: RateLimitHeaders | undefined;
 
-  for (let attempt = 0; attempt < MT_MAX_RETRIES; attempt++) {
-    const url = new URL(`${MT_API_BASE}/api/v2/${endpoint}`);
-    if (params) {
-      Object.entries(params).forEach(([k, val]) => url.searchParams.set(k, val));
-    }
-
-    const response = await fetchWithTimeout(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-      },
-    });
-
-    // Extract and report rate-limit headers (non-blocking)
-    try {
-      options?.onResponse?.({
-        endpoint,
-        statusCode: response.status,
-        rateLimits: extractRateLimitHeaders(response.headers),
-      });
-    } catch {
-      // Non-critical: observability callback must never fail the API call
-    }
-
-    if (response.status === 429 && attempt < MT_MAX_RETRIES - 1) {
-      await sleep(RETRY_DELAY_MS * (attempt + 1));
-      continue;
-    }
-
-    if (response.status === 401) {
-      if (attempt < 1) {
-        console.log(`[callMtApi] ${endpoint}: got 401, retrying once in 2s`);
-        await sleep(2000);
-        continue;
+  try {
+    for (let attempt = 0; attempt < MT_MAX_RETRIES; attempt++) {
+      const url = new URL(`${MT_API_BASE}/api/v2/${endpoint}`);
+      if (params) {
+        Object.entries(params).forEach(([k, val]) => url.searchParams.set(k, val));
       }
-      throw new Error("TOKEN_EXPIRED");
+
+      const response = await fetchWithTimeout(url.toString(), {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (response.status === 429) {
+        saw429 = true;
+        last429RateLimits = extractRateLimitHeaders(response.headers);
+        if (attempt < MT_MAX_RETRIES - 1) {
+          await sleep(RETRY_DELAY_MS * (attempt + 1));
+          continue;
+        }
+      }
+
+      if (response.status === 401) {
+        if (attempt < 1) {
+          console.log(`[callMtApi] ${endpoint}: got 401, retrying once in 2s`);
+          await sleep(2000);
+          continue;
+        }
+        throw new Error("TOKEN_EXPIRED");
+      }
+
+      if (!response.ok) {
+        const text = await response.text();
+        lastError = new Error(`VK Ads API Error ${response.status}: ${text}`);
+        throw lastError;
+      }
+
+      return await response.json();
     }
 
-    if (!response.ok) {
-      const text = await response.text();
-      lastError = new Error(`VK Ads API Error ${response.status}: ${text}`);
-      throw lastError;
+    throw lastError || new Error("VK Ads API request failed after retries");
+  } finally {
+    if (saw429 && options?.onResponse) {
+      try {
+        await options.onResponse({
+          endpoint,
+          statusCode: 429,
+          rateLimits: last429RateLimits ?? {},
+        });
+      } catch {
+        // Non-critical: observability callback must never fail the API call.
+        console.warn(`[callMtApi] onResponse threw for ${endpoint}`);
+      }
     }
-
-    return response.json();
   }
-
-  throw lastError || new Error("VK Ads API request failed after retries");
 }
 
 // POST helper for myTarget API v2 (create/update resources)
@@ -536,22 +550,19 @@ export const getMtStatistics = action({
     accountId: v.optional(v.id("adAccounts")),
   },
   handler: async (ctx, args): Promise<MtStatItem[]> => {
-    // Rate-limit logger for this account
+    // D2a: direct bounded mutation on observed 429 only.
+    // callMtApi guarantees at most one invocation per logical call.
     const rlOptions = {
-      onResponse: (info: CallMtApiResponseInfo) => {
-        const hasData =
-          info.rateLimits.rpsLimit !== undefined ||
-          info.rateLimits.dailyRemaining !== undefined ||
-          info.statusCode === 429;
-        if (false && hasData) {
-          // EMERGENCY DRAIN MODE: producer disabled to prevent queue refill.
-          // Restore (remove `false &&`) after pending queue drains.
-          void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
+      onResponse: async (info: CallMtApiResponseInfo) => {
+        try {
+          await ctx.runMutation(internal.vkApiLimits.recordRateLimit, {
             accountId: args.accountId,
             endpoint: info.endpoint,
             statusCode: info.statusCode,
             ...info.rateLimits,
           });
+        } catch {
+          console.warn(`[vkApiLimits] failed to record 429 for ${info.endpoint}`);
         }
       },
     };
@@ -666,22 +677,19 @@ export const getCampaignsSpentTodayBatch = internalAction({
     const today = msk.toISOString().slice(0, 10);
     const result: Record<string, number> = {};
 
-    // Rate-limit logger for this account
+    // D2a: direct bounded mutation on observed 429 only.
+    // callMtApi guarantees at most one invocation per logical call.
     const rlOptions = {
-      onResponse: (info: CallMtApiResponseInfo) => {
-        const hasData =
-          info.rateLimits.rpsLimit !== undefined ||
-          info.rateLimits.dailyRemaining !== undefined ||
-          info.statusCode === 429;
-        if (false && hasData) {
-          // EMERGENCY DRAIN MODE: producer disabled to prevent queue refill.
-          // Restore (remove `false &&`) after pending queue drains.
-          void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
+      onResponse: async (info: CallMtApiResponseInfo) => {
+        try {
+          await ctx.runMutation(internal.vkApiLimits.recordRateLimit, {
             accountId: args.accountId,
             endpoint: info.endpoint,
             statusCode: info.statusCode,
             ...info.rateLimits,
           });
+        } catch {
+          console.warn(`[vkApiLimits] failed to record 429 for ${info.endpoint}`);
         }
       },
     };
@@ -861,22 +869,19 @@ export const getMtLeadCounts = action({
   handler: async (ctx, args): Promise<Record<string, number>> => {
     const result: Record<string, number> = {};
 
-    // Rate-limit logger for this account
+    // D2a: direct bounded mutation on observed 429 only.
+    // callMtApi guarantees at most one invocation per logical call.
     const rlOptions = {
-      onResponse: (info: CallMtApiResponseInfo) => {
-        const hasData =
-          info.rateLimits.rpsLimit !== undefined ||
-          info.rateLimits.dailyRemaining !== undefined ||
-          info.statusCode === 429;
-        if (false && hasData) {
-          // EMERGENCY DRAIN MODE: producer disabled to prevent queue refill.
-          // Restore (remove `false &&`) after pending queue drains.
-          void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
+      onResponse: async (info: CallMtApiResponseInfo) => {
+        try {
+          await ctx.runMutation(internal.vkApiLimits.recordRateLimit, {
             accountId: args.accountId,
             endpoint: info.endpoint,
             statusCode: info.statusCode,
             ...info.rateLimits,
           });
+        } catch {
+          console.warn(`[vkApiLimits] failed to record 429 for ${info.endpoint}`);
         }
       },
     };
@@ -1075,22 +1080,19 @@ export const getMtBanners = action({
     fields: v.optional(v.string()),
   },
   handler: async (ctx, args): Promise<MtBanner[]> => {
-    // Rate-limit logger for this account
+    // D2a: direct bounded mutation on observed 429 only.
+    // callMtApi guarantees at most one invocation per logical call.
     const rlOptions = {
-      onResponse: (info: CallMtApiResponseInfo) => {
-        const hasData =
-          info.rateLimits.rpsLimit !== undefined ||
-          info.rateLimits.dailyRemaining !== undefined ||
-          info.statusCode === 429;
-        if (false && hasData) {
-          // EMERGENCY DRAIN MODE: producer disabled to prevent queue refill.
-          // Restore (remove `false &&`) after pending queue drains.
-          void ctx.scheduler.runAfter(0, internal.vkApiLimits.recordRateLimit, {
+      onResponse: async (info: CallMtApiResponseInfo) => {
+        try {
+          await ctx.runMutation(internal.vkApiLimits.recordRateLimit, {
             accountId: args.accountId,
             endpoint: info.endpoint,
             statusCode: info.statusCode,
             ...info.rateLimits,
           });
+        } catch {
+          console.warn(`[vkApiLimits] failed to record 429 for ${info.endpoint}`);
         }
       },
     };

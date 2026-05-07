@@ -1,8 +1,138 @@
 import { describe, test, expect, vi, beforeEach, afterEach } from "vitest";
+import { callMtApi, type CallMtApiResponseInfo } from "./vkApi";
 
 // We test the VK API logic by importing and testing the underlying fetch patterns
 // Since Convex actions can't be easily unit-tested with convex-test for external APIs,
 // we test the API response handling patterns
+
+describe("callMtApi onResponse contract (D2a)", () => {
+  const originalFetch = globalThis.fetch;
+  const originalSetTimeout = globalThis.setTimeout;
+
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    // Make internal sleep() instant so retry-loop tests stay fast.
+    // AbortSignal.timeout also uses setTimeout but mocked fetch ignores the signal.
+    globalThis.setTimeout = ((cb: () => void) => {
+      void Promise.resolve().then(cb);
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    globalThis.setTimeout = originalSetTimeout;
+    vi.restoreAllMocks();
+  });
+
+  test("does not invoke onResponse when no 429 observed (200 path)", async () => {
+    let invoked = false;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "X-RateLimit-Daily-Remaining": "100" }),
+      json: () => Promise.resolve({ ok: 1 }),
+      text: () => Promise.resolve(""),
+    });
+
+    const result = await callMtApi<{ ok: number }>("user.json", "tok", undefined, {
+      onResponse: () => {
+        invoked = true;
+      },
+    });
+
+    expect(result).toEqual({ ok: 1 });
+    expect(invoked).toBe(false);
+  });
+
+  test("awaits async onResponse callback when 429 observed before 200", async () => {
+    let callbackResolved = false;
+    const order: string[] = [];
+
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: new Headers({ "X-RateLimit-Daily-Remaining": "5" }),
+        text: () => Promise.resolve(""),
+        json: () => Promise.resolve({}),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: () => Promise.resolve(""),
+        json: () => Promise.resolve({ ok: 1 }),
+      });
+
+    const result = await callMtApi<{ ok: number }>("user.json", "tok", undefined, {
+      onResponse: async (info: CallMtApiResponseInfo) => {
+        order.push("cb-start");
+        // Force the outer call to actually wait for this microtask chain.
+        await Promise.resolve();
+        await Promise.resolve();
+        callbackResolved = true;
+        // Verify the throttle hook fires once with 429 and the latest 429 headers.
+        expect(info.statusCode).toBe(429);
+        expect(info.endpoint).toBe("user.json");
+        expect(info.rateLimits.dailyRemaining).toBe(5);
+        order.push("cb-end");
+      },
+    });
+    order.push("after-await");
+
+    expect(result).toEqual({ ok: 1 });
+    expect(callbackResolved).toBe(true);
+    expect(order).toEqual(["cb-start", "cb-end", "after-await"]);
+  });
+
+  test("callback failure does not fail the VK API call", async () => {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 429,
+        headers: new Headers(),
+        text: () => Promise.resolve(""),
+        json: () => Promise.resolve({}),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        headers: new Headers(),
+        text: () => Promise.resolve(""),
+        json: () => Promise.resolve({ ok: 1 }),
+      });
+
+    const result = await callMtApi<{ ok: number }>("user.json", "tok", undefined, {
+      onResponse: async () => {
+        throw new Error("callback boom");
+      },
+    });
+
+    expect(result).toEqual({ ok: 1 });
+  });
+
+  test("invokes onResponse exactly once for a 429 retry storm", async () => {
+    let invocations = 0;
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Headers({ "X-RateLimit-Daily-Remaining": "0" }),
+      text: () => Promise.resolve("rate limited"),
+      json: () => Promise.resolve({}),
+    });
+
+    await expect(
+      callMtApi<unknown>("user.json", "tok", undefined, {
+        onResponse: () => {
+          invocations++;
+        },
+      })
+    ).rejects.toThrow();
+
+    expect(invocations).toBe(1);
+  });
+});
 
 describe("vkApi", () => {
   const originalFetch = globalThis.fetch;

@@ -4,7 +4,7 @@ import { internal } from "./_generated/api";
 import schema from "./schema";
 
 describe("vkApiLimits.recordRateLimit", () => {
-  it("inserts a record when limit headers are present", async () => {
+  it("skips insert for 200 even when limit headers are present (D2a 429-only)", async () => {
     const t = convexTest(schema);
     const id = await t.mutation(internal.vkApiLimits.recordRateLimit, {
       endpoint: "statistics/banners/day.json",
@@ -14,7 +14,7 @@ describe("vkApiLimits.recordRateLimit", () => {
       dailyRemaining: 95000,
       statusCode: 200,
     });
-    expect(id).toBeTruthy();
+    expect(id).toBeNull();
   });
 
   it("skips insert when no headers and statusCode is 200", async () => {
