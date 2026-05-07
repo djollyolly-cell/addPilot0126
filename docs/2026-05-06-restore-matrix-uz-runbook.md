@@ -9,12 +9,15 @@ Every prod-touching command still requires an explicit human go.
 
 ## Current operating posture
 
-- Sync V2 is live in conservative mode:
+- Sync V2 is live after throughput bumps:
   - `SYNC_METRICS_V2_ENABLED=1`
-  - `SYNC_WORKER_COUNT_V2=1`
-  - `SYNC_BATCH_SIZE_V2=10`
+  - `SYNC_WORKER_COUNT_V2=2`
+  - `SYNC_BATCH_SIZE_V2=20`
   - `SYNC_METRICS_V2_POLL_MODERATION=0`
   - `SYNC_ESCALATION_ALERTS_ENABLED=0`
+- The emergency branch contains a prepared `sync-metrics` cadence change
+  (`45 min -> 15 min`) in `ffdd32b`, but it must not be deployed until the
+  D2a watch closes clean and an explicit deploy go is given.
 - UZ V2 cron is registered at `45 min` and is live after business go:
   - `UZ_BUDGET_V2_ENABLED=1`
   - first organic production tick at `2026-05-06T12:12:10Z` closed clean
@@ -28,7 +31,7 @@ Every prod-touching command still requires an explicit human go.
 
 | Area | Current state | User impact | Can restore today? | Required trigger | Risk | Runbook |
 |---|---|---:|---:|---|---|---|
-| Sync metrics V2 | Live conservative profile | High | Already reopened | Organic ticks pass acceptance criteria | Medium: WAL/V8 pressure | Keep monitoring; no manual sync trigger |
+| Sync metrics V2 | Live after throughput bumps (`worker=2`, `batch=20`); `15 min` cadence prepared but not deployed | High | Already reopened; cadence deploy pending D2a closure | Organic ticks pass acceptance criteria | Medium: WAL/V8 pressure | Keep monitoring; no manual sync trigger |
 | UZ budget V2 | Live after first clean organic tick | High for active UZ rules | Already opened | Business/ops confirmed unattended budget actions at `2026-05-06T11:35Z` | Medium: real VK budget changes and Telegram notifications | Monitor second organic tick with same criteria |
 | Token refresh V2 | V2 live; V1 `auth.tokenRefreshOne` stays no-op | High | Already restored | Continued clean 2h ticks | Medium during overlap windows | Monitor `09:09Z`, `11:09Z`, etc.; do not restore V1 before a separate historical-backlog purge decision |
 | Safe cleanup crons restored in Phase 1 | Live | Medium | Already restored | N/A | Low | Keep as-is |
@@ -43,8 +46,83 @@ Every prod-touching command still requires an explicit human go.
 | Sync escalation alerts | `SYNC_ESCALATION_ALERTS_ENABLED=0` | Admin visibility only | No | Requires alert redesign | High: can schedule `adminAlerts.notify` | Last wave |
 | `adminAlerts.notify` | no-op, fan-out disabled | Admin visibility only | No | Bounded alert redesign | High: known amplification loop | Last wave |
 | `vk-throttling-probe` cron | Disabled | Observability only | No | Same bounded telemetry redesign as `recordRateLimit` | High: creates VK calls and writes through `recordRateLimit` | Keep disabled until `recordRateLimit` V2 exists |
-| `recordRateLimit` | handler no-op, producers disabled | Observability only | No | Bounded telemetry redesign | Very high: main historical backlog source | Weeks/design track |
+| `recordRateLimit` | D2a deployed under observation: direct 429-only mutation; old scheduled per-response form forbidden | Observability only | D2a code restored; broader D2b/D2c deferred | D2a 3h canary closes clean | Medium if kept 429-only; high if expanded without redesign | Do not restore `vk-throttling-probe` or 200-response sampling until a separate runbook |
 | Merge emergency branch to `main` | Not ready | Engineering hygiene | No | After cleanup strategy | High if V1 handlers accidentally restored | Separate checklist |
+
+## Rule-adjacent cron restore queue
+
+This section tracks cron-backed rule/automation behavior that is still disabled
+after the emergency drain. It is intentionally separate from the D2a watch and
+from the sync cadence `45 -> 15 min` deploy.
+
+### What still works through `sync-metrics`
+
+The ordinary rule-evaluation path is not one cron per rule type. The active
+`sync-metrics` V2 pipeline evaluates the normal rules after account metrics sync.
+This covers the current set of standard rule types that depend on rule
+evaluation cadence. The prepared cadence change to `15 min` is the latency fix
+for that path.
+
+### Restore priority after D2a and sync cadence closure
+
+Do not bundle these restores with D2a, sync cadence deploy, D1, or D2. Each item
+requires its own short runbook, commit, deploy go, and observation window.
+
+| Priority | Cron | Current state | Why it matters | Required next artifact | First safe shape |
+|---:|---|---|---|---|---|
+| R1 | `uz-budget-reset` (`internal.uzBudgetCron.resetBudgets`) | Disabled/commented | UZ daily reset lifecycle is incomplete; reset does not run for any user. | `docs/2026-05-07-uz-budget-reset-restore-runbook.md` | Restore the existing `30 min` cron only after preflight verifies active reset rules, stale/pending jobs, and rollback signals. |
+| R2 | `video-rotation-tick` (`internal.videoRotation.tick`) | Disabled/commented | `video_rotation` rules do not get periodic switching/self-healing while the tick is off. | `docs/2026-05-07-video-rotation-tick-restore-runbook.md` | Do not blindly restore the old `5 min` cadence. First count active rotation rules/states and decide cadence/business go. |
+
+### R1 outline: `uz-budget-reset`
+
+Goal: restore the existing reset cron without changing UZ increase cadence.
+
+Preflight must answer:
+
+- How many active `uz_budget_manage` rules have `resetDaily=true`?
+- How many target accounts/campaigns can be touched by one reset window?
+- Are there any pending/in-progress historical `uzBudgetCron.resetBudgets`
+  scheduled jobs?
+- Are recent UZ increase ticks still clean (`error=null`, V2 failed `0`)?
+- Are backend rollback greps, `/version`, and byte-exact `pg_wal` baseline clean?
+
+Expected code shape:
+
+```ts
+crons.interval(
+  "uz-budget-reset",
+  { minutes: 30 },
+  internal.uzBudgetCron.resetBudgets,
+);
+```
+
+Watch after deploy:
+
+- first organic reset tick heartbeat completes with `error=null`;
+- `actionLogs` contains expected `budget_reset` rows and `0` failures/reverts;
+- backend stdout has `0` rollback patterns;
+- V2 failed counters stay flat;
+- `pg_wal` delta remains below the same conservative restore thresholds.
+
+Rollback: comment the cron again, deploy, and verify the next scheduler state does
+not register new reset jobs.
+
+### R2 outline: `video-rotation-tick`
+
+Goal: restore periodic rotation only if the product/business owner confirms that
+active `video_rotation` users need it now.
+
+Preflight must answer:
+
+- How many active `video_rotation` rules exist?
+- How many `rotationState` rows are active/orphaned?
+- How much VK write fan-out can one tick create?
+- Is the old `5 min` cadence still required, or should restore start at a lower
+  cadence with a canary account/user?
+
+This cron is side-effecting: it can stop/start VK campaigns and send user
+notifications. Restore it after `uz-budget-reset` unless product priority says
+otherwise, and never in the same deploy as reset.
 
 ## UZ unattended runbook
 

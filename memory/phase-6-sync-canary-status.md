@@ -17,6 +17,33 @@ Latest recorded runbook commit before this memory update: `e777248`
 - Coverage evidence: `38/212` accounts updated across the two worker-count-2 sync ticks, meeting the `>=30` accepted lower bound.
 - Final state: `SYNC_WORKER_COUNT_V2=2`, `SYNC_BATCH_SIZE_V2=20`, `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=16`; all other gates unchanged. No rollback executed.
 
+## Rule-adjacent cron restore queue captured
+
+Captured on `2026-05-07` after confirming that `convex/crons.ts` still has
+rule-adjacent side-effecting crons commented.
+
+- Ordinary rule evaluation is not one cron per rule type. It runs through the
+  active `sync-metrics` V2 pipeline. The prepared `45 -> 15 min` cadence commit
+  (`ffdd32b`) is the latency fix for those standard rules, but it is not deployed
+  until D2a watch closes clean and an explicit deploy go is given.
+- `uz-budget-increase` is active at `45 min` via
+  `internal.ruleEngine.uzBudgetDispatchV2`; do not change its cadence in the sync
+  cadence deploy.
+- `uz-budget-reset` is disabled/commented. This means daily UZ budget resets do
+  not run for any user. It is now the next rule-adjacent restore candidate after
+  D2a closure and sync cadence deploy/canary. Required artifact:
+  `docs/2026-05-07-uz-budget-reset-restore-runbook.md`.
+- `video-rotation-tick` is disabled/commented. Active `video_rotation` rules do
+  not receive periodic switching/self-healing while this cron is off. Restore
+  after reset unless product priority says otherwise. Required artifact:
+  `docs/2026-05-07-video-rotation-tick-restore-runbook.md`.
+- Do not bundle either restore with D2a, sync cadence `45 -> 15`, D1, D2, or each
+  other. Both are side-effecting and need separate preflight, deploy go, and
+  observation windows.
+- Source-of-truth planning update: `docs/2026-05-06-restore-matrix-uz-runbook.md`
+  now has a "Rule-adjacent cron restore queue" section; the post-Phase-8 checklist
+  now has expanded C2/C2b entries.
+
 ## Sync throughput batch bump closed clean (`SYNC_BATCH_SIZE_V2 10 → 20`)
 
 - Runbook: `docs/2026-05-07-sync-throughput-batch-10-to-20-runbook.md`.

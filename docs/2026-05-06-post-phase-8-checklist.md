@@ -54,8 +54,19 @@ These need actual production observation data on `concurrency=16` before being d
 ### C2. UZ reset cron
 
 - Currently disabled. Needed if full UZ budget lifecycle (increase + reset) is desired.
-- Pre-req: business decision on whether daily reset behavior is wanted.
-- Code likely already in place, just needs cron registration.
+- 2026-05-07 update: promoted from "later after one week" to the next rule-adjacent restore candidate after D2a closes clean and the sync cadence `45 -> 15 min` deploy/canary is closed. Reason: reset is user-visible; while disabled, no user receives daily UZ budget resets.
+- Pre-req: separate restore runbook, active `resetDaily=true` rule count, target fan-out estimate, stale/pending scheduled-job check, latest UZ/sync/token health clean, byte-exact WAL baseline.
+- Code likely already in place; expected code surface is only re-registering `crons.interval("uz-budget-reset", { minutes: 30 }, internal.uzBudgetCron.resetBudgets)`.
+- Do not bundle with UZ increase cadence, sync cadence, D1, D2, or video rotation.
+
+### C2b. Video rotation tick
+
+- Currently disabled: `video-rotation-tick` is commented in `convex/crons.ts`.
+- User impact: active `video_rotation` rules do not get periodic campaign switching/self-healing.
+- This is side-effecting: it can stop/start VK campaigns and send user notifications.
+- Pre-req: separate restore runbook, active `video_rotation` rule count, active/orphaned `rotationState` count, VK write fan-out estimate, business go on whether the old `5 min` cadence is still required.
+- Do not blindly restore the old `5 min` cadence. Decide cadence in the runbook after data capture.
+- Recommended order: after `uz-budget-reset`, unless product priority explicitly says rotation is more urgent.
 
 ### C3. Moderation polling
 
