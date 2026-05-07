@@ -1,8 +1,20 @@
 # Phase 6 sync canary status
 
-Date: 2026-05-06
+Date: 2026-05-07
 Branch: `emergency/drain-scheduled-jobs`
-Current local/remote HEAD: `b0258fc`
+Current local/remote HEAD: `7cf326e`
+
+## Sync throughput batch bump closed clean (`SYNC_BATCH_SIZE_V2 10 → 20`)
+
+- Runbook: `docs/2026-05-07-sync-throughput-batch-10-to-20-runbook.md`.
+- Runbook committed/pushed first: `7cf326e docs(sync): add batch throughput bump runbook`.
+- Env bump executed `2026-05-06T21:22Z` after explicit go: `SYNC_BATCH_SIZE_V2 10 → 20`.
+- Hard precondition passed: `SYNC_WORKER_COUNT_V2=1` explicitly present in Convex deployment env, avoiding the code default `2`.
+- Pre-bump baseline `2026-05-06T21:19:55Z`: `/version` HTTP 200, `pg_wal=1,593,835,520` bytes, stale `203/212`, `syncBatchWorkerV2|success|21`, failed counters flat.
+- First organic batch-20 tick `2026-05-06T22:04:10Z`: `syncDispatch` completed/error null, `syncBatchWorkerV2 21→22`, failed `0`, backend rollback grep `0`, `adminAlerts.notify=0`, `pg_wal` decreased to `1,409,286,144`, direct account-update audit found `19` accounts updated with empty `lastError` / `lastSyncError`.
+- Extended observation through `2026-05-07T02:55Z`: `syncBatchWorkerV2 21→28`, failed `0`; backend rollback grep `0`; `adminAlerts.notify=0`; failed counters flat; `/version` HTTP 200; `pg_wal=1,577,058,304` bytes (`-16 MiB` vs baseline); latest tick `02:34Z` updated `19` accounts; total post-bump coverage `134/212` accounts.
+- Surrounding crons clean: token refresh `2026-05-07T01:09:36Z` completed/error null; UZ `2026-05-07T02:27:10Z` completed/error null.
+- Final state: `SYNC_BATCH_SIZE_V2=20`, `SYNC_WORKER_COUNT_V2=1`, `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=16`; all other gates unchanged. No rollback executed.
 
 ## Phase 8 closed clean (concurrency bump 8 → 16)
 
@@ -141,7 +153,7 @@ D1 design (`adminAlerts.notify` redesign) was identified as the highest-value ne
   - `SYNC_ESCALATION_ALERTS_ENABLED=0`
   - `SYNC_METRICS_V2_POLL_MODERATION=0`
   - `SYNC_WORKER_COUNT_V2=1`
-  - `SYNC_BATCH_SIZE_V2=10`
+  - `SYNC_BATCH_SIZE_V2=20`
   - `DISABLE_ERROR_ALERT_FANOUT=1`
   - `UZ_BUDGET_V2_ENABLED=1`
   - `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=16` (Phase 8 closed clean `2026-05-06T17:47Z`)
@@ -155,7 +167,7 @@ No prod-touching step without explicit `go`.
 2. V1 sync cron remains absent; do not restore `internal.syncMetrics.syncDispatch`.
 3. Current state is `SYNC_METRICS_V2_ENABLED=1`; Phase 6b closed clean, the post-token live reopen is clean after two organic ticks, and sync remains in conservative production profile.
 4. Do not manual-trigger sync; future sync runs should be organic cron ticks only.
-5. Keep first production profile conservative: `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2=10`, `SYNC_METRICS_V2_POLL_MODERATION=0`, `SYNC_ESCALATION_ALERTS_ENABLED=0`.
+5. Current production profile after the first throughput bump: `SYNC_WORKER_COUNT_V2=1`, `SYNC_BATCH_SIZE_V2=20`, `SYNC_METRICS_V2_POLL_MODERATION=0`, `SYNC_ESCALATION_ALERTS_ENABLED=0`.
 6. Bumping worker count/batch size, enabling moderation poll, or reopening escalation alerts are separate decisions.
 
 ## Rollback triggers
@@ -166,7 +178,7 @@ Any one means stop sync canary, set `SYNC_METRICS_V2_ENABLED=0`, and do not retr
 - Any backend stdout line matching `syncBatchV2.*Account .* failed`.
 - Any `Too many concurrent` or `Transient error`.
 - Any new `adminAlerts.js:notify` schedule in the window.
-- `pg_wal` delta > `50 MB` for the first `1 worker x 10 accounts` run.
+- `pg_wal` delta > `100 MB` for a `1 worker x 20 accounts` run.
 
 ## Notes
 
