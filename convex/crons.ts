@@ -8,7 +8,7 @@ const crons = cronJobs();
 // `internal` import retained for the commented cron registrations.
 void internal;
 
-// Sync ad metrics — Phase 6b CRON CANARY (active, 45 min interval).
+// Sync ad metrics — Phase 6b CRON CANARY (active, 15 min interval).
 //
 // RECOVERY NOTE (Phase 6):
 //   - Phase 6a/6a-bis manual canaries observed clean hard criteria after
@@ -17,15 +17,18 @@ void internal;
 //     fail-closed unless SYNC_METRICS_V2_ENABLED=1. Deploy this cron while
 //     SYNC_METRICS_V2_ENABLED=0, verify fail-closed smoke, then open the gate
 //     only in a monitored window and wait for an organic cron tick.
-//   - First cron canaries keep SYNC_WORKER_COUNT_V2=1, SYNC_BATCH_SIZE_V2=10,
+//   - First cron canaries used SYNC_WORKER_COUNT_V2=1, SYNC_BATCH_SIZE_V2=10,
 //     SYNC_METRICS_V2_POLL_MODERATION=0, SYNC_ESCALATION_ALERTS_ENABLED=0.
-//   - 45 min interval is mandated by:
+//   - After clean throughput bumps, production now runs worker_count=2,
+//     batch_size=20, and 15 min sync cadence to reduce rule-evaluation delay.
+//   - 15 min cadence keeps the V2 path below the old 5-min pressure profile,
+//     but it still requires monitoring because:
 //       * V2 worker can run up to ~9.5 min (heavy account 2000+ campaigns);
 //       * dispatcher heartbeat guard does NOT prevent worker overlap;
 //       * sync writes generate WAL pressure (V1 5-min interval was a
 //         primary contributor to the 2026-05-04/05 incident);
 //       * 2-hour token refresh cron (proactive-token-refresh) competes
-//         for V8 slots — 45 min keeps overlap rare.
+//         for V8 slots — shorter sync cadence increases overlap frequency.
 //   - V1 references (syncDispatch, 5-min interval) are NOT kept here as a
 //     ready-to-uncomment block. V1 must NOT be re-enabled: dormant pending
 //     V1 schedules carry queue-drain risk, and the 5-min cadence was a
@@ -33,7 +36,7 @@ void internal;
 //     future "re-enable sync" must go through V2 (`syncDispatchV2`).
 crons.interval(
   "sync-metrics",
-  { minutes: 45 },
+  { minutes: 15 },
   internal.syncMetrics.syncDispatchV2,
 );
 //
