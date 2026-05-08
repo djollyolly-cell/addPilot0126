@@ -30,6 +30,16 @@ type RecordBatchProgressV2Ref = FunctionReference<"mutation", "internal", { runI
 type ScheduleNextChunkV2Ref = FunctionReference<"mutation", "internal", { runId: string }, unknown>;
 type MarkCompletedV2Ref = FunctionReference<"mutation", "internal", { runId: string }, unknown>;
 type MarkFailedV2Ref = FunctionReference<"mutation", "internal", { runId: string; error: string }, unknown>;
+type TriggerMassCleanupV2Result =
+  | { status: "disabled" }
+  | { status: "already-running"; runId: string }
+  | { status: "scheduled"; runId: string };
+type TriggerMassCleanupV2Ref = FunctionReference<
+  "mutation",
+  "internal",
+  { batchSize: number; timeBudgetMs: number; restMs: number; maxRuns: number },
+  TriggerMassCleanupV2Result
+>;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -599,6 +609,29 @@ export const markFailedV2 = internalMutation({
   },
 });
 
+export const cleanupOldRealtimeMetricsV2 = internalAction({
+  args: {
+    batchSize: v.number(),
+    timeBudgetMs: v.number(),
+    restMs: v.number(),
+    maxRuns: v.number(),
+  },
+  handler: async (ctx, args): Promise<TriggerMassCleanupV2Result> => {
+    const env = isMetricsRealtimeCleanupV2Enabled() ? "1" : "0";
+    const tickAt = new Date().toISOString();
+    console.log(`[cleanup-v2] cron tick at ${tickAt}; env=${env}`);
+
+    const result = await ctx.runMutation(internal.metrics.triggerMassCleanupV2 as TriggerMassCleanupV2Ref, args);
+
+    if (result.status === "already-running") {
+      console.log(`[cleanup-v2] cron tick at ${tickAt}; skipped, run ${result.runId} still active`);
+    } else {
+      console.log(`[cleanup-v2] cron tick at ${tickAt}; result=${result.status}`);
+    }
+    return result;
+  },
+});
+
 export const manualMassCleanupV2 = internalAction({
   args: { runId: v.string() },
   handler: async (ctx, args): Promise<ManualMassCleanupV2Result> => {
@@ -693,9 +726,8 @@ export const triggerMassCleanup = mutation({
 export const manualMassCleanup = internalAction({
   args: { runNumber: v.optional(v.number()) },
   handler: async (_ctx, _args) => {
-    // EMERGENCY DRAIN MODE: no-op. Self-rescheduling chain stops naturally
-    // because this no-op does NOT call ctx.scheduler.runAfter at the end.
-    // Restore body after pending queue drains.
+    // EMERGENCY DRAIN MODE: permanent no-op. The V1 cleanup body is abandoned;
+    // Storage Cleanup V2 owns all future metricsRealtime cleanup work.
     return;
   },
 });

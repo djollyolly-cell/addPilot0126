@@ -211,13 +211,16 @@ crons.cron(
 //   internal.logCleanup.cleanupOldMetricsDaily
 // );
 //
-// // Clean up old metricsRealtime records (older than 2 days, was 4) — every 6 hours
-// crons.cron(
-//   "cleanup-old-realtime-metrics",
-//   "0 */6 * * *",
-//   internal.metrics.cleanupOldRealtimeMetrics,
-//   {}
-// );
+// Storage Cleanup V2 Phase 6: metricsRealtime cleanup — every 6 hours.
+// Fail-closed unless METRICS_REALTIME_CLEANUP_V2_ENABLED=1. First organic
+// tick profile is derived from clean Phase 5 controlled maxRuns=5 run:
+// batchSize=500, timeBudgetMs=10000, restMs=90000, maxRuns=5.
+crons.cron(
+  "cleanup-old-realtime-metrics",
+  "0 */6 * * *",
+  internal.metrics.cleanupOldRealtimeMetricsV2,
+  { batchSize: 500, timeBudgetMs: 10_000, restMs: 90_000, maxRuns: 5 }
+);
 //
 // // VK API throttling probe — every 15 min, batches 30 accounts/run
 // crons.interval(

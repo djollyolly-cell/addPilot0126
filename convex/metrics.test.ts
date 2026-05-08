@@ -96,6 +96,12 @@ async function countRealtimeMetrics(t: ReturnType<typeof convexTest>) {
   });
 }
 
+async function listCleanupRunStates(t: ReturnType<typeof convexTest>) {
+  return await t.run(async (ctx) => {
+    return await ctx.db.query("cleanupRunState").collect();
+  });
+}
+
 async function listScheduledFunctions(t: ReturnType<typeof convexTest>) {
   return await t.run(async (ctx) => {
     return await ctx.db.system.query("_scheduled_functions").collect();
@@ -523,6 +529,99 @@ describe("metrics", () => {
     const triggerBlock = source.slice(triggerStart, triggerEnd);
     expect(triggerBlock).toContain("internal.metrics.manualMassCleanupV2");
     expect(triggerBlock).not.toMatch(/internal\.metrics\.manualMassCleanup\b/);
+  });
+
+  test("cleanupOldRealtimeMetricsV2 wrapper delegates through triggerMassCleanupV2 only", () => {
+    const source = readFileSync("convex/metrics.ts", "utf8");
+    const wrapperStart = source.indexOf("export const cleanupOldRealtimeMetricsV2");
+    const wrapperEnd = source.indexOf("export const manualMassCleanupV2");
+    expect(wrapperStart).toBeGreaterThanOrEqual(0);
+    expect(wrapperEnd).toBeGreaterThan(wrapperStart);
+
+    const wrapperBlock = source.slice(wrapperStart, wrapperEnd);
+    expect(wrapperBlock).toContain("internal.metrics.triggerMassCleanupV2");
+    expect(wrapperBlock).not.toMatch(/internal\.metrics\.manualMassCleanupV2\b/);
+    expect(wrapperBlock).not.toMatch(/internal\.metrics\.manualMassCleanup\b/);
+  });
+
+  test("cleanup-old-realtime-metrics cron uses the V2 wrapper with explicit bounded params", () => {
+    const source = readFileSync("convex/crons.ts", "utf8");
+    const cronStart = source.indexOf('crons.cron(\n  "cleanup-old-realtime-metrics"');
+    expect(cronStart).toBeGreaterThanOrEqual(0);
+    const cronEnd = source.indexOf(");", cronStart);
+    expect(cronEnd).toBeGreaterThan(cronStart);
+
+    const cronBlock = source.slice(cronStart, cronEnd);
+    expect(cronBlock).toContain("internal.metrics.cleanupOldRealtimeMetricsV2");
+    expect(cronBlock).toContain("batchSize: 500");
+    expect(cronBlock).toContain("timeBudgetMs: 10_000");
+    expect(cronBlock).toContain("restMs: 90_000");
+    expect(cronBlock).toContain("maxRuns: 5");
+    expect(cronBlock).not.toContain("internal.metrics.cleanupOldRealtimeMetrics,");
+    expect(cronBlock).not.toMatch(/internal\.metrics\.manualMassCleanup\b/);
+  });
+
+  test("cleanupOldRealtimeMetricsV2 env-off path does not schedule manual cleanup", async () => {
+    const t = convexTest(schema);
+
+    await withMetricsRealtimeCleanupV2Env(undefined, async () => {
+      const result = await t.action(internal.metrics.cleanupOldRealtimeMetricsV2, {
+        batchSize: 500,
+        timeBudgetMs: 10_000,
+        restMs: 90_000,
+        maxRuns: 3,
+      });
+
+      expect(result.status).toBe("disabled");
+      expect(await listCleanupRunStates(t)).toHaveLength(0);
+      expect(await listScheduledFunctions(t)).toHaveLength(0);
+    });
+  });
+
+  test("cleanupOldRealtimeMetricsV2 passes explicit args unchanged to triggerMassCleanupV2", async () => {
+    const t = convexTest(schema);
+
+    await withMetricsRealtimeCleanupV2Env("1", async () => {
+      const result = await t.action(internal.metrics.cleanupOldRealtimeMetricsV2, {
+        batchSize: 123,
+        timeBudgetMs: 456,
+        restMs: 789,
+        maxRuns: 2,
+      });
+
+      expect(result.status).toBe("scheduled");
+      if (result.status !== "scheduled") throw new Error("expected scheduled cleanup");
+      const state = await getCleanupRunState(t, result.runId);
+      expect(state?.batchSize).toBe(123);
+      expect(state?.timeBudgetMs).toBe(456);
+      expect(state?.restMs).toBe(789);
+      expect(state?.maxRuns).toBe(2);
+      expect(await listScheduledFunctions(t)).toHaveLength(1);
+    });
+  });
+
+  test("cleanupOldRealtimeMetricsV2 already-running path does not create a second chain", async () => {
+    const t = convexTest(schema);
+    const activeRunId = "active-wrapper-run";
+
+    await insertCleanupRunState(t, {
+      runId: activeRunId,
+      state: "running",
+      isActive: true,
+    });
+
+    await withMetricsRealtimeCleanupV2Env("1", async () => {
+      const result = await t.action(internal.metrics.cleanupOldRealtimeMetricsV2, {
+        batchSize: 500,
+        timeBudgetMs: 10_000,
+        restMs: 90_000,
+        maxRuns: 3,
+      });
+
+      expect(result).toEqual({ status: "already-running", runId: activeRunId });
+      expect(await listCleanupRunStates(t)).toHaveLength(1);
+      expect(await listScheduledFunctions(t)).toHaveLength(0);
+    });
   });
 
   test("manualMassCleanupV2 deletes only rows older than its immutable cutoffMs", async () => {
