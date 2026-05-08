@@ -43,9 +43,13 @@ re-acquired after the fact.
 
 - Phase 4 closure: `memory/storage-cleanup-v2-canary-closure-2026-05-08.md` (commit `8b96807`), Status: clean.
 - Phase 5 run #1 closure: `memory/storage-cleanup-v2-controlled-closure-2026-05-08.md`, Status: clean (`maxRuns=3`, runId `1778225705482-b8b7b8deb8ac`, 07:35:05Z).
-- HEAD == origin == `1178288` on `emergency/drain-scheduled-jobs` at trigger time.
-- Targeted tree clean for storage-cleanup scope. One untracked Phase 6 draft at
-  `memory/storage-cleanup-v2-phase6-cron-restore-runbook-2026-05-08.md` (out of scope).
+- Git context after handoff in this workspace: HEAD == origin == `4a9eb4f` on
+  `emergency/drain-scheduled-jobs`. Production cleanup code was unchanged during this
+  run; local Phase 6 code patch files may be dirty in this workspace but were not
+  deployed and did not affect the run.
+- Phase 6 runbook is already tracked (`memory/storage-cleanup-v2-phase6-cron-restore-runbook-2026-05-08.md`,
+  latest doc-only commit `4a9eb4f`) and is updated separately with this maxRuns=5
+  closure as the latest clean profile.
 - Env pre: `METRICS_REALTIME_CLEANUP_V2_ENABLED=0`, verified by `npx convex env get`.
 - `cleanup-old-realtime-metrics` cron still commented in `convex/crons.ts:216`.
 - No active `cleanupRunState` row at trigger time. Trigger #2 returned
@@ -290,8 +294,8 @@ All Phase 5 runbook Step 10 cleanness criteria satisfied:
 - `METRICS_REALTIME_CLEANUP_V2_ENABLED`: `0`, verified after run via `npx convex env get`.
 - `cleanup-old-realtime-metrics` cron: still commented in `convex/crons.ts:216`.
 - `cleanupRunState` active rows: none (final row above is `isActive=false`).
-- HEAD: `1178288` (unchanged; no code or doc commits made by this run).
-- Untracked in storage-cleanup scope: Phase 6 runbook draft and now this closure memo.
+- HEAD/origin after handoff: `4a9eb4f`. No deploy/code/env changes were made by this
+  run; this closure memo is the only new storage-cleanup artifact from the run itself.
 
 ## Phase 5 Next-Run Recommendation
 
@@ -312,21 +316,19 @@ below cron-equivalent throughput. Maximum delete pressure: 4,000 rows per run, ~
 chain, ~720 ms WAL footprint expected based on observed scale. Each next run requires one
 explicit operator go.
 
-Alternative: stop manual runs and harden Phase 6 runbook with the actual run-#1 and
-run-#2 numbers, then plan first organic cron tick with parameters derived from the last
-clean controlled profile (not the runbook's hardcoded `maxRuns=10`).
+Alternative: stop manual runs and proceed to Phase 6 planning with parameters derived
+from this last clean controlled profile (`maxRuns=5`), not any older example profile.
 
 ## Phase 6 Readiness
 
 - Two clean Phase 5 closures available (run #1 `maxRuns=3`, run #2 `maxRuns=5`).
 - Runbook line 374 prefers "several controlled runs". Two on a `1-3-5` progression
   satisfies the minimum gate but is at the lower edge of "several".
-- Phase 6 runbook draft at `memory/storage-cleanup-v2-phase6-cron-restore-runbook-2026-05-08.md`
-  has open review notes (WAL thresholds alignment, conservative `maxRuns/restMs` for
-  first organic tick, stdout caveat in closure memo, no-op spec, heartbeat decision).
-  Patch doc-only before Phase 6 execution.
+- Phase 6 runbook at `memory/storage-cleanup-v2-phase6-cron-restore-runbook-2026-05-08.md`
+  has been hardened through commit `4a9eb4f`; update it with this maxRuns=5 closure
+  before committing Phase 6 code.
 - First organic cron profile must be derived from the last clean controlled profile
-  (`maxRuns=5` here), not the runbook's hardcoded `maxRuns=10` example.
+  (`maxRuns=5` here), not any older `maxRuns=3` profile.
 - Each Phase 6 step requires explicit go.
 
 ## Follow-ups
@@ -370,11 +372,11 @@ No code-file edits. No commits. One new file written: this closure memo.
 
 ## Reference Pointers For Next Agent
 
-- Phase 5 runbook (locked params, gates, hard stops): `memory/storage-cleanup-v2-phase5-controlled-runs-runbook-2026-05-08.md` (commit `1178288`).
+- Phase 5 runbook (locked params, gates, hard stops): `memory/storage-cleanup-v2-phase5-controlled-runs-runbook-2026-05-08.md`.
 - Phase 5 run #1 closure (`maxRuns=3`): `memory/storage-cleanup-v2-controlled-closure-2026-05-08.md`.
 - Phase 4 closure (canary precedent): `memory/storage-cleanup-v2-canary-closure-2026-05-08.md` (commit `8b96807`).
 - Phase 1 design (V2 architecture, env flag, `cleanupRunState` shape): `memory/storage-cleanup-v2-phase1-design-2026-05-07.md`.
-- Phase 6 runbook draft (untracked, has open review notes): `memory/storage-cleanup-v2-phase6-cron-restore-runbook-2026-05-08.md`.
+- Phase 6 runbook: `memory/storage-cleanup-v2-phase6-cron-restore-runbook-2026-05-08.md`.
 - Code source of truth at run time:
   - V2 entrypoints: `convex/metrics.ts` (commit `2410f14`): `triggerMassCleanupV2`, `manualMassCleanupV2`, `scheduleNextChunkV2`, `getCleanupRunStateV2 (line 488)`.
   - V1 dead path: same file, `manualMassCleanup` no-op.
