@@ -24,3 +24,6 @@ docker/.env.selfhosted-prod
 tests/screenshots/
 test-results/
 .worktrees/
+
+# Local diagnostic scripts — may contain hard-coded secrets, never commit
+check-*.cjs
