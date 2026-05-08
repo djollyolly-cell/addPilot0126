@@ -20,9 +20,10 @@ interface UzRule {
 
 /**
  * Крон сброса бюджета.
- * Запускается каждые 30 минут, проверяет timezone пользователя,
+ * Запускается каждые 5 минут, проверяет timezone пользователя,
  * и сбрасывает бюджет в окне 00:00-00:59 нового дня (timezone пользователя).
- * Окно 00:00-00:59 даёт 2 попытки (крон каждые 30 мин).
+ * Окно 00:00-00:59 даёт до 12 попыток; hasResetToday делает повторные тики
+ * идемпотентными после первого успешного budget_reset log за день.
  * Сброс в 00:00 безопасен: VK API возвращает spent=0 за новый день,
  * поэтому checkUzBudgetRules (catch-up) не откатит сброс.
  */
@@ -60,7 +61,7 @@ export const resetBudgets = internalAction({
 
         console.log(`[uz_budget_reset] Rule ${rule._id}: tz=${tz}, hour=${hour}`);
 
-        // Cron runs every 30 min → catch window 00:00-00:59 (2 attempts)
+        // Cron runs every 5 min → catch window 00:00-00:59 (up to 12 attempts)
         if (hour !== 0) continue;
 
         // Compute start/end of current calendar day in user's timezone.
