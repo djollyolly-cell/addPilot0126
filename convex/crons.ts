@@ -139,12 +139,12 @@ crons.interval(
 //   internal.ruleEngine.uzBudgetDispatch
 // );
 //
-// // UZ budget reset — every 30 min, checks user timezone for midnight reset
-// crons.interval(
-//   "uz-budget-reset",
-//   { minutes: 30 },
-//   internal.uzBudgetCron.resetBudgets
-// );
+// UZ budget reset — every 30 min, checks user timezone for midnight reset
+crons.interval(
+  "uz-budget-reset",
+  { minutes: 30 },
+  internal.uzBudgetCron.resetBudgets
+);
 //
 // // Video rotation tick — every 5 minutes, processes all active rotations
 // crons.interval(
