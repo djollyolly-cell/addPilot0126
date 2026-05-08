@@ -1,8 +1,33 @@
 # Storage Cleanup V2 — безопасное восстановление очистки после emergency drain
 
 Дата: 2026-05-07  
-Статус: план, код не реализован  
+Статус: исходный high-level план; актуальный execution trail живет в `memory/`
 Контекст: ветка `emergency/drain-scheduled-jobs`, Convex self-hosted, большой backlog в `metricsRealtime` / `metricsDaily` / `vkApiLimits`, старые V1 scheduled handlers частично оставлены no-op.
+
+## Status Update — 2026-05-08
+
+Этот файл остается исходным high-level планом Storage Cleanup V2. Актуальный источник
+правды по выполнению, параметрам и gate-дисциплине теперь находится в `memory/`.
+
+Выполнено:
+
+- Phase 4 canary closed clean: `memory/storage-cleanup-v2-canary-closure-2026-05-08.md`.
+- Phase 5 controlled run `maxRuns=3` closed clean: `memory/storage-cleanup-v2-controlled-closure-2026-05-08.md`.
+- Phase 5 controlled run `maxRuns=5` closed clean: `memory/storage-cleanup-v2-controlled-closure-2026-05-08-maxRuns5.md`.
+- Phase 6 cron wrapper code deployed fail-closed at `a1775dd` with `METRICS_REALTIME_CLEANUP_V2_ENABLED=0`.
+
+Current Phase 6 source of truth:
+
+- Runbook: `memory/storage-cleanup-v2-phase6-cron-restore-runbook-2026-05-08.md`.
+- Gate A/B checklist draft: `memory/storage-cleanup-v2-phase6-gate-b-checklist-2026-05-08.md`.
+- Cron closure draft: `memory/storage-cleanup-v2-cron-closure-2026-05-08.md`.
+
+Superseded details from this original plan:
+
+- The original suggested first Phase 6 `maxRuns=10` is superseded.
+- Current first organic cron profile is `batchSize=500`, `timeBudgetMs=10000`, `restMs=90000`, `maxRuns=5`, cadence `0 */6 * * *`.
+- `maxRuns=5` is the Gate B proof baseline, not the long-term backlog-drain profile.
+- Ramp plan is `5 -> 8 -> 10`, only after clean organic tick evidence per the Phase 6 runbook.
 
 ## Goal
 
