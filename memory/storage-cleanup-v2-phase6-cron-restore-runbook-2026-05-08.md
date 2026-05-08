@@ -1,6 +1,6 @@
 # Storage Cleanup V2 - Phase 6 Cron Restore Runbook - 2026-05-08
 
-Status: draft runbook for restoring the `cleanup-old-realtime-metrics` cron after clean manual V2 cleanup. Doc-only; not executed. Written against doc trail through Phase 5 controlled closure `bbac12e` and Phase 1 code commit `2410f14`.
+Status: draft runbook for restoring the `cleanup-old-realtime-metrics` cron after clean manual V2 cleanup. Doc-only; not executed. Written against doc trail through the Phase 5 `maxRuns=5` controlled closure and Phase 1 code commit `2410f14`.
 
 ## Scope
 
@@ -18,21 +18,20 @@ This document is not permission to run production actions. Each deploy/env/cron 
 
 ## Hard Gate: Phase 5 Closed Clean; Phase 6 Still Needs Separate Go
 
-As of `2026-05-08`, one Phase 5 controlled run has closed clean:
+As of `2026-05-08`, two Phase 5 controlled runs have closed clean. The latest clean profile is:
 
 ```text
-closure_commit:       bbac12e docs(storage-cleanup): record phase 5 controlled closure
-closure_file:         memory/storage-cleanup-v2-controlled-closure-2026-05-08.md
-runId:                1778225705482-b8b7b8deb8ac
+closure_file:         memory/storage-cleanup-v2-controlled-closure-2026-05-08-maxRuns5.md
+runId:                1778232969547-20283bb90f21
 batchSize:            500
 timeBudgetMs:         10000
 restMs:               90000
-maxRuns:              3
-batchesRun:           3
-deletedCount:         1500
-durationMs:           190847
-pg_wal_delta_bytes:   0
-oldestRemainingTimestamp: 1777733705347 (2026-05-02T14:55:05.347Z)
+maxRuns:              5
+batchesRun:           5
+deletedCount:         2500
+durationMs:           377196
+pg_wal_delta_bytes:   -352321536
+oldestRemainingTimestamp: 1777733713861 (2026-05-02T14:55:13.861Z)
 ```
 
 Therefore the Phase 5 prerequisite is satisfied, but this Phase 6 runbook is still **not executable** until ALL of the following hold:
@@ -60,7 +59,8 @@ The runbook itself may still be reviewed, edited, and committed as documentation
 - Phase 4 canary runbook: `memory/storage-cleanup-v2-phase4-canary-runbook-2026-05-07.md`
 - Phase 4 closure template: `memory/storage-cleanup-v2-canary-closure-template-2026-05-07.md`
 - Phase 5 controlled-runs runbook: `memory/storage-cleanup-v2-phase5-controlled-runs-runbook-2026-05-08.md`
-- Phase 5 controlled-run closure: `memory/storage-cleanup-v2-controlled-closure-2026-05-08.md` (commit `bbac12e`)
+- Phase 5 controlled-run closure #1: `memory/storage-cleanup-v2-controlled-closure-2026-05-08.md` (commit `bbac12e`, `maxRuns=3`)
+- Phase 5 controlled-run closure #2: `memory/storage-cleanup-v2-controlled-closure-2026-05-08-maxRuns5.md` (`maxRuns=5`, latest clean profile for Phase 6 derivation)
 - Code source of truth before Phase 6 implementation: `convex/metrics.ts`, `convex/crons.ts`, `convex/schema.ts`
 
 ## Critical Current-State Warning
@@ -86,17 +86,17 @@ Before Phase 6 implementation starts, collect:
 ```text
 phase4_canary_closure_file:        memory/storage-cleanup-v2-canary-closure-2026-05-08.md
 phase4_status:                     clean
-phase5_controlled_closure_file:    memory/storage-cleanup-v2-controlled-closure-2026-05-08.md
+phase5_controlled_closure_file:    memory/storage-cleanup-v2-controlled-closure-2026-05-08-maxRuns5.md
 phase5_status:                     clean
-phase5_runId:                      1778225705482-b8b7b8deb8ac
-phase5_last_params:                batchSize=500, timeBudgetMs=10000, restMs=90000, maxRuns=3
-phase5_batchesRun:                 3
-phase5_deletedCount:               1500
-phase5_durationMs:                 190847
-phase5_pg_wal_delta_bytes:         0
-phase5_oldestRemainingTimestamp:   1777733705347 (2026-05-02T14:55:05.347Z)
-phase5_recommended_manual_next:    optional maxRuns=5 controlled run
-phase5_recommended_cron_params:    batchSize=500, timeBudgetMs=10000, restMs=90000, maxRuns=3, cadence="0 */6 * * *"
+phase5_runId:                      1778232969547-20283bb90f21
+phase5_last_params:                batchSize=500, timeBudgetMs=10000, restMs=90000, maxRuns=5
+phase5_batchesRun:                 5
+phase5_deletedCount:               2500
+phase5_durationMs:                 377196
+phase5_pg_wal_delta_bytes:         -352321536
+phase5_oldestRemainingTimestamp:   1777733713861 (2026-05-02T14:55:13.861Z)
+phase5_recommended_manual_next:    optional maxRuns=8 controlled run, separate go
+phase5_recommended_cron_params:    batchSize=500, timeBudgetMs=10000, restMs=90000, maxRuns=5, cadence="0 */6 * * *"
 phase5_open_blockers:              none
 ```
 
@@ -104,8 +104,8 @@ If Phase 4 or Phase 5 did not close clean, STOP. Do not restore cron.
 
 Operator choice before Phase 6:
 
-- Conservative manual path: run one more Phase 5 controlled profile (`maxRuns=5`) and close it clean before Phase 6.
-- Cron-restore path: proceed to Phase 6 using the clean `maxRuns=3` profile above.
+- Conservative manual path: run one more Phase 5 controlled profile (`maxRuns=8`) and close it clean before Phase 6.
+- Cron-restore path: proceed to Phase 6 using the clean `maxRuns=5` profile above.
 
 Both paths require a separate explicit go. This document does not choose between them by itself.
 
@@ -127,18 +127,18 @@ Both paths require a separate explicit go. This document does not choose between
 
 The Phase 6 code change must satisfy all of these:
 
-- V1 `manualMassCleanup` remains no-op (`metrics.ts:693-701`).
+- V1 `manualMassCleanup` remains no-op. Verify by grep after the Phase 6 patch; line numbers from pre-Phase-6 code are intentionally not authoritative.
 - V1 `triggerMassCleanup` remains out of operational use.
-- V1 `manualMassCleanup` body is permanently abandoned at Phase 6. The pre-Phase-6 comment `Restore body after pending queue drains` in `metrics.ts:698` is superseded; the Phase 6 code patch should replace that stale comment with a permanent-abandoned/no-op note so no future task "restores" V1 by mistake. Any future V1 entry-point removal is a separate cleanup phase, not part of Phase 6.
+- V1 `manualMassCleanup` body is permanently abandoned at Phase 6. The pre-Phase-6 comment `Restore body after pending queue drains` is superseded; the Phase 6 code patch should replace that stale comment with a permanent-abandoned/no-op note so no future task "restores" V1 by mistake. Any future V1 entry-point removal is a separate cleanup phase, not part of Phase 6.
 - New cron work MUST NOT call `internal.metrics.manualMassCleanup`.
 - New cron work MUST NOT call `scheduleMassCleanup`.
 - Cron entrypoint MUST schedule via `triggerMassCleanupV2` (preferred shape) and MUST NOT call `manualMassCleanupV2` directly. Direct call bypasses `cleanupRunState` insert and the active-row guard.
 - Cron-triggered call to `triggerMassCleanupV2` must pass explicit bounded params: `batchSize`, `timeBudgetMs`, `restMs`, `maxRuns`. No defaults; values come from `First Cron Params Derivation` below.
 - Organic cron firing proof MUST be based on `_scheduled_functions`, not docker stdout. The first proof layer is a row for `metrics.js:cleanupOldRealtimeMetricsV2` at the expected cron boundary; the second layer is its success/failure state.
 - The expected proof chain is: organic cron row for `metrics.js:cleanupOldRealtimeMetricsV2` -> wrapper success -> `cleanupRunState` insert by `triggerMassCleanupV2` -> `metrics.js:manualMassCleanupV2` chain success -> terminal `cleanupRunState` row.
-- Default behavior must remain fail-closed when `METRICS_REALTIME_CLEANUP_V2_ENABLED` is not `1`. The env-disabled return path inside `triggerMassCleanupV2` (`metrics.ts:442-446`) may log `[cleanup-v2] skip reason=disabled`, but that is not cron-context proof and may not route to docker stdout in this self-hosted runtime. The cron wrapper should still emit best-effort observability lines before/after delegation, but `_scheduled_functions` is authoritative.
+- Default behavior must remain fail-closed when `METRICS_REALTIME_CLEANUP_V2_ENABLED` is not `1`. The env-disabled return path inside `triggerMassCleanupV2` may log `[cleanup-v2] skip reason=disabled`, but that is not cron-context proof and may not route to docker stdout in this self-hosted runtime. The cron wrapper should still emit best-effort observability lines before/after delegation, but `_scheduled_functions` is authoritative.
 - The active-row early return in `triggerMassCleanupV2` returns `{ status: "already-running", runId: <existing> }` without inserting a new run. The cron wrapper should log this case best-effort, e.g. `[cleanup-v2] cron tick at <iso>; skipped, run <runId> still active`. A cron tick during an active chain is expected behavior, not a failure.
-- If a cron heartbeat is added, it must use V2-specific name `cleanup-realtime-metrics-v2`, never stale V1 name `cleanup-realtime-metrics` (`metrics.ts:711`). Note: in V2 the active-row check on `cleanupRunState` supersedes the V1 heartbeat-based stuck-run guard. A heartbeat in V2 is optional, used only for observability, never as a guard.
+- If a cron heartbeat is added, it must use V2-specific name `cleanup-realtime-metrics-v2`, never stale V1 name `cleanup-realtime-metrics`. Note: in V2 the active-row check on `cleanupRunState` supersedes the V1 heartbeat-based stuck-run guard. A heartbeat in V2 is optional, used only for observability, never as a guard.
 - `cleanup-old-realtime-metrics` cadence starts conservative: every 6 hours. Cadence tightening (1 h or shorter) is a separate gated decision after several clean cron ticks at the 6 h profile.
 
 Acceptable implementation shapes:
@@ -162,16 +162,16 @@ Do not introduce a drop-in `scheduleMassCleanupV2` unless the implementation del
 All numeric params for the first Phase 6 cron tick are **derived** from the last clean Phase 5 closure. None are pre-specified in this runbook; the placeholders are filled at Phase 6 prep time.
 
 ```text
-phase5_last_clean_closure_file:    memory/storage-cleanup-v2-controlled-closure-2026-05-08.md
+phase5_last_clean_closure_file:    memory/storage-cleanup-v2-controlled-closure-2026-05-08-maxRuns5.md
 phase5_batchSize:                  500
 phase5_timeBudgetMs:               10000
 phase5_restMs:                     90000
-phase5_maxRuns:                    3
-phase5_batchesRun:                 3
-phase5_pg_wal_delta_bytes:         0
-phase5_deletedCount:               1500
-phase5_durationMs:                 190847
-phase5_oldestRemainingTimestamp:   1777733705347 (2026-05-02T14:55:05.347Z)
+phase5_maxRuns:                    5
+phase5_batchesRun:                 5
+phase5_pg_wal_delta_bytes:         -352321536
+phase5_deletedCount:               2500
+phase5_durationMs:                 377196
+phase5_oldestRemainingTimestamp:   1777733713861 (2026-05-02T14:55:13.861Z)
 ```
 
 Derivation rules (apply only with values from a clean Phase 5 closure):
@@ -184,13 +184,13 @@ first_cron_maxRuns       = min(phase5_maxRuns, 5)          # cap at 5; never 10 
 first_cron_cadence       = "0 */6 * * *"                   # every 6h, do not tighten
 ```
 
-Concrete first-cron profile from Phase 5 closure `bbac12e`:
+Concrete first-cron profile from Phase 5 `maxRuns=5` closure:
 
 ```text
 first_cron_batchSize     = 500
 first_cron_timeBudgetMs  = 10000
 first_cron_restMs        = 90000
-first_cron_maxRuns       = 3
+first_cron_maxRuns       = 5
 first_cron_cadence       = "0 */6 * * *"
 ```
 
@@ -198,7 +198,7 @@ Hard rules:
 
 - `first_cron_maxRuns >= 10` is forbidden. The first cron tick is a small multiplier over Phase 5 manual proof, not a jump to higher throughput.
 - If Phase 5 used `maxRuns >= 10` (it should not have, per Phase 5 runbook), cap Phase 6 first cron at `5` and document the cap in the closure.
-- If `phase5_pg_wal_delta_bytes` was non-trivial, lower `first_cron_maxRuns` further per the WAL derivation below.
+- If `phase5_pg_wal_delta_bytes` was non-trivial (`phase5_pg_wal_delta_bytes > expected_wal` after baseline-noise adjustment), lower `first_cron_maxRuns` further per the WAL derivation below.
 - Cadence stays every 6 hours for the first cron tick. Do NOT tighten cadence (e.g., 1h, 15min) in the same go that enables the cron.
 - Hourly or shorter cadence is a separate, post-Phase-6 decision after several clean cron ticks.
 
@@ -215,15 +215,15 @@ hard_stop     = max(150 MB, 10 * expected_wal)
 
 If observed pre-tick baseline WAL noise from sync/UZ/token work is larger than `expected_wal`, derive `warn` and `hard_stop` from the measured baseline rate and document the override in the closure memo. Hard-stop is a stop condition, not a target.
 
-Concrete first-cron WAL thresholds from Phase 5 closure `bbac12e`:
+Concrete first-cron WAL thresholds from Phase 5 `maxRuns=5` closure:
 
 ```text
-phase5_pg_wal_delta_bytes = 0
-phase5_batchesRun         = 3
-per_chunk_wal             = max(0 / 3, 1 MB floor) = 1 MB
-expected_wal              = 1 MB * 3 = 3 MB
-warn                      = max(25 MB, 9 MB) = 25 MB
-hard_stop                 = max(150 MB, 30 MB) = 150 MB
+phase5_pg_wal_delta_bytes = -352321536
+phase5_batchesRun         = 5
+per_chunk_wal             = max(-352321536 / 5, 1 MB floor) = 1 MB
+expected_wal              = 1 MB * 5 = 5 MB
+warn                      = max(25 MB, 15 MB) = 25 MB
+hard_stop                 = max(150 MB, 50 MB) = 150 MB
 ```
 
 ### Drain-Rate Sizing
@@ -236,21 +236,47 @@ daily_drain_rows = deletes_per_tick * ticks_per_day
 
 This number tells you whether the conservative first-cron profile actually drains backlog or merely proves stability.
 
-Phase 6 first cron is NOT for backlog drainage; it is for proving stable cron-driven cleanup. If `daily_drain_rows` is materially below the current `metricsRealtime` backlog (Phase 4 stale context: ~9.5M eligible at `2026-05-07T15:08Z`), the operator MUST accept that drainage requires a separate post-Phase-6 escalation pass. Each escalation step (cadence tightening, `batchSize` increase, or `maxRuns` increase) is its own gated decision with its own clean closure.
+Phase 6 first cron is NOT for backlog drainage; it is for proving stable cron-driven cleanup. If `daily_drain_rows` is materially below the current `metricsRealtime` backlog (fresh Phase 5 preflight context: 9,089,514 eligible rows at cutoff `2026-05-06T06:00:09Z`), the operator MUST accept that drainage requires a separate post-Phase-6 escalation pass. Each escalation step (cadence tightening, `batchSize` increase, or `maxRuns` increase) is its own gated decision with its own clean closure.
 
 Record `daily_drain_rows` and the projected days-to-clear in the Phase 6 closure as informational sizing for the next decision.
 
-Concrete first-cron drain sizing from Phase 5 closure `bbac12e`:
+Concrete first-cron drain sizing from Phase 5 `maxRuns=5` closure:
 
 ```text
-deletes_per_tick = 500 * 3 = 1,500 rows
+deletes_per_tick = 500 * 5 = 2,500 rows
 ticks_per_day    = 4
-daily_drain_rows = 6,000 rows/day
+daily_drain_rows = 10,000 rows/day
 fresh eligible context from Phase 5 preflight = 9,089,514 rows
-projected_days_to_clear_at_this_profile ~= 1,515 days
+projected_days_to_clear_at_this_profile ~= 909 days
 ```
 
 This profile is intentionally a cron-path proof, not a practical backlog-drain profile.
+
+### Post-Phase-6 Ramp Semantics
+
+The first organic cron profile (`batchSize=500`, `maxRuns=5`, every 6 hours) is a
+**Gate B proof baseline**, not the long-term production drainage profile. At 2,500
+deletes/tick and 10,000 deletes/day, it is expected to be tiny relative to the
+~9M eligible backlog and may be below ongoing `metricsRealtime` ingest. That is
+acceptable for the first organic tick because the goal is proving the real cron
+registration, wrapper UDF, env gate, explicit args, `cleanupRunState`, and V2 chain
+under organic scheduling.
+
+Ramp decisions require at least two consecutive clean organic ticks at the current
+6-hour cadence (>=12 hours of continuous clean operation) before changing throughput.
+The next throughput decisions are separate gated ramps, never bundled with the initial
+cron restore:
+
+```text
+baseline: maxRuns=5, batchSize=500, cadence=6h
+ramp 1:   maxRuns=8, batchSize=500, cadence=6h   # after >=2 consecutive clean baseline ticks
+ramp 2:   maxRuns=10, batchSize=500, cadence=6h  # after >=2 consecutive clean maxRuns=8 ticks
+ramp 3+:  cadence or batchSize changes           # later, separate decision only
+```
+
+Each ramp needs fresh anchors, one changed load dimension at a time, and a closure
+memo. Do not let `maxRuns=5` be interpreted as the final storage-drain profile; it is
+only the first organic proof profile.
 
 ## Required Tests And Source Checks
 
@@ -369,15 +395,20 @@ window_ms              = first_cron_maxRuns * (first_cron_restMs + chunkActionMs
 
 Hard rule: `window_ms` MUST be smaller than the cron period. For cadence `"0 */6 * * *"` that means `window_ms < 21_600_000` (6 h). If math projects beyond cron period, lower `first_cron_maxRuns` until it fits, then re-derive WAL thresholds and drain rate.
 
-Worked example using Phase 5 closure `bbac12e`:
+This formula intentionally overestimates the window because `phase5_durationMs / batchesRun`
+already includes rest time between chunks and then `first_cron_restMs` is added again.
+Keep it as an upper-bound safety calculation for first organic cron proof; do not use it
+as precise per-chunk runtime telemetry.
+
+Worked example using Phase 5 `maxRuns=5` closure:
 
 ```text
-phase5_durationMs = 190847
-phase5_batchesRun = 3
-chunkActionMs_estimate ~= 63616 ms
-first_cron_maxRuns = min(3, 5) = 3
+phase5_durationMs = 377196
+phase5_batchesRun = 5
+chunkActionMs_estimate ~= 75439 ms
+first_cron_maxRuns = min(5, 5) = 5
 first_cron_restMs = max(90000, 60000) = 90000
-window_ms ~= 3 * (90000 + 63616) + 600000 ~= 1,060,848 ms ~= 17.7 min
+window_ms ~= 5 * (90000 + 75439) + 600000 ~= 1,427,195 ms ~= 23.8 min
 ```
 
 This window is comfortably below the 6 h cron period.
@@ -409,7 +440,7 @@ Stdout caveat (carried from Phase 4 closure `8b96807` and Phase 5 runbook):
 Active-row and env-disabled organic ticks:
 
 - If a cron tick fires while a previous V2 chain is still active, `triggerMassCleanupV2` returns `{ status: "already-running", runId: <existing> }` without inserting a second run. The wrapper scheduled-function row should be success, no new manual chain should be scheduled, and this is expected behavior, not a failure.
-- If a cron tick fires while env is set to `0`, `triggerMassCleanupV2` returns `{ status: "disabled" }` (`metrics.ts:442-446`) and may log `[cleanup-v2] skip reason=disabled`. During Gate B, env should be `1`; a wrapper row with no `cleanupRunState` insert in Gate B indicates env drift or propagation failure and is dirty.
+- If a cron tick fires while env is set to `0`, `triggerMassCleanupV2` returns `{ status: "disabled" }` and may log `[cleanup-v2] skip reason=disabled`. During Gate B, env should be `1`; a wrapper row with no `cleanupRunState` insert in Gate B indicates env drift or propagation failure and is dirty.
 
 Note: App-level V2 failure is authoritative in `cleanupRunState.state == "failed"` / `error`, even when `_scheduled_functions.kind` is `"success"` because the action catches errors and returns normally.
 
@@ -426,8 +457,10 @@ If user explicitly approves continued cron operation:
 - keep cadence at every 6 hours;
 - watch at least the next organic tick summary;
 - do not change batch size, maxRuns, or cadence in the same decision.
+- record explicitly that continued operation remains on the baseline `maxRuns=5`
+  proof profile, not a steady-state backlog-drain profile.
 
-A clean Phase 6 closure does NOT grant any of the following changes — each is a separate, gated decision after observing several more clean cron ticks at the current profile:
+A clean Phase 6 closure does NOT grant any of the following changes — each is a separate, gated decision after observing at least two consecutive clean cron ticks at the current 6-hour profile:
 
 - cadence tightening (e.g., 6h → 1h, 1h → 15min);
 - `first_cron_batchSize` increase;
@@ -526,10 +559,10 @@ Cron params: batchSize=<n>, timeBudgetMs=<n>, restMs=<n>, maxRuns=<n>
 
 ## Backend Stdout
 - wrapper tick lines: <n> (`[cleanup-v2] cron tick at <iso>; env=<0|1>` or `skipped, run <runId> still active`) — informational only; `_scheduled_functions` wrapper row is authoritative
-- cleanup-v2 start lines: <n>
-- cleanup-v2 end schedule lines: <n>
-- cleanup-v2 end complete lines: <n>
-- cleanup-v2 disabled_mid_chain lines: <n>
+- cleanup-v2 start lines: <n> — informational only
+- cleanup-v2 end schedule lines: <n> — informational only
+- cleanup-v2 end complete lines: <n> — informational only
+- cleanup-v2 disabled_mid_chain lines: <n> — informational only; authoritative failure source is `cleanupRunState.error`
 - rollback patterns: <n>
 
 If `[cleanup-v2]` wrapper / start / end / schedule / complete markers are absent, cite Phase 4 closure `8b96807` (and any Phase 5 closure precedent) for the known log-routing gap and rely on `_scheduled_functions` + `cleanupRunState` as authoritative execution proof.
