@@ -1,6 +1,6 @@
 # Storage Cleanup V2 - Phase 5 Controlled Runs Runbook - 2026-05-08
 
-Status: draft runbook for the first manual controlled cleanup run after a clean Phase 4 canary. Doc-only; not executed. Written against Phase 1 code commit `2410f14` and pre-canary doc trail through `1b3e6b2`.
+Status: draft runbook for the first manual controlled cleanup run after a clean Phase 4 canary. Doc-only; not executed. Written against Phase 1 code commit `2410f14`, reviewed against Phase 4 canary closure `8b96807`.
 
 ## Scope
 
@@ -19,6 +19,7 @@ Operator rule: one Phase 5 trigger per explicit go. Do not chain multiple manual
 
 - Plan: `docs/superpowers/plans/2026-05-07-storage-cleanup-v2.md` (Phase 5 section)
 - Phase 4 canary runbook: `memory/storage-cleanup-v2-phase4-canary-runbook-2026-05-07.md`
+- Phase 4 canary closure: `memory/storage-cleanup-v2-canary-closure-2026-05-08.md` (commit `8b96807`)
 - Phase 4 canary closure template: `memory/storage-cleanup-v2-canary-closure-template-2026-05-07.md`
 - Phase 2 verification cheat sheet: `memory/storage-cleanup-v2-phase2-verification-cheatsheet-2026-05-07.md`
 - Phase 3 deploy closure: `memory/storage-cleanup-v2-phase3-deploy-closure-2026-05-07.md`
@@ -48,6 +49,27 @@ phase4_open_blockers:          none
 
 If any value is missing, or Phase 4 did not close clean, STOP. Do not run Phase 5.
 
+Actual Phase 4 values from `memory/storage-cleanup-v2-canary-closure-2026-05-08.md`:
+
+```text
+phase4_status:                 clean
+phase4_runId:                  1778215091302-1a285e0ec02c
+phase4_batchSize:              500
+phase4_maxRuns:                1
+phase4_deletedCount:           500
+phase4_durationMs:             3554
+phase4_oldestRemainingTimestamp_post: 1777733701988 (2026-05-02T14:55:01.988Z)
+phase4_pg_wal_delta_bytes:     0
+phase4_warn_threshold_bytes:   5 MB
+phase4_hard_threshold_bytes:   50 MB
+phase4_v2_success_entries:     1
+phase4_v2_failed_entries:      0
+phase4_env_after:              METRICS_REALTIME_CLEANUP_V2_ENABLED=0
+phase4_core_heartbeats_clean:  yes
+phase4_open_blockers:          none
+phase4_stdout_markers:         not surfaced in docker stdout; use row/scheduled-functions proof
+```
+
 ## Preconditions
 
 - [ ] `HEAD` and `origin/emergency/drain-scheduled-jobs` are on the expected doc trail, or current drift was reviewed.
@@ -70,7 +92,7 @@ Use the Phase 2 cheat sheet as a source-level check if `convex/` changed. At min
 - `manualMassCleanupV2` reads `METRICS_REALTIME_CLEANUP_V2_ENABLED` at each invocation.
 - `scheduleNextChunkV2` schedules `manualMassCleanupV2`, never V1 `manualMassCleanup`.
 - `cleanupRunState` has indexes `by_cleanupName_isActive` and `by_runId`.
-- Log prefix is exactly `[cleanup-v2]`.
+- Log prefix is exactly `[cleanup-v2]`; note that Phase 4 proved these user logs may not surface in `adpilot-convex-backend` docker stdout in this self-hosted runtime, so stdout markers are useful if present but not authoritative.
 - V1 `manualMassCleanup` body is still no-op.
 - `cleanup-old-realtime-metrics` cron is still commented.
 
@@ -94,6 +116,7 @@ Rationale:
 - `batchSize=500` avoids changing two load dimensions at once.
 - `restMs=90000` keeps the V8 slot released between chunks and reduces overlap risk with sync/UZ/token work.
 - Expected maximum deletes: `batchSize * maxRuns = 1500`.
+- Phase 4 canary deleted `500` rows in `3,554 ms` with `0` observed `pg_wal` growth, so a 3-chunk run is a conservative multiplier over observed clean behavior.
 
 Do NOT use `maxRuns >= 10` for the first Phase 5 run. Save that for a later controlled run after this one closes clean.
 Reason: first Phase 5 is a small multiplier over canary (3-5x `maxRuns`), not a jump to cron-like throughput.
@@ -107,14 +130,19 @@ Capture fresh pre-run anchors. Do not reuse Phase 4 values except for sizing.
 | `/version` HTTP and time | 200 and stable latency | `curl` |
 | disk free | free space and delta vs Phase 4 | `df -h /` |
 | `pg_wal` | byte count before run | `du -sb .../pg_wal` |
-| `metricsRealtime` total | count | read-only dashboard/query |
-| `metricsRealtime` eligible | count and cutoff used | read-only dashboard/query |
+| `metricsRealtime` total | preferred count, or stale contextual count with explicit caveat | read-only dashboard/query |
+| `metricsRealtime` eligible | preferred count and cutoff used, or structural proof mode for this first small controlled run | read-only dashboard/query / `cleanupRunState` |
 | `oldestRemainingTimestamp` | `min(timestamp)` across all `metricsRealtime` rows | read-only dashboard/query |
 | core heartbeats | sync/UZ/token status | `cronHeartbeats` |
 | failed counters | V2, V1, sync/UZ/token/adminAlerts | `_scheduled_functions` |
 | backend stdout | rollback patterns since last closure | `docker logs` |
 
 Cutoff note: if eligible pre-count uses approximate `now - 172_800_000`, record the exact cutoff timestamp used. The final closure must compare against `cleanupRunState.cutoffUsed` with the boundary adjustment described in the Phase 4 closure template.
+
+Eligible-count strategy:
+- Preferred: run a fresh exact eligible count if the operator can afford the long scan.
+- Acceptable for the first Phase 5 run only (`batchSize=500`, `maxRuns=3`, max `1500` rows): use structural proof if a fresh exact count is too expensive. Structural proof requires exact `deletedCount`, immutable `cutoffUsed`, V2 success entries equal `batchesRun`, no extra V2 entries, and `oldestRemainingTimestamp >= pre`.
+- Not acceptable for larger later controlled runs: refresh eligible/backlog sizing before increasing either `batchSize` or `maxRuns` beyond this first controlled profile.
 
 ## Step 4 - Derive WAL Thresholds
 
@@ -130,6 +158,18 @@ hard_stop     = max(150 MB, 10 * expected_wal)
 If baseline WAL noise from normal sync/UZ/token work is already larger than expected cleanup WAL, derive thresholds from baseline rate and record the reasoning.
 
 Hard-stop threshold is a stop condition, not a target.
+
+For the first Phase 5 run using actual Phase 4 values:
+
+```text
+phase4_pg_wal_delta_bytes = 0
+per_chunk_wal             = 1 MB floor
+expected_wal              = 3 MB
+warn                      = max(25 MB, 9 MB)  = 25 MB
+hard_stop                 = max(150 MB, 30 MB) = 150 MB
+```
+
+If the fresh pre-run WAL mini-pair shows baseline noise above this expected signal, use the measured baseline rate instead and document the override in the closure.
 
 ## Step 5 - Pick the Trigger Window
 
@@ -153,10 +193,10 @@ Verify:
 ```bash
 CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
 CONVEX_SELF_HOSTED_ADMIN_KEY="$(node gen-admin-key.cjs)" \
-npx convex env list | grep METRICS_REALTIME_CLEANUP_V2_ENABLED
+npx convex env get METRICS_REALTIME_CLEANUP_V2_ENABLED
 ```
 
-Expected: `METRICS_REALTIME_CLEANUP_V2_ENABLED=1`. No other cleanup V2 flags should be enabled.
+Expected: `1`. Avoid full `env list` in normal reporting because it prints unrelated secrets.
 
 ## Step 7 - Trigger One Controlled Run
 
@@ -190,9 +230,10 @@ Expected for the recommended first run:
 - `batchesRun <= maxRuns`.
 - If backlog remains, expected `batchesRun == maxRuns`; final log has `decision=complete` because maxRuns limit stopped the chain.
 - If backlog empties early, `batchesRun < maxRuns` is acceptable only when `hasMore=false` and row is completed.
-- stdout: one `[cleanup-v2] start` per chunk, one `[cleanup-v2] end` per chunk.
-- stdout: `decision=schedule` for intermediate chunks, `decision=complete` for final clean chunk.
+- stdout: one `[cleanup-v2] start` per chunk and one `[cleanup-v2] end` per chunk if this runtime surfaces user `console.log` to docker stdout.
+- stdout: `decision=schedule` for intermediate chunks and `decision=complete` for final clean chunk if markers surface.
 - stdout: zero `[cleanup-v2] runId=... skip reason=disabled_mid_chain` lines for clean. Any hit is expected only if the operator intentionally killed the chain by turning env off mid-flight, or if env drifted unexpectedly; either case is dirty/abort evidence.
+- If `[cleanup-v2]` markers are absent but `cleanupRunState`, `_scheduled_functions`, WAL, env, and core counters are clean, treat stdout marker absence as the known Phase 4 log-routing caveat, not as a dirty signal.
 - `cleanupRunState`: `state="completed"`, `isActive=false`, `error=undefined`, `deletedCount > 0`.
 - No V1 `manualMassCleanup` failed-counter growth.
 - No core heartbeat regression.
@@ -210,6 +251,8 @@ npx convex env set METRICS_REALTIME_CLEANUP_V2_ENABLED 0
 
 Verify env list shows `0`.
 
+Use `npx convex env get METRICS_REALTIME_CLEANUP_V2_ENABLED` for verification and report only the single value.
+
 If a chain is still active, the next scheduled `manualMassCleanupV2` invocation should read env=0 and close the row with `state="failed"` and `error="disabled_mid_chain"`. Wait up to `restMs + 30s`. If it does not close, STOP and escalate; do not patch production state manually from an ad hoc script.
 
 ## Step 10 - Decision
@@ -221,7 +264,7 @@ Clean criteria, all required:
 - Eligible count delta matches `deletedCount` after cutoff alignment/boundary adjustment.
 - `oldestRemainingTimestamp` did not regress.
 - `pg_wal` delta is below warn threshold.
-- Backend stdout has no rollback patterns.
+- Backend stdout has no rollback patterns. `[cleanup-v2]` marker absence alone is not dirty if authoritative row / scheduled-function proof is clean.
 - Core heartbeats remain clean.
 - Env flag is back to 0.
 
@@ -292,12 +335,14 @@ batchesRun, maxRuns, cutoffUsed, deletedCount, oldestRemainingTimestamp,
 durationMs, error, batchSize, timeBudgetMs, restMs>
 
 ## Backend Stdout
-- start lines: <n>
-- end schedule lines: <n>
-- end complete lines: <n>
+- start lines: <n> (may be 0 if user logs still do not route to docker stdout)
+- end schedule lines: <n> (may be 0 if user logs still do not route to docker stdout)
+- end complete lines: <n> (may be 0 if user logs still do not route to docker stdout)
 - end failed lines: <n>
 - disabled_mid_chain skip lines: <n> (expected 0 for clean; >0 only if env was intentionally toggled off mid-chain or drifted)
 - rollback patterns: <n>
+
+If `[cleanup-v2]` markers are absent, cite Phase 4 closure `8b96807` as precedent and rely on `cleanupRunState` + `_scheduled_functions` for authoritative execution proof.
 
 ## Core Heartbeats
 | Heartbeat | Pre | Post | Verdict |
