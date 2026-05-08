@@ -139,10 +139,11 @@ crons.interval(
 //   internal.ruleEngine.uzBudgetDispatch
 // );
 //
-// UZ budget reset — every 30 min, checks user timezone for midnight reset
+// UZ budget reset — every 5 min, checks user timezone for midnight reset.
+// Idempotency: resetBudgets skips a rule once budget_reset exists for today.
 crons.interval(
   "uz-budget-reset",
-  { minutes: 30 },
+  { minutes: 5 },
   internal.uzBudgetCron.resetBudgets
 );
 //
