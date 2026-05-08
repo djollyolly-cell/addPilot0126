@@ -118,6 +118,7 @@ Both paths require a separate explicit go. This document does not choose between
 - [ ] Preferably several Phase 5 controlled closures are clean if storage pressure allows waiting.
 - [ ] `cleanupRunState` has no active row for `cleanupName = "metrics-realtime-v2"`.
 - [ ] `_scheduled_functions` has no in-flight `metrics.js:manualMassCleanupV2` rows.
+- [ ] `_scheduled_functions` has no in-flight `metrics.js:cleanupOldRealtimeMetricsV2` wrapper rows.
 - [ ] Core heartbeats (`syncDispatch`, `uzBudgetDispatch`, `tokenRefreshDispatch`) are clean.
 - [ ] `METRICS_REALTIME_CLEANUP_V2_ENABLED` is currently `0` or absent.
 - [ ] User gave explicit go for a code change in `convex/`.
@@ -128,13 +129,15 @@ The Phase 6 code change must satisfy all of these:
 
 - V1 `manualMassCleanup` remains no-op (`metrics.ts:693-701`).
 - V1 `triggerMassCleanup` remains out of operational use.
-- V1 `manualMassCleanup` body is permanently abandoned at Phase 6. The pre-Phase-6 comment `Restore body after pending queue drains` in `metrics.ts:698` is superseded; no future task should re-fill V1. Any future V1 entry-point removal is a separate cleanup phase, not part of Phase 6.
+- V1 `manualMassCleanup` body is permanently abandoned at Phase 6. The pre-Phase-6 comment `Restore body after pending queue drains` in `metrics.ts:698` is superseded; the Phase 6 code patch should replace that stale comment with a permanent-abandoned/no-op note so no future task "restores" V1 by mistake. Any future V1 entry-point removal is a separate cleanup phase, not part of Phase 6.
 - New cron work MUST NOT call `internal.metrics.manualMassCleanup`.
 - New cron work MUST NOT call `scheduleMassCleanup`.
 - Cron entrypoint MUST schedule via `triggerMassCleanupV2` (preferred shape) and MUST NOT call `manualMassCleanupV2` directly. Direct call bypasses `cleanupRunState` insert and the active-row guard.
 - Cron-triggered call to `triggerMassCleanupV2` must pass explicit bounded params: `batchSize`, `timeBudgetMs`, `restMs`, `maxRuns`. No defaults; values come from `First Cron Params Derivation` below.
-- Default behavior must remain fail-closed when `METRICS_REALTIME_CLEANUP_V2_ENABLED` is not `1`. The env-disabled return path inside `triggerMassCleanupV2` (`metrics.ts:442-446`) does NOT log. Therefore the cron wrapper MUST log a tick line BEFORE delegating: `[cleanup-v2] cron tick at <iso>; env=<0|1>`. Without this wrapper log, Gate A has no positive signal that the cron actually fired.
-- The active-row early return in `triggerMassCleanupV2` returns `{ status: "already-running", runId: <existing> }` without log. The cron wrapper MUST log this case explicitly, e.g. `[cleanup-v2] cron tick at <iso>; skipped, run <runId> still active`. A cron tick during an active chain is expected behavior, not a failure.
+- Organic cron firing proof MUST be based on `_scheduled_functions`, not docker stdout. The first proof layer is a row for `metrics.js:cleanupOldRealtimeMetricsV2` at the expected cron boundary; the second layer is its success/failure state.
+- The expected proof chain is: organic cron row for `metrics.js:cleanupOldRealtimeMetricsV2` -> wrapper success -> `cleanupRunState` insert by `triggerMassCleanupV2` -> `metrics.js:manualMassCleanupV2` chain success -> terminal `cleanupRunState` row.
+- Default behavior must remain fail-closed when `METRICS_REALTIME_CLEANUP_V2_ENABLED` is not `1`. The env-disabled return path inside `triggerMassCleanupV2` (`metrics.ts:442-446`) may log `[cleanup-v2] skip reason=disabled`, but that is not cron-context proof and may not route to docker stdout in this self-hosted runtime. The cron wrapper should still emit best-effort observability lines before/after delegation, but `_scheduled_functions` is authoritative.
+- The active-row early return in `triggerMassCleanupV2` returns `{ status: "already-running", runId: <existing> }` without inserting a new run. The cron wrapper should log this case best-effort, e.g. `[cleanup-v2] cron tick at <iso>; skipped, run <runId> still active`. A cron tick during an active chain is expected behavior, not a failure.
 - If a cron heartbeat is added, it must use V2-specific name `cleanup-realtime-metrics-v2`, never stale V1 name `cleanup-realtime-metrics` (`metrics.ts:711`). Note: in V2 the active-row check on `cleanupRunState` supersedes the V1 heartbeat-based stuck-run guard. A heartbeat in V2 is optional, used only for observability, never as a guard.
 - `cleanup-old-realtime-metrics` cadence starts conservative: every 6 hours. Cadence tightening (1 h or shorter) is a separate gated decision after several clean cron ticks at the 6 h profile.
 
@@ -259,10 +262,12 @@ npm run test:unit -- convex/metrics.test.ts
 ```
 
 Add or update focused tests proving:
-- Cron entrypoint delegates to V2, not V1.
-- Cron params include explicit `maxRuns`.
+- Cron entrypoint/wrapper calls `triggerMassCleanupV2`, not `manualMassCleanupV2` or V1.
+- Cron params include explicit `batchSize`, `timeBudgetMs`, `restMs`, and `maxRuns`.
+- Explicit cron args are passed unchanged from `crons.ts` to the wrapper and from the wrapper to `triggerMassCleanupV2`.
 - Env gate off returns disabled/no-op and does not schedule `manualMassCleanupV2`.
 - Active `cleanupRunState` row causes an already-running/no-op path, not concurrent cleanup.
+- Already-running wrapper behavior does not create a second `cleanupRunState` row and does not schedule another `manualMassCleanupV2` chain.
 - V1 `manualMassCleanup` remains no-op.
 
 Grep guards:
@@ -271,10 +276,13 @@ Grep guards:
 rg "cleanupOldRealtimeMetrics|cleanupOldRealtimeMetricsV2|manualMassCleanup|manualMassCleanupV2|scheduleMassCleanup|scheduleNextChunkV2" convex/metrics.ts convex/crons.ts
 ```
 
+This first grep is a broad discovery grep. Because `manualMassCleanup` is a substring of `manualMassCleanupV2`, do not use the broad grep alone as a pass/fail V1 guard. Use the targeted `\b` guard below for forbidden V1 references.
+
 Expected after Phase 6 implementation:
 - active cron registration points to the V2 cron entrypoint or rewritten V2-only entrypoint;
 - cron args contain explicit bounded params including `maxRuns`;
-- V2 cron path references `triggerMassCleanupV2` or `manualMassCleanupV2`;
+- V2 cron wrapper path references `triggerMassCleanupV2`;
+- `manualMassCleanupV2` appears only as the self-scheduled chain worker after `triggerMassCleanupV2` has inserted `cleanupRunState`; it is not called directly by the cron wrapper or cron registration;
 - V2 cron path does not reference `scheduleMassCleanup`;
 - V2 cron path does not reference `internal.metrics.manualMassCleanup`.
 
@@ -320,6 +328,7 @@ The first active tick must be organic to prove the real cron registration, args,
 Gate B trigger-window discipline:
 
 - Enable env for Gate B only when `/version` latency is stable and core heartbeats are clean.
+- Enable `METRICS_REALTIME_CLEANUP_V2_ENABLED=1` close to the expected cron boundary: target 5-10 minutes before the boundary, after fresh pre-tick anchors are captured. Do not enable it hours early while waiting for `0 */6 * * *`.
 - Prefer a quiet window after a recent organic `syncBatchWorkerV2` success and before the next expected sync fan-out.
 - Avoid known token-refresh fan-out windows. If the next cleanup cron boundary overlaps token refresh or an active UZ/sync fan-out, skip that cron boundary and wait for the next clean one.
 - If a pre-tick check shows `/version` repeatedly above the recent baseline (for example, multiple samples >2s when normal samples are ~1.2-1.5s), do not open Gate B for that boundary.
@@ -339,13 +348,15 @@ Capture immediately before enabling env for Gate B:
 | `metricsRealtime` eligible | <n> with explicit cutoff used | exact preferred; structural proof acceptable only if Phase 5 closure used and validated structural proof | read-only query |
 | `oldestRemainingTimestamp` | <n> (<ISO>) | `min(timestamp)` across all rows | read-only query on `metricsRealtime` |
 | `cleanupRunState` active row | none for `cleanupName="metrics-realtime-v2"` | absolute zero | `by_cleanupName_isActive` |
+| wrapper scheduled entries (in-flight) | none for `metrics.js:cleanupOldRealtimeMetricsV2` | absolute zero | `_scheduled_functions` |
+| wrapper scheduled entries (last boundary) | <count/state> | informational baseline before Gate B; post-tick proof is authoritative | `_scheduled_functions` |
 | V2 scheduled entries (in-flight) | none for `metrics.js:manualMassCleanupV2` | absolute zero | `_scheduled_functions` |
 | V1 `manualMassCleanup` failed counter | <n> | baseline; delta during tick must be 0 | `_scheduled_functions` |
 | V2 `manualMassCleanupV2` failed counter | 0 | absolute 0 pre and post | `_scheduled_functions` |
 | V8 in-flight slots used | <n> / `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` | informational headroom; flag if pre-tick utilisation already > 75% | `_scheduled_functions` in-flight rows |
 | core heartbeats | `syncDispatch`, `uzBudgetDispatch`, `tokenRefreshDispatch` | last status `completed`, no error | `cronHeartbeats` |
 | backend stdout rollback patterns | 0 | absolute 0 since last closure | `docker logs adpilot-convex-backend` grep |
-| wrapper tick log presence (last cron firing time, if any) | <count> tick lines observed | informational; absence in env=0 window = cron not registered, dirty | `docker logs` grep `[cleanup-v2] cron tick` |
+| wrapper observability (docker stdout, if routed) | <count> tick lines observed | informational only; `_scheduled_functions` wrapper row is authoritative | `docker logs` grep `[cleanup-v2] cron tick` |
 
 ## Gate B Observation
 
@@ -373,10 +384,12 @@ This window is comfortably below the 6 h cron period.
 
 Expected:
 - Exactly one organic cron tick starts the V2 cleanup path in the window.
-- The cron wrapper logs a tick line (`[cleanup-v2] cron tick at <iso>; env=1`) before delegation. Absence of this wrapper line on the expected firing time = cron registration is not active = dirty.
+- `_scheduled_functions` contains the organic wrapper row for `metrics.js:cleanupOldRealtimeMetricsV2` at the expected cron boundary, with success unless the wrapper itself failed. This row is the authoritative proof that cron fired the V2 wrapper.
+- The wrapper delegates to `triggerMassCleanupV2`, which inserts the `cleanupRunState` row and schedules the `manualMassCleanupV2` chain.
+- Best-effort wrapper stdout lines (`[cleanup-v2] cron tick at <iso>; env=1`) may be present, but their absence is not dirty if the wrapper scheduled-function row and downstream state proof are clean.
 - `cleanupRunState` row is inserted with expected params.
 - `manualMassCleanupV2` entries are scheduled by the chain, not V1.
-- V2 total entries == `cleanupRunState.batchesRun`.
+- `metrics.js:manualMassCleanupV2` chain entries == `cleanupRunState.batchesRun`.
 - V2 failed absolute == 0.
 - V1 `manualMassCleanup` failed delta == 0.
 - `cleanupRunState.state == "completed"`, `isActive == false`, `error == undefined`.
@@ -390,13 +403,13 @@ Expected:
 
 Stdout caveat (carried from Phase 4 closure `8b96807` and Phase 5 runbook):
 
-- If `[cleanup-v2] start` / `end schedule` / `end complete` markers are absent in `docker logs adpilot-convex-backend` but `cleanupRunState`, `_scheduled_functions`, env, WAL, and core counters are clean, treat marker absence as the known log-routing caveat, not a dirty signal. Authoritative execution proof is `cleanupRunState` + `_scheduled_functions`, not stdout body markers.
-- This caveat does NOT extend to wrapper tick lines. Wrapper tick lines are produced by the cron entrypoint code itself (mandated in Implementation Contract); their absence indicates the cron did not fire and is dirty.
+- If `[cleanup-v2]` wrapper / start / end schedule / end complete markers are absent in `docker logs adpilot-convex-backend` but the wrapper `_scheduled_functions` row, `cleanupRunState`, manual chain rows, env, WAL, and core counters are clean, treat marker absence as the known log-routing caveat, not a dirty signal.
+- Authoritative execution proof is `_scheduled_functions` (`metrics.js:cleanupOldRealtimeMetricsV2` plus `metrics.js:manualMassCleanupV2`) and `cleanupRunState`, not docker stdout.
 
 Active-row and env-disabled organic ticks:
 
-- If a cron tick fires while a previous V2 chain is still active, `triggerMassCleanupV2` returns `{ status: "already-running", runId: <existing> }` without log. The wrapper tick log captures this case explicitly (`skipped, run <runId> still active`). This is expected behavior, not a failure.
-- If a cron tick fires while env is set to `0`, `triggerMassCleanupV2` returns `{ status: "disabled" }` without log (`metrics.ts:442-446`). The wrapper tick log captures this case as `env=0`. During Gate B, env should be `1`; an `env=0` wrapper line in Gate B indicates env drift and is dirty.
+- If a cron tick fires while a previous V2 chain is still active, `triggerMassCleanupV2` returns `{ status: "already-running", runId: <existing> }` without inserting a second run. The wrapper scheduled-function row should be success, no new manual chain should be scheduled, and this is expected behavior, not a failure.
+- If a cron tick fires while env is set to `0`, `triggerMassCleanupV2` returns `{ status: "disabled" }` (`metrics.ts:442-446`) and may log `[cleanup-v2] skip reason=disabled`. During Gate B, env should be `1`; a wrapper row with no `cleanupRunState` insert in Gate B indicates env drift or propagation failure and is dirty.
 
 Note: App-level V2 failure is authoritative in `cleanupRunState.state == "failed"` / `error`, even when `_scheduled_functions.kind` is `"success"` because the action catches errors and returns normally.
 
@@ -491,7 +504,7 @@ Cron params: batchSize=<n>, timeBudgetMs=<n>, restMs=<n>, maxRuns=<n>
 | /version | <n> | curl | <PASS/FAIL> |
 | env flag | 0/absent | env list | <PASS/FAIL> |
 | V1 growth | delta 0 | _scheduled_functions | <PASS/FAIL> |
-| V2 scheduled while env off | 0 | _scheduled_functions | <PASS/FAIL> |
+| manual cleanup chain while env off | 0 `metrics.js:manualMassCleanupV2` rows | _scheduled_functions | <PASS/FAIL> |
 
 ## Gate B - First Active Organic Tick
 | Anchor | Pre | Post | Delta | Threshold | Verdict | Source |
@@ -504,6 +517,7 @@ Cron params: batchSize=<n>, timeBudgetMs=<n>, restMs=<n>, maxRuns=<n>
 ## Scheduled Functions
 | UDF | Pre failed | Post failed | Delta failed | Total entries | Success | Failed | Verdict |
 |---|---|---|---|---|---|---|---|
+| metrics.js:cleanupOldRealtimeMetricsV2 | <n> | <n> | 0 | <n> | <n> | 0 | <PASS/FAIL> |
 | metrics.js:manualMassCleanupV2 | 0 | 0 | 0 | <n> | <n> | 0 | <PASS/FAIL> |
 | metrics.js:manualMassCleanup (V1) | <n> | <n> | 0 | <n/a> | <n/a> | <n/a> | <PASS/FAIL> |
 
@@ -511,14 +525,14 @@ Cron params: batchSize=<n>, timeBudgetMs=<n>, restMs=<n>, maxRuns=<n>
 <paste row fields>
 
 ## Backend Stdout
-- wrapper tick lines: <n> (`[cleanup-v2] cron tick at <iso>; env=<0|1>` or `skipped, run <runId> still active`) — must be > 0 for the expected firing time
+- wrapper tick lines: <n> (`[cleanup-v2] cron tick at <iso>; env=<0|1>` or `skipped, run <runId> still active`) — informational only; `_scheduled_functions` wrapper row is authoritative
 - cleanup-v2 start lines: <n>
 - cleanup-v2 end schedule lines: <n>
 - cleanup-v2 end complete lines: <n>
 - cleanup-v2 disabled_mid_chain lines: <n>
 - rollback patterns: <n>
 
-If `[cleanup-v2]` start / end / schedule / complete markers are absent, cite Phase 4 closure `8b96807` (and any Phase 5 closure precedent) for the known log-routing gap and rely on `cleanupRunState` + `_scheduled_functions` as authoritative execution proof. Wrapper tick lines must still be present; their absence indicates the cron itself did not fire and is dirty regardless of other signals.
+If `[cleanup-v2]` wrapper / start / end / schedule / complete markers are absent, cite Phase 4 closure `8b96807` (and any Phase 5 closure precedent) for the known log-routing gap and rely on `_scheduled_functions` + `cleanupRunState` as authoritative execution proof.
 
 ## Core Heartbeats
 | Heartbeat | Pre | Post | Verdict |
