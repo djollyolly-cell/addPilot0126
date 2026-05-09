@@ -56,6 +56,7 @@ const ACTION_LABELS: Record<string, string> = {
   expiry_changed: 'Изменение срока',
   admin_toggled: 'Изменение прав',
   broadcast_sent: 'Рассылка',
+  in_app_broadcast_sent: 'Рассылка в сервисе',
 };
 
 export function AdminAuditTab({ sessionToken }: Props) {

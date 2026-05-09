@@ -395,6 +395,94 @@ export const sendUserNotification = mutation({
   },
 });
 
+// Send in-app notification to all or active paid users.
+export const broadcastInAppNotification = mutation({
+  args: {
+    sessionToken: v.string(),
+    title: v.string(),
+    message: v.string(),
+    type: v.union(v.literal("info"), v.literal("warning"), v.literal("payment")),
+    audience: v.union(v.literal("all"), v.literal("paid")),
+    dryRun: v.boolean(),
+    expectedCount: v.optional(v.number()),
+    maxRecipients: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const admin = await assertAdmin(ctx, args.sessionToken);
+    const title = args.title.trim();
+    const message = args.message.trim();
+    const maxRecipients = args.maxRecipients ?? 500;
+
+    if (!title || !message) {
+      throw new Error("Title and message are required");
+    }
+    if (maxRecipients <= 0 || maxRecipients > 500) {
+      throw new Error("maxRecipients must be between 1 and 500");
+    }
+
+    const now = Date.now();
+    const users = await ctx.db.query("users").collect();
+    const recipients = users.filter((user) => {
+      if (args.audience === "all") return true;
+      return (
+        (user.subscriptionTier === "start" || user.subscriptionTier === "pro") &&
+        typeof user.subscriptionExpiresAt === "number" &&
+        user.subscriptionExpiresAt > now
+      );
+    });
+
+    if (recipients.length > maxRecipients) {
+      throw new Error(
+        `Too many recipients: ${recipients.length}. Raise maxRecipients or use a batched plan.`
+      );
+    }
+
+    if (!args.dryRun) {
+      if (args.expectedCount === undefined) {
+        throw new Error("expectedCount is required for send");
+      }
+      if (args.expectedCount !== recipients.length) {
+        throw new Error(
+          `Recipient count changed: expected ${args.expectedCount}, got ${recipients.length}. Run preview again.`
+        );
+      }
+
+      const createdAt = Date.now();
+      for (const user of recipients) {
+        await ctx.db.insert("userNotifications", {
+          userId: user._id,
+          title,
+          message,
+          type: args.type,
+          direction: "admin_to_user",
+          isRead: false,
+          createdAt,
+        });
+      }
+
+      try { await ctx.runMutation(internal.auditLog.log, {
+        userId: admin._id,
+        category: "admin",
+        action: "in_app_broadcast_sent",
+        status: "success",
+        details: {
+          audience: args.audience,
+          recipientCount: recipients.length,
+          type: args.type,
+          title,
+        },
+      }); } catch { /* non-critical */ }
+    }
+
+    return {
+      dryRun: args.dryRun,
+      sent: args.dryRun ? 0 : recipients.length,
+      total: recipients.length,
+      audience: args.audience,
+    };
+  },
+});
+
 // Internal query for admin verification (used by actions)
 export const verifyAdmin = internalQuery({
   args: { sessionToken: v.string() },
@@ -558,4 +646,3 @@ export const listUsersModules = query({
     }));
   },
 });
-
