@@ -581,13 +581,13 @@ describe("adAccounts", () => {
       });
 
       // Create 3 campaigns
-      const c1 = await t.mutation(api.adAccounts.upsertCampaign, {
+      await t.mutation(api.adAccounts.upsertCampaign, {
         accountId, vkCampaignId: "C1", name: "Keep", status: "1",
       });
       const c2 = await t.mutation(api.adAccounts.upsertCampaign, {
         accountId, vkCampaignId: "C2", name: "Delete me", status: "1",
       });
-      const c3 = await t.mutation(api.adAccounts.upsertCampaign, {
+      await t.mutation(api.adAccounts.upsertCampaign, {
         accountId, vkCampaignId: "C3", name: "Keep too", status: "1",
       });
 

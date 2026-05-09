@@ -41,8 +41,6 @@ type TriggerMassCleanupV2Ref = FunctionReference<
   TriggerMassCleanupV2Result
 >;
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 function isMetricsRealtimeCleanupV2Enabled(): boolean {
   return process.env.METRICS_REALTIME_CLEANUP_V2_ENABLED === "1";
 }
@@ -704,15 +702,6 @@ export const manualMassCleanupV2 = internalAction({
     }
   },
 });
-
-// ── Mass cleanup: self-scheduling action for large backlogs ──
-// Aggressive mode: 3000 records/batch, 500ms between batches, 25s work, 30s rest
-// Server has 99% CPU free and 82% RAM free — safe to be aggressive
-const MASS_BATCH_SIZE = 3000;
-const MASS_TIME_BUDGET_MS = 25 * 1000; // 25s work per run
-const MASS_BATCH_DELAY_MS = 500; // 500ms pause between batches
-const MASS_REST_BETWEEN_RUNS_MS = 30 * 1000; // 30s rest between runs
-const MASS_OCC_RETRY_DELAY_MS = 3000;
 
 // Trigger: schedule mass cleanup and return immediately (won't timeout CLI)
 export const triggerMassCleanup = mutation({

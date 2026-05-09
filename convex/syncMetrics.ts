@@ -15,7 +15,6 @@ const ERROR_ESCALATION_MS = 2 * 60 * 60 * 1000; // 2 hours — escalate if accou
 
 // Batch worker constants
 const WORKER_COUNT = 6;
-const WORKER_TIMEOUT_MS = 570_000; // 9.5 min total (Convex action limit = 10 min, 30s margin)
 const BATCH_ACCOUNT_TIMEOUT_MS = 560_000; // 9 min 20s per account — heaviest account (2000+ campaigns) needs ~540s
 const SYNC_BANNER_FIELDS = "id,campaign_id,textblocks,status,moderation_status";
 const DEFAULT_UPSERT_CHUNK_SIZE = 200;

@@ -22,7 +22,21 @@ import {
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
-type ActionType = 'stopped' | 'notified' | 'stopped_and_notified' | 'budget_increased' | 'budget_reset' | 'zero_spend_alert';
+type FilterActionType =
+  | 'stopped'
+  | 'notified'
+  | 'stopped_and_notified'
+  | 'budget_increased'
+  | 'budget_reset'
+  | 'zero_spend_alert';
+type ActionType =
+  | FilterActionType
+  | 'rotation_switch'
+  | 'rotation_paused'
+  | 'rotation_resumed'
+  | 'rotation_cycle_complete'
+  | 'rotation_started'
+  | 'rotation_stopped';
 type StatusType = 'success' | 'failed' | 'reverted';
 
 const ACTION_LABELS: Record<ActionType, string> = {
@@ -32,6 +46,12 @@ const ACTION_LABELS: Record<ActionType, string> = {
   budget_increased: 'Бюджет увеличен',
   budget_reset: 'Бюджет сброшен',
   zero_spend_alert: 'Нулевой расход',
+  rotation_switch: 'Ротация: переключение',
+  rotation_paused: 'Ротация: пауза',
+  rotation_resumed: 'Ротация: возобновлена',
+  rotation_cycle_complete: 'Ротация: цикл завершён',
+  rotation_started: 'Ротация: запущена',
+  rotation_stopped: 'Ротация: остановлена',
 };
 
 const STATUS_LABELS: Record<StatusType, string> = {
@@ -54,6 +74,13 @@ function ActionIcon({ type }: { type: ActionType }) {
       return <Bell className="w-4 h-4 text-muted-foreground" />;
     case 'zero_spend_alert':
       return <AlertCircle className="w-4 h-4 text-amber-500" />;
+    case 'rotation_switch':
+    case 'rotation_paused':
+    case 'rotation_resumed':
+    case 'rotation_cycle_complete':
+    case 'rotation_started':
+    case 'rotation_stopped':
+      return <Clock className="w-4 h-4 text-purple-500" />;
   }
 }
 
@@ -87,7 +114,7 @@ export function LogsPage() {
   const userId = user?.userId as Id<'users'> | undefined;
 
   // Filters
-  const [actionType, setActionType] = useState<ActionType | ''>('');
+  const [actionType, setActionType] = useState<FilterActionType | ''>('');
   const [accountId, setAccountId] = useState<string>('');
   const [ruleId, setRuleId] = useState<string>('');
   const [status, setStatus] = useState<StatusType | ''>('');
@@ -104,7 +131,7 @@ export function LogsPage() {
     userId
       ? {
           userId,
-          ...(actionType ? { actionType: actionType as ActionType } : {}),
+          ...(actionType ? { actionType } : {}),
           ...(accountId ? { accountId: accountId as Id<'adAccounts'> } : {}),
           ...(ruleId ? { ruleId: ruleId as Id<'rules'> } : {}),
           ...(status ? { status: status as StatusType } : {}),
@@ -179,7 +206,7 @@ export function LogsPage() {
               <select
                 data-testid="filter-action-type"
                 value={actionType}
-                onChange={(e) => setActionType(e.target.value as ActionType | '')}
+                onChange={(e) => setActionType(e.target.value as FilterActionType | '')}
                 className="px-3 py-2 rounded-md border border-input bg-background text-sm"
               >
                 <option value="">Все типы</option>
@@ -188,6 +215,7 @@ export function LogsPage() {
                 <option value="stopped_and_notified">Остановлено + уведомление</option>
                 <option value="budget_increased">Бюджет увеличен</option>
                 <option value="budget_reset">Бюджет сброшен</option>
+                <option value="zero_spend_alert">Нулевой расход</option>
               </select>
             </div>
 

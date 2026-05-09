@@ -6,7 +6,6 @@ import {
   mutation,
   query,
 } from "./_generated/server";
-import { internal } from "./_generated/api";
 
 const ADMIN_EMAILS = ["13632013@vk.com", "786709647@vk.com"];
 const DEDUP_WINDOW_MS = 30 * 60 * 1000; // 30 минут

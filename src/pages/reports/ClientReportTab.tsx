@@ -379,7 +379,7 @@ export function ClientReportTab() {
                 </tbody>
                 <tfoot>
                   {report.totalsByType && Object.keys(report.totalsByType).length > 1 && (
-                    Object.entries(report.totalsByType).map(([typeKey, typeRow]: [string, Record<string, unknown>]) => (
+                    Object.entries(report.totalsByType as Record<string, Record<string, unknown>>).map(([typeKey, typeRow]) => (
                       <tr key={typeKey} className="text-sm text-muted-foreground border-t border-border">
                         {fields.filter((f) => f !== "phones_detail").map((f, i) => (
                           <td key={f} className="py-1 px-3">

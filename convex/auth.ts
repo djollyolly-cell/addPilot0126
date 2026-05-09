@@ -1,6 +1,6 @@
 import { v } from "convex/values";
 import { action, internalAction, internalMutation, internalQuery, mutation, query } from "./_generated/server";
-import { api, internal } from "./_generated/api";
+import { internal } from "./_generated/api";
 import { quickTokenCheck } from "./tokenRecovery";
 import { Id } from "./_generated/dataModel";
 
