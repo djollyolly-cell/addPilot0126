@@ -1836,6 +1836,420 @@ export const notifyPriceChange = internalMutation({
   },
 });
 
+// ─── One-time incident compensation: 2026-05-05 Convex degradation ─────
+//
+// Goal: add 10 paid days to every subscription that was active on
+// 2026-05-05 Europe/Minsk. This is intentionally implemented as
+// preview-first + explicit apply with a permanent marker table.
+
+const INCIDENT_COMPENSATION_KEY = "subscription_compensation_2026_05_05_convex_incident";
+const INCIDENT_COMPENSATION_CONFIRM = "APPLY_2026_05_05_COMPENSATION";
+const INCIDENT_SNAPSHOT_START_MS = Date.parse("2026-05-04T21:00:00.000Z"); // 2026-05-05 00:00 Europe/Minsk
+const INCIDENT_SNAPSHOT_END_MS = Date.parse("2026-05-05T20:59:59.999Z"); // 2026-05-05 23:59:59.999 Europe/Minsk
+const COMPENSATION_DAY_MS = 24 * 60 * 60 * 1000;
+
+type CompensationTargetType = "user" | "organization";
+type CompensationEvidence = "payment_backed" | "state_backed_no_pre_snapshot_payment";
+type CompensationCandidate = {
+  targetType: CompensationTargetType;
+  targetId: string;
+  userId?: Id<"users">;
+  orgId?: Id<"organizations">;
+  ownerId?: Id<"users">;
+  label: string;
+  email?: string;
+  tierAtSnapshot: string;
+  tierBefore: string;
+  tierAfter: string;
+  expiresAtBefore: number;
+  expiresAtAfter: number;
+  evidence: CompensationEvidence;
+  willReactivate: boolean;
+};
+
+function isPaidIndividualTier(tier: unknown): tier is "start" | "pro" {
+  return tier === "start" || tier === "pro";
+}
+
+function isPaidAgencyTier(tier: unknown): tier is AgencyTier {
+  return typeof tier === "string" && isAgencyTier(tier);
+}
+
+function paymentCompletedAt(payment: { completedAt?: number; createdAt: number }) {
+  return payment.completedAt ?? payment.createdAt;
+}
+
+function buildMarkerKey(targetType: CompensationTargetType, targetId: string) {
+  return `${targetType}:${targetId}`;
+}
+
+function summarizeCompensationCandidates(candidates: CompensationCandidate[]) {
+  const byTargetType: Record<string, number> = {};
+  const byTier: Record<string, number> = {};
+  const byEvidence: Record<string, number> = {};
+  let reactivations = 0;
+
+  for (const c of candidates) {
+    byTargetType[c.targetType] = (byTargetType[c.targetType] ?? 0) + 1;
+    byTier[c.tierAtSnapshot] = (byTier[c.tierAtSnapshot] ?? 0) + 1;
+    byEvidence[c.evidence] = (byEvidence[c.evidence] ?? 0) + 1;
+    if (c.willReactivate) reactivations++;
+  }
+
+  return { byTargetType, byTier, byEvidence, reactivations };
+}
+
+async function buildIncidentCompensationPlan(
+  ctx: any,
+  input: {
+    incidentKey: string;
+    daysToAdd: number;
+    includeStateBacked: boolean;
+  }
+) {
+  const now = Date.now();
+  const extensionMs = input.daysToAdd * COMPENSATION_DAY_MS;
+  const [rawUsers, rawOrgs, rawMarkers] = await Promise.all([
+    ctx.db.query("users").collect(),
+    ctx.db.query("organizations").collect(),
+    ctx.db
+      .query("subscriptionCompensations")
+      .withIndex("by_incident", (q: any) => q.eq("incidentKey", input.incidentKey))
+      .collect(),
+  ]);
+  const users = rawUsers as any[];
+  const orgs = rawOrgs as any[];
+  const markers = rawMarkers as any[];
+
+  const markerKeys = new Set(
+    markers.map((m: any) => buildMarkerKey(m.targetType, m.targetId))
+  );
+
+  const candidates: CompensationCandidate[] = [];
+  const alreadyApplied: CompensationCandidate[] = [];
+
+  function addCandidate(candidate: CompensationCandidate) {
+    if (markerKeys.has(buildMarkerKey(candidate.targetType, candidate.targetId))) {
+      alreadyApplied.push(candidate);
+    } else {
+      candidates.push(candidate);
+    }
+  }
+
+  for (const user of users) {
+    const expiresAtBefore = user.subscriptionExpiresAt;
+    if (!expiresAtBefore || expiresAtBefore < INCIDENT_SNAPSHOT_START_MS) continue;
+
+    const userPayments = ((await ctx.db
+      .query("payments")
+      .withIndex("by_userId", (q: any) => q.eq("userId", user._id))
+      .collect()) as any[])
+      .filter((p) => p.status === "completed" && !p.orgId)
+      .filter((p) => isPaidIndividualTier(p.tier))
+      .sort((a, b) => paymentCompletedAt(a) - paymentCompletedAt(b));
+    const preSnapshotPayments = userPayments.filter(
+      (p) => paymentCompletedAt(p) <= INCIDENT_SNAPSHOT_END_MS
+    );
+    const postSnapshotPayments = userPayments.filter(
+      (p) => paymentCompletedAt(p) > INCIDENT_SNAPSHOT_END_MS
+    );
+    const latestPreSnapshotPayment = preSnapshotPayments[preSnapshotPayments.length - 1];
+
+    let evidence: CompensationEvidence | undefined;
+    let tierAtSnapshot: "start" | "pro" | undefined;
+    if (latestPreSnapshotPayment) {
+      evidence = "payment_backed";
+      tierAtSnapshot = latestPreSnapshotPayment.tier;
+    } else if (
+      input.includeStateBacked &&
+      postSnapshotPayments.length === 0 &&
+      user.createdAt <= INCIDENT_SNAPSHOT_END_MS &&
+      isPaidIndividualTier(user.subscriptionTier)
+    ) {
+      evidence = "state_backed_no_pre_snapshot_payment";
+      tierAtSnapshot = user.subscriptionTier;
+    }
+
+    if (!evidence || !tierAtSnapshot) continue;
+
+    const tierBefore = user.subscriptionTier ?? "freemium";
+    const expiresAtAfter = expiresAtBefore + extensionMs;
+    const shouldReactivate = tierBefore === "freemium" && expiresAtAfter > now;
+    const tierAfter = shouldReactivate ? tierAtSnapshot : tierBefore;
+
+    addCandidate({
+      targetType: "user",
+      targetId: String(user._id),
+      userId: user._id,
+      label: user.name ?? user.email,
+      email: user.email,
+      tierAtSnapshot,
+      tierBefore,
+      tierAfter,
+      expiresAtBefore,
+      expiresAtAfter,
+      evidence,
+      willReactivate: shouldReactivate,
+    });
+  }
+
+  const usersById = new Map(users.map((u) => [String(u._id), u]));
+  for (const org of orgs) {
+    const expiresAtBefore = org.subscriptionExpiresAt;
+    if (!expiresAtBefore || expiresAtBefore < INCIDENT_SNAPSHOT_START_MS) continue;
+
+    const orgPayments = ((await ctx.db
+      .query("payments")
+      .withIndex("by_orgId", (q: any) => q.eq("orgId", org._id))
+      .collect()) as any[])
+      .filter((p) => p.status === "completed")
+      .filter((p) => isPaidAgencyTier(p.tier))
+      .sort((a, b) => paymentCompletedAt(a) - paymentCompletedAt(b));
+    const preSnapshotPayments = orgPayments.filter(
+      (p) => paymentCompletedAt(p) <= INCIDENT_SNAPSHOT_END_MS
+    );
+    const postSnapshotPayments = orgPayments.filter(
+      (p) => paymentCompletedAt(p) > INCIDENT_SNAPSHOT_END_MS
+    );
+    const latestPreSnapshotPayment = preSnapshotPayments[preSnapshotPayments.length - 1];
+
+    let evidence: CompensationEvidence | undefined;
+    let tierAtSnapshot: AgencyTier | undefined;
+    if (latestPreSnapshotPayment) {
+      evidence = "payment_backed";
+      tierAtSnapshot = latestPreSnapshotPayment.tier;
+    } else if (
+      input.includeStateBacked &&
+      postSnapshotPayments.length === 0 &&
+      org.createdAt <= INCIDENT_SNAPSHOT_END_MS &&
+      isPaidAgencyTier(org.subscriptionTier)
+    ) {
+      evidence = "state_backed_no_pre_snapshot_payment";
+      tierAtSnapshot = org.subscriptionTier;
+    }
+
+    if (!evidence || !tierAtSnapshot) continue;
+
+    const owner = usersById.get(String(org.ownerId));
+    const expiresAtAfter = expiresAtBefore + extensionMs;
+
+    addCandidate({
+      targetType: "organization",
+      targetId: String(org._id),
+      orgId: org._id,
+      ownerId: org.ownerId,
+      label: org.name,
+      email: owner?.email,
+      tierAtSnapshot,
+      tierBefore: org.subscriptionTier,
+      tierAfter: org.subscriptionTier,
+      expiresAtBefore,
+      expiresAtAfter,
+      evidence,
+      willReactivate: expiresAtBefore <= now && expiresAtAfter > now,
+    });
+  }
+
+  return {
+    incidentKey: input.incidentKey,
+    daysToAdd: input.daysToAdd,
+    snapshot: {
+      localDate: "2026-05-05 Europe/Minsk",
+      startMs: INCIDENT_SNAPSHOT_START_MS,
+      endMs: INCIDENT_SNAPSHOT_END_MS,
+      startIso: new Date(INCIDENT_SNAPSHOT_START_MS).toISOString(),
+      endIso: new Date(INCIDENT_SNAPSHOT_END_MS).toISOString(),
+    },
+    includeStateBacked: input.includeStateBacked,
+    toApply: candidates,
+    alreadyApplied,
+    summary: {
+      toApplyCount: candidates.length,
+      alreadyAppliedCount: alreadyApplied.length,
+      ...summarizeCompensationCandidates(candidates),
+    },
+  };
+}
+
+export const previewIncidentSubscriptionCompensation = internalQuery({
+  args: {
+    incidentKey: v.optional(v.string()),
+    daysToAdd: v.optional(v.number()),
+    includeStateBacked: v.optional(v.boolean()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const plan = await buildIncidentCompensationPlan(ctx, {
+      incidentKey: args.incidentKey ?? INCIDENT_COMPENSATION_KEY,
+      daysToAdd: args.daysToAdd ?? 10,
+      includeStateBacked: args.includeStateBacked ?? false,
+    });
+    const limit = args.limit ?? 200;
+    const stateBackedOnly = plan.toApply.filter(
+      (candidate) => candidate.evidence === "state_backed_no_pre_snapshot_payment"
+    );
+    return {
+      ...plan,
+      toApply: plan.toApply.slice(0, limit),
+      alreadyApplied: plan.alreadyApplied.slice(0, limit),
+      stateBackedOnly: stateBackedOnly.slice(0, limit),
+      truncated:
+        plan.toApply.length > limit ||
+        plan.alreadyApplied.length > limit ||
+        stateBackedOnly.length > limit,
+    };
+  },
+});
+
+export const applyIncidentSubscriptionCompensation = internalMutation({
+  args: {
+    confirm: v.literal(INCIDENT_COMPENSATION_CONFIRM),
+    expectedToApplyCount: v.number(),
+    maxApplyCount: v.optional(v.number()),
+    incidentKey: v.optional(v.string()),
+    daysToAdd: v.optional(v.number()),
+    includeStateBacked: v.optional(v.boolean()),
+    appliedBy: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const now = Date.now();
+    const incidentKey = args.incidentKey ?? INCIDENT_COMPENSATION_KEY;
+    const daysToAdd = args.daysToAdd ?? 10;
+    const plan = await buildIncidentCompensationPlan(ctx, {
+      incidentKey,
+      daysToAdd,
+      includeStateBacked: args.includeStateBacked ?? false,
+    });
+    const maxApplyCount = args.maxApplyCount ?? 200;
+
+    if (plan.toApply.length !== args.expectedToApplyCount) {
+      throw new Error(
+        `Compensation target count changed: expected ${args.expectedToApplyCount}, got ${plan.toApply.length}. Re-run preview before apply.`
+      );
+    }
+    if (plan.toApply.length > maxApplyCount) {
+      throw new Error(
+        `Compensation target count ${plan.toApply.length} exceeds maxApplyCount ${maxApplyCount}. Use a batched plan instead of one mutation.`
+      );
+    }
+
+    const applied: CompensationCandidate[] = [];
+    for (const target of plan.toApply) {
+      if (target.targetType === "user" && target.userId) {
+        const user = await ctx.db.get(target.userId);
+        if (!user) continue;
+
+        const patch: Record<string, unknown> = {
+          subscriptionExpiresAt: target.expiresAtAfter,
+          updatedAt: now,
+        };
+        if (target.tierAfter !== target.tierBefore && isPaidIndividualTier(target.tierAfter)) {
+          patch.subscriptionTier = target.tierAfter;
+        }
+        if (
+          user.lockedPrices &&
+          user.lockedPrices.until >= target.expiresAtBefore - COMPENSATION_DAY_MS
+        ) {
+          patch.lockedPrices = {
+            ...user.lockedPrices,
+            until: Math.max(user.lockedPrices.until, target.expiresAtAfter),
+          };
+        }
+
+        await ctx.db.patch(target.userId, patch);
+        if (target.willReactivate && isPaidIndividualTier(target.tierAfter)) {
+          await applyUpgradeReactivation(ctx, target.userId, target.tierAfter);
+        }
+      } else if (target.targetType === "organization" && target.orgId) {
+        if (target.willReactivate) {
+          const org = await ctx.db.get(target.orgId);
+          if (org) {
+            const stripFields = new Set([
+              "_id",
+              "_creationTime",
+              "expiredGracePhase",
+              "expiredGraceStartedAt",
+            ]);
+            const clean = Object.fromEntries(
+              Object.entries(org).filter(([key]) => !stripFields.has(key))
+            );
+            await ctx.db.replace(target.orgId, {
+              ...clean,
+              subscriptionExpiresAt: target.expiresAtAfter,
+              updatedAt: now,
+            } as never);
+          }
+        } else {
+          await ctx.db.patch(target.orgId, {
+            subscriptionExpiresAt: target.expiresAtAfter,
+            updatedAt: now,
+          });
+        }
+      }
+
+      const compensationRecord: Record<string, unknown> = {
+        incidentKey,
+        targetType: target.targetType,
+        targetId: target.targetId,
+        snapshotStartMs: INCIDENT_SNAPSHOT_START_MS,
+        snapshotEndMs: INCIDENT_SNAPSHOT_END_MS,
+        daysAdded: daysToAdd,
+        tierAtSnapshot: target.tierAtSnapshot,
+        tierBefore: target.tierBefore,
+        tierAfter: target.tierAfter,
+        expiresAtBefore: target.expiresAtBefore,
+        expiresAtAfter: target.expiresAtAfter,
+        evidence: target.evidence,
+        appliedAt: now,
+      };
+      if (target.userId) compensationRecord.userId = target.userId;
+      if (target.orgId) compensationRecord.orgId = target.orgId;
+      if (args.appliedBy) compensationRecord.appliedBy = args.appliedBy;
+      await ctx.db.insert("subscriptionCompensations", compensationRecord as never);
+
+      const auditUserId = target.userId ?? target.ownerId;
+      if (!auditUserId) {
+        throw new Error(
+          `Compensation target ${target.targetId} has neither userId nor ownerId`
+        );
+      }
+
+      const auditRecord: Record<string, unknown> = {
+        userId: auditUserId,
+        category: "payment",
+        action: "subscription_incident_compensation",
+        status: "success",
+        details: {
+          incidentKey,
+          targetType: target.targetType,
+          targetId: target.targetId,
+          daysAdded: daysToAdd,
+          tierAtSnapshot: target.tierAtSnapshot,
+          tierBefore: target.tierBefore,
+          tierAfter: target.tierAfter,
+          expiresAtBefore: target.expiresAtBefore,
+          expiresAtAfter: target.expiresAtAfter,
+          evidence: target.evidence,
+          willReactivate: target.willReactivate,
+        },
+        createdAt: now,
+      };
+      if (target.orgId) auditRecord.orgId = target.orgId;
+      await ctx.db.insert("auditLog", auditRecord as never);
+
+      applied.push(target);
+    }
+
+    return {
+      incidentKey,
+      appliedCount: applied.length,
+      alreadyAppliedCount: plan.alreadyApplied.length,
+      summary: summarizeCompensationCandidates(applied),
+      applied,
+    };
+  },
+});
+
 // ─── TEMP: One-time checkout link generator ─────────────────────────
 // Run from Convex dashboard to create a payment link for any user
 export const createOneTimeCheckout = internalAction({

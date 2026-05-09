@@ -899,6 +899,32 @@ export default defineSchema({
     .index("by_createdAt", ["createdAt"])
     .index("by_orgId_createdAt", ["orgId", "createdAt"]),
 
+  // Permanent idempotency/audit marker for incident subscription extensions.
+  // This is intentionally separate from payments: compensation is not a paid
+  // financial transaction and must not distort payment history.
+  subscriptionCompensations: defineTable({
+    incidentKey: v.string(),
+    targetType: v.union(v.literal("user"), v.literal("organization")),
+    targetId: v.string(),
+    userId: v.optional(v.id("users")),
+    orgId: v.optional(v.id("organizations")),
+    snapshotStartMs: v.number(),
+    snapshotEndMs: v.number(),
+    daysAdded: v.number(),
+    tierAtSnapshot: v.string(),
+    tierBefore: v.string(),
+    tierAfter: v.string(),
+    expiresAtBefore: v.number(),
+    expiresAtAfter: v.number(),
+    evidence: v.string(),
+    appliedAt: v.number(),
+    appliedBy: v.optional(v.string()),
+  })
+    .index("by_incident", ["incidentKey"])
+    .index("by_incident_target", ["incidentKey", "targetType", "targetId"])
+    .index("by_userId", ["userId"])
+    .index("by_orgId", ["orgId"]),
+
   // Настройки Telegram-уведомлений для админов
   adminAlertSettings: defineTable({
     userId: v.id("users"),
