@@ -76,8 +76,10 @@ export const checkCronHeartbeats = internalQuery({
       maxStaleMin?: number;
       maxRunningMin?: number;
     }> = [
-      { name: "syncDispatch", label: "sync-metrics", maxStaleMin: 10 },
-      { name: "uzBudgetDispatch", label: "uz-budget-increase", maxStaleMin: 15 },
+      // Thresholds aligned with V2 cron cadences (cadence + small buffer):
+      // syncDispatch cron 15m → 18m, uzBudgetDispatch cron 45m → 50m.
+      { name: "syncDispatch", label: "sync-metrics", maxStaleMin: 18 },
+      { name: "uzBudgetDispatch", label: "uz-budget-increase", maxStaleMin: 50 },
       { name: "resetBudgets", label: "uz-budget-reset" },
       { name: "sendDailyDigest", label: "daily-digest" },
       { name: "sendWeeklyDigest", label: "weekly-digest" },
