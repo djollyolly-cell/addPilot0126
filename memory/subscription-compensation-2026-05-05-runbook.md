@@ -122,8 +122,8 @@ Do **not** include unrelated dirty worktree changes such as
 `bannerActiveSnapshots`.
 
 ```bash
-CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
-CONVEX_SELF_HOSTED_ADMIN_KEY="$(node gen-admin-key.cjs)" \
+CONVEX_SELF_HOSTED_URL=https://convex.aipilot.by \
+CONVEX_SELF_HOSTED_ADMIN_KEY="$(node "/Users/anzelikamedvedeva/основное/ИИ и все что с ним связано/addpilot from claude/gen-admin-key.cjs")" \
 npx convex deploy --yes
 ```
 
@@ -133,8 +133,8 @@ Default preview excludes state-backed targets. This is the first review pass
 and should contain only targets backed by completed paid payments.
 
 ```bash
-CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
-CONVEX_SELF_HOSTED_ADMIN_KEY="$(node gen-admin-key.cjs)" \
+CONVEX_SELF_HOSTED_URL=https://convex.aipilot.by \
+CONVEX_SELF_HOSTED_ADMIN_KEY="$(node "/Users/anzelikamedvedeva/основное/ИИ и все что с ним связано/addpilot from claude/gen-admin-key.cjs")" \
 npx convex run internal.billing.previewIncidentSubscriptionCompensation \
   '{"limit":500,"includeStateBacked":false}'
 ```
@@ -145,8 +145,8 @@ Run this only to inspect the additional targets that would be included by
 current-state evidence. Review `stateBackedOnly` carefully.
 
 ```bash
-CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
-CONVEX_SELF_HOSTED_ADMIN_KEY="$(node gen-admin-key.cjs)" \
+CONVEX_SELF_HOSTED_URL=https://convex.aipilot.by \
+CONVEX_SELF_HOSTED_ADMIN_KEY="$(node "/Users/anzelikamedvedeva/основное/ИИ и все что с ним связано/addpilot from claude/gen-admin-key.cjs")" \
 npx convex run internal.billing.previewIncidentSubscriptionCompensation \
   '{"limit":500,"includeStateBacked":true}'
 ```
@@ -178,8 +178,8 @@ If the list is too long and `truncated=true`, rerun with a larger `limit`.
 Only after preview is accepted by the operator:
 
 ```bash
-CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
-CONVEX_SELF_HOSTED_ADMIN_KEY="$(node gen-admin-key.cjs)" \
+CONVEX_SELF_HOSTED_URL=https://convex.aipilot.by \
+CONVEX_SELF_HOSTED_ADMIN_KEY="$(node "/Users/anzelikamedvedeva/основное/ИИ и все что с ним связано/addpilot from claude/gen-admin-key.cjs")" \
 npx convex run internal.billing.applyIncidentSubscriptionCompensation \
   '{"confirm":"APPLY_2026_05_05_COMPENSATION","expectedToApplyCount":<FROM_PREVIEW>,"maxApplyCount":200,"includeStateBacked":false,"appliedBy":"operator:anzelika"}'
 ```
@@ -195,8 +195,8 @@ was explicitly accepted.
 Immediately run preview again:
 
 ```bash
-CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
-CONVEX_SELF_HOSTED_ADMIN_KEY="$(node gen-admin-key.cjs)" \
+CONVEX_SELF_HOSTED_URL=https://convex.aipilot.by \
+CONVEX_SELF_HOSTED_ADMIN_KEY="$(node "/Users/anzelikamedvedeva/основное/ИИ и все что с ним связано/addpilot from claude/gen-admin-key.cjs")" \
 npx convex run internal.billing.previewIncidentSubscriptionCompensation \
   '{"limit":500,"includeStateBacked":false}'
 ```
