@@ -155,7 +155,7 @@ PG raw probes (`COUNT(*)`, `MIN/MAX(ts)` filtered by Convex `table_id`, `GROUP B
 - ✅ `cleanupRunState` schema verify — done 2026-05-10 (поля подтверждены в `origin/emergency/drain-scheduled-jobs:convex/schema.ts`, primary kill-switch не fictional).
 - ✅ Phase 2 baseline collected 2026-05-10 (см. секцию выше).
 - **Acceleration design needed** — math from Phase 2 baseline shows manual safe-profile does NOT converge to 48h retention at any reasonable operator cadence (gap widening +23h45m/day). Tier ordering for design (per 2026-05-10 discussion):
-  - **Tier 1:** `maxRuns` 8 → 16/24 (same per-chunk risk, less operator overhead per wave). Polezno но один не закрывает gap.
+  - **Tier 1:** `maxRuns` 8 → 16/24 (same per-chunk risk, less operator overhead per wave). Полезно, но один не закрывает gap.
   - **Tier 2:** automation/cron sustained drain. Math requires it — operator-driven manual cadence has hard ceiling. NOT optional / "когда-нибудь".
   - **Tier 3:** `batchSize` 1000 → 1500 (after clean snapshot per re-eval gate).
   - **Tier 4:** `restMs` 90 → 75 (BD-3 outlier 9.572s at 60s — caveat).
