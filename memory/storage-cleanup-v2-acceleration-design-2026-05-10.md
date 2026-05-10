@@ -26,6 +26,29 @@ Phase 2 baseline (preflight 2026-05-10 06:30Z): floor advance ≈ 14m57s/day vs 
 
 **Outcome:** Single estimated value — rows/hour ingest rate (с confidence band если применимо). **Без этой цифры никакой Tier не запускается** — размер acceleration зависит от ratio `target_drain / ingest`.
 
+### Initial baseline (2026-05-10 06:49–07:20 UTC)
+
+Step 0 initial baseline collected via bounded `convex data metricsRealtime --limit 8000` (Convex CLI hard limit = 8192). 30.73-min window covered **1 complete sync cycle** (Segment 2: 2410 rows in 32s active write) + 2 partial adjacent cycles (Segment 1 tail: 1957 rows in 22.3s; Segment 3 head: 3633+ rows in 45.1s+, sync still running at probe time). Sync cadence verified ~15 min between cycles, matches `crons.ts: sync-metrics every 15 min`.
+
+**Point estimate: ~10K rows/hour** (= 2410 rows/cycle × 4 cycles/hour, derived from the **single complete cycle** observed). Segment 3 ongoing cannot be counted as full cycle.
+
+**Provisional range: ~10–16K rows/hour** (upper bound from Segment 3 if its ongoing rate held to a full cycle — unverified).
+
+**Daily ingest estimate: ~240–384K rows/day, point ~240K/day.**
+
+**Confidence: low/medium.** Sample size = 1 complete cycle. Cycle-to-cycle variance not measured; hour-of-day / day-of-week variance unknown.
+
+**Use this baseline for first sizing only.** Re-measure before Tier 2a (automation) execution to validate steady-state and check for drift since 2026-05-10. Re-measurement should also span ≥ 2 hours of wall time (not just one window) to capture short-term variance.
+
+**Implication for acceleration design:**
+- Manual safe profile (8K × 5/day = 40K/day) ≈ **17%** of point ingest 240K/day → losing ground.
+- Tier 1 only (`maxRuns=24` × 6/day = 144K/day) ≈ **60%** of point ingest → still losing.
+- Tier 1 + Tier 2a cron every ~2h (288K/day) ≈ break-even at point estimate, no margin to clear historical backlog if real ingest sits at upper-range 16K/hour.
+- Tier 1 + Tier 2a cron every ~1h (576K/day) ≈ 2× point ingest, leaves margin to drain backlog.
+- **Tier 3 / Tier 4 / Tier 5 not needed for first acceleration attempt if ingest baseline holds.** If re-measurement before Tier 2a shows ingest substantially above range or with high variance, Tier 3+ may become required.
+
+**Admin key hygiene during measurement:** ephemeral, not written to disk, unset after each use.
+
 ## Tier 1 — `maxRuns` 8 → 16/24
 
 **Why first:**
@@ -53,11 +76,21 @@ Phase 2 baseline (preflight 2026-05-10 06:30Z): floor advance ≈ 14m57s/day vs 
 **Required for convergence, but gated:** behind Step 0 ingest measurement + Tier 1 validation. Не запускать раньше, потому что (a) без реального ingest rate невозможно sized properly, (b) без Tier 1 stability нельзя доверять scheduled trigger без operator oversight.
 
 ### Tier 2a — Controlled scheduled manual-equivalent waves (preferred first form)
-- Scheduler triggers wave at fixed cadence (например каждые N часов).
+- Scheduler triggers wave at fixed cadence.
 - **Each scheduled run:** flips env to `"1"` for the run only → executes wave → flips env back to idle-safe state (unset OR `!= "1"`).
 - Same per-wave attribution as manual; differs только в trigger source (scheduler vs operator).
 - env **NEVER** held `"1"` between scheduled runs.
 - Per-run profile = the validated Tier 1 profile (e.g. `maxRuns=24` если уже валидирован).
+
+**Cadence options at maxRuns=24 (24K rows/run), against Phase 2b baseline (~10K/hour point, 10–16K/hour range):**
+
+| Cadence | Daily drain | vs point ingest 240K/day | vs upper-range 384K/day | Verdict |
+|---|---|---|---|---|
+| every 2h (12 runs/day) | 288K | **120%** | **75%** | break-even or slight net drain at point; net negative at upper range. Useful only if ingest <12K/hour and variance low. |
+| every 1h (24 runs/day) | 576K | **240%** | **150%** | converges with margin; **requires** strict no-overlap guard (already-running check from `triggerMassCleanupV2`) and env-scoped run wrapper (flip env=`"1"` → run → flip env=`!="1"` per run). |
+| every 90 min (16 runs/day) | 384K | **160%** | **100%** | safe-margin middle ground at point, exact break-even at upper range. |
+
+Choice between cadences depends on **re-measured** ingest rate at execution time and operational tolerance for env flip frequency. Decision deferred to execution time.
 
 ### Tier 2b — Adjust existing 6h cron profile (later)
 - After 2a validated, можно adjust `cleanup-old-realtime-metrics` cron profile from current `(500/10000/90000/5)` → larger profile.
