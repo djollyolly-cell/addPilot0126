@@ -198,7 +198,21 @@ so the buffer should include both expected duration jitter and retry overhead.
 
 ## Status
 
-Restorer tooling fix is implemented and locally dry-run verified. Wave 5
-remains blocked until the production-equivalent positive dry-run rehearsal
-above is completed successfully. After that, use the script only in
-target-runId-bound mode.
+Restorer tooling fix is implemented and locally dry-run verified. Positive and
+negative production-equivalent rehearsals both passed on 2026-05-12.
+
+The restorer is ready for **wave 5 supervised operation**. This means:
+
+- it may replace manual env restoration on the happy path;
+- it must still be bound to the exact target runId;
+- the operator must still run a fresh mini-preflight before any wave;
+- every wave still requires explicit `go` for preflight and explicit `go` for
+  trigger;
+- the operator must remain available for no-go/runway decisions, audit review,
+  and halt paths;
+- this does not authorize Tier 2 automation, parallel waves, `maxRuns > 24`,
+  `restMs < 90000`, `batchSize > 1000`, or skipping explicit per-wave
+  approval.
+
+In short: the wave 5 restorer gate is closed, but the cleanup series remains a
+supervised Tier 1 canary process.
