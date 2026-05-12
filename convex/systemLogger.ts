@@ -1,15 +1,83 @@
 import { v } from "convex/values";
-import { internalMutation, internalQuery } from "./_generated/server";
+import {
+  internalMutation,
+  internalQuery,
+  type MutationCtx,
+} from "./_generated/server";
 import { internal } from "./_generated/api";
 
 // EMERGENCY: when set, suppress auto-scheduling adminAlerts.notify on every error log.
 // Reason: while adminAlerts.notify is drain-mode no-op, each schedule still occupies a V8 slot
 // during dispatch. A "Too many concurrent" error → systemLogger.log(error) → scheduled notify
 // → competes for slots with token-refresh workers → more errors. Self-feeding amplification.
-// Restore: unset together with adminAlerts.notify body restoration.
-const DISABLE_ERROR_ALERT_FANOUT =
-  process.env.DISABLE_ERROR_ALERT_FANOUT === "1" ||
-  process.env.DISABLE_ERROR_ALERT_FANOUT === "true";
+// Read at call time so D1b can flip the env without re-deploy.
+// Retained as kill-switch per D1 design Open Questions even after D1c.
+function disableErrorAlertFanout(): boolean {
+  const v = process.env.DISABLE_ERROR_ALERT_FANOUT;
+  return v === "1" || v === "true";
+}
+
+// Must match adminAlerts.DEDUP_WINDOW_MS — same value, kept local to avoid cross-module coupling.
+const DEDUP_WINDOW_MS = 30 * 60 * 1000;
+
+/**
+ * Map (source, message) to a stable normalized class for dedup grouping.
+ * Per D1 design: 4 explicit patterns + Russian token-expired variant + fallback.
+ * Exported for unit testing.
+ */
+export function classifyMessage(source: string, message: string): string {
+  if (message.includes("Too many concurrent")) return "too_many_concurrent";
+  if (message.includes("Transient error")) return "transient_error";
+  if (
+    message.includes("TOKEN_EXPIRED") ||
+    (message.includes("Токен") &&
+      (message.includes("истёк") || message.includes("отсутствует")))
+  ) {
+    return "token_expired";
+  }
+  if (
+    source === "tokenRecovery" &&
+    (message.includes("failed") || message.includes("error"))
+  ) {
+    return "token_recovery_failed";
+  }
+  const sliced = message.slice(0, 120);
+  const fb = sliced
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (fb !== "") return `_fb:${fb}`;
+  // Non-latin-only message (e.g. cyrillic-only) — empty after normalization.
+  // Use a stable djb2-style hash so distinct messages still get distinct dedup keys.
+  let hash = 0;
+  for (let i = 0; i < sliced.length; i++) {
+    hash = ((hash << 5) - hash + sliced.charCodeAt(i)) | 0;
+  }
+  return `_fb:nl_${Math.abs(hash).toString(36)}`;
+}
+
+// Inline dedup-before-schedule. Same logic as adminAlerts.checkDedup but reads/writes
+// adminAlertDedup directly from this mutation (internalMutation has ctx.db) instead of
+// calling checkDedup via ctx.runMutation (which would require an action context).
+async function checkAdminAlertDedupInline(
+  ctx: MutationCtx,
+  key: string,
+): Promise<boolean> {
+  const existing = await ctx.db
+    .query("adminAlertDedup")
+    .withIndex("by_key", (q) => q.eq("key", key))
+    .first();
+  const now = Date.now();
+  if (existing && now - existing.lastSentAt < DEDUP_WINDOW_MS) {
+    return false;
+  }
+  if (existing) {
+    await ctx.db.patch(existing._id, { lastSentAt: now });
+  } else {
+    await ctx.db.insert("adminAlertDedup", { key, lastSentAt: now });
+  }
+  return true;
+}
 
 // ─── Запись системного лога ───
 
@@ -42,19 +110,35 @@ export const log = internalMutation({
       createdAt: Date.now(),
     });
 
-    // Авто-алерт админам при критических ошибках
-    if (args.level === "error" && !DISABLE_ERROR_ALERT_FANOUT) {
-      try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
-        category: "criticalErrors",
-        dedupKey: `${args.source}:${args.accountId ?? "global"}:${args.message.slice(0, 50)}`,
-        text: [
-          `🚨 <b>Ошибка</b>`,
-          ``,
-          `<b>Источник:</b> <code>${args.source}</code>`,
-          `<b>Сообщение:</b> ${args.message}`,
-          details ? `<pre>${JSON.stringify(details, null, 2).slice(0, 300)}</pre>` : '',
-        ].filter(Boolean).join('\n'),
-      }); } catch { /* non-critical */ }
+    // Авто-алерт админам при критических ошибках.
+    // Dedup-before-schedule: coarsened guardKey by (source, messageClass) drops
+    // accountId+raw-message from the key so that N accounts hitting the same systemic
+    // error produce one schedule per 30-min window, not N. Per-account context still
+    // appears in the alert text below.
+    if (args.level === "error" && !disableErrorAlertFanout()) {
+      const messageClass = classifyMessage(args.source, args.message);
+      const guardKey = `error:${args.source}:${messageClass}`;
+      const fresh = await checkAdminAlertDedupInline(ctx, guardKey);
+      if (fresh) {
+        // Do NOT pass dedupKey: D1a's checkAdminAlertDedupInline above already wrote
+        // guardKey into adminAlertDedup. If we passed dedupKey here, the D1c-restored
+        // notify handler would call adminAlerts.checkDedup(guardKey), see the just-
+        // written entry as fresh, and silently drop the Telegram delivery. Inline
+        // dedup IS the gate for systemLogger-generated schedules. The 7 explicit
+        // notify callers still pass their own dedupKey — that path is untouched.
+        try { await ctx.scheduler.runAfter(0, internal.adminAlerts.notify, {
+          category: "criticalErrors",
+          text: [
+            `🚨 <b>Ошибка</b>`,
+            ``,
+            `<b>Источник:</b> <code>${args.source}</code>`,
+            `<b>Класс:</b> <code>${messageClass}</code>`,
+            `<b>Аккаунт:</b> ${args.accountId ?? "—"}`,
+            `<b>Сообщение:</b> ${args.message}`,
+            details ? `<pre>${JSON.stringify(details, null, 2).slice(0, 300)}</pre>` : '',
+          ].filter(Boolean).join('\n'),
+        }); } catch { /* non-critical */ }
+      }
     }
   },
 });
