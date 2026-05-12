@@ -27,6 +27,10 @@ CLI with explicit parsed-field decisions:
   `state in ("completed", "failed")` or `isActive=false`.
 - Does not restore env for active, unknown, or non-target rows.
 - Emits heartbeat JSON on every poll.
+- Uses a 30s timeout for Convex CLI calls by default to avoid an infinite
+  restorer hang on network/CLI stalls.
+- Retries transient Convex CLI failures with default backoff `1s / 3s / 10s`
+  before surfacing an error.
 - Supports a guarded failsafe window:
   - terminal target row -> restore env;
   - active/unknown target after failsafe -> halt + operator alert, no env
@@ -41,7 +45,8 @@ safety decisions:
 - active target row waits;
 - non-target terminal row does not restore env;
 - failsafe active/unknown paths halt-alert without env mutation;
-- target row can be found among recent rows.
+- target row can be found among recent rows;
+- command timeout and retry backoff args parse correctly.
 
 ## Verification
 
@@ -54,6 +59,9 @@ node scripts/storage-cleanup-restorer.cjs --target-run-id target-1 \
   --row-json-file /tmp/restorer-terminal.json --dry-run --once
 node scripts/storage-cleanup-restorer.cjs --target-run-id target-1 \
   --row-json-file /tmp/restorer-active.json --dry-run --once
+node scripts/storage-cleanup-restorer.cjs --target-run-id target-1 \
+  --row-json-file /tmp/restorer-unknown.json --dry-run --once \
+  --expected-terminal-at-ms 1000 --failsafe-buffer-ms 1000
 ```
 
 Results:
@@ -62,11 +70,21 @@ Results:
 - dependency-free assertions passed;
 - terminal simulation produced `action="restore_env"` and dry-run env output;
 - active simulation produced `action="wait"` and no env mutation.
+- unknown-after-failsafe simulation produced `action="halt_alert"`, exit `2`,
+  and no env mutation.
 
-`npm run test:unit -- tests/unit/storage-cleanup-restorer.test.ts` was
-attempted from the temporary worktree, but the temp worktree has no
-`node_modules`, so Vitest was not locally runnable there. The Vitest test file
-is included for normal dependency-present CI/dev environments.
+Follow-up hardening on 2026-05-12 added the Convex CLI command timeout and
+retry/backoff controls after review identified those as pre-wave-5 reliability
+requirements.
+
+After the hardening patch, the focused Vitest test was run from the clean
+worktree using a temporary symlink to the existing local `node_modules`:
+
+```text
+npm run test:unit -- tests/unit/storage-cleanup-restorer.test.ts
+```
+
+Result: `9` tests passed.
 
 ## Operational Notes
 
@@ -86,7 +104,9 @@ CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY" \
 node scripts/storage-cleanup-restorer.cjs \
   --target-run-id "$RUN_ID" \
   --expected-terminal-at-ms "$EXPECTED_TERMINAL_MS" \
-  --failsafe-buffer-ms 600000
+  --failsafe-buffer-ms 600000 \
+  --command-timeout-ms 30000 \
+  --retry-delays-ms 1000,3000,10000
 ```
 
 Do not use the restorer as a generic "no active row" env-zero tool. It is

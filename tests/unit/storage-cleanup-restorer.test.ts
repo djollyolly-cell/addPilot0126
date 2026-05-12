@@ -117,4 +117,40 @@ describe('storage cleanup restorer safety decisions', () => {
       state: 'completed',
     });
   });
+
+  it('parses command timeout and retry backoff options', () => {
+    const options = restorer.parseArgs([
+      '--target-run-id',
+      targetRunId,
+      '--command-timeout-ms',
+      '45000',
+      '--retry-delays-ms',
+      '100,200,300',
+    ]);
+
+    expect(options.commandTimeoutMs).toBe(45_000);
+    expect(options.retryDelaysMs).toEqual([100, 200, 300]);
+  });
+
+  it('allows disabling retries explicitly', () => {
+    const options = restorer.parseArgs([
+      '--target-run-id',
+      targetRunId,
+      '--retry-delays-ms',
+      'none',
+    ]);
+
+    expect(options.retryDelaysMs).toEqual([]);
+  });
+
+  it('rejects invalid retry backoff values', () => {
+    expect(() =>
+      restorer.parseArgs([
+        '--target-run-id',
+        targetRunId,
+        '--retry-delays-ms',
+        '100,nope',
+      ]),
+    ).toThrow('--retry-delays-ms must contain only numeric delays');
+  });
 });

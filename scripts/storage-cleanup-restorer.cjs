@@ -7,6 +7,8 @@ const { spawnSync } = require("child_process");
 const TERMINAL_STATES = new Set(["completed", "failed"]);
 const DEFAULT_POLL_INTERVAL_MS = 30_000;
 const DEFAULT_READ_LIMIT = 5;
+const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+const DEFAULT_RETRY_DELAYS_MS = [1_000, 3_000, 10_000];
 
 function parseArgs(argv) {
   const options = {
@@ -14,6 +16,8 @@ function parseArgs(argv) {
     once: false,
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     readLimit: DEFAULT_READ_LIMIT,
+    commandTimeoutMs: DEFAULT_COMMAND_TIMEOUT_MS,
+    retryDelaysMs: [...DEFAULT_RETRY_DELAYS_MS],
     now: () => Date.now(),
   };
 
@@ -46,6 +50,12 @@ function parseArgs(argv) {
       case "--read-limit":
         options.readLimit = Number(next());
         break;
+      case "--command-timeout-ms":
+        options.commandTimeoutMs = Number(next());
+        break;
+      case "--retry-delays-ms":
+        options.retryDelaysMs = parseRetryDelays(next());
+        break;
       case "--row-json-file":
         options.rowJsonFile = next();
         break;
@@ -74,6 +84,15 @@ function parseArgs(argv) {
     throw new Error("--read-limit must be a positive integer");
   }
   if (
+    !Number.isFinite(options.commandTimeoutMs) ||
+    options.commandTimeoutMs < 1_000
+  ) {
+    throw new Error("--command-timeout-ms must be a number >= 1000");
+  }
+  if (!Array.isArray(options.retryDelaysMs)) {
+    throw new Error("--retry-delays-ms must be a comma-separated list");
+  }
+  if (
     options.expectedTerminalAtMs !== undefined &&
     !Number.isFinite(options.expectedTerminalAtMs)
   ) {
@@ -89,6 +108,31 @@ function parseArgs(argv) {
   return options;
 }
 
+function parseRetryDelays(value) {
+  if (value === "none" || value === "0") {
+    return [];
+  }
+
+  const parts = value.split(",").map((part) => part.trim());
+  if (parts.some((part) => part.length === 0)) {
+    throw new Error("--retry-delays-ms cannot contain empty entries");
+  }
+
+  const delays = parts.map((part) => Number(part));
+
+  if (delays.length === 0) {
+    throw new Error("--retry-delays-ms must contain at least one numeric delay");
+  }
+  if (delays.some((delay) => !Number.isFinite(delay))) {
+    throw new Error("--retry-delays-ms must contain only numeric delays");
+  }
+  if (delays.some((delay) => delay < 0)) {
+    throw new Error("--retry-delays-ms cannot contain negative delays");
+  }
+
+  return delays;
+}
+
 function usage() {
   return [
     "Usage:",
@@ -102,6 +146,8 @@ function usage() {
     "  --env-name <name>                  Env var to restore to 0",
     "  --poll-interval-ms <ms>            Default: 30000",
     "  --read-limit <n>                   cleanupRunState rows to read; default: 5",
+    "  --command-timeout-ms <ms>          Convex CLI command timeout; default: 30000",
+    "  --retry-delays-ms <csv|none>       Retry backoff; default: 1000,3000,10000",
     "  --expected-terminal-at-ms <epoch>  Enables guarded failsafe window",
     "  --failsafe-buffer-ms <ms>          Buffer added to expected terminal time",
     "  --row-json-file <path>             Read rows from a local JSON file (test/dry-run)",
@@ -180,7 +226,12 @@ function getRestorerDecision({ row, targetRunId, nowMs, expectedTerminalAtMs, fa
   };
 }
 
-function runConvex(args, options = {}) {
+function sleepSync(ms) {
+  if (ms <= 0) return;
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function runConvexOnce(args, options = {}) {
   const env = {
     ...process.env,
   };
@@ -195,6 +246,7 @@ function runConvex(args, options = {}) {
     env,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: options.commandTimeoutMs || DEFAULT_COMMAND_TIMEOUT_MS,
   });
 
   if (result.error) {
@@ -206,6 +258,39 @@ function runConvex(args, options = {}) {
   }
 
   return result.stdout.trim();
+}
+
+function runConvex(args, options = {}) {
+  const retryDelaysMs = options.retryDelaysMs || DEFAULT_RETRY_DELAYS_MS;
+  const maxAttempts = retryDelaysMs.length + 1;
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return runConvexOnce(args, options);
+    } catch (error) {
+      lastError = error;
+      const willRetry = attempt < maxAttempts;
+      const delayMs = retryDelaysMs[attempt - 1] || 0;
+      const commandName = args.slice(0, 2).join(" ");
+      console.error(
+        JSON.stringify({
+          ts: new Date().toISOString(),
+          command: commandName,
+          attempt,
+          maxAttempts,
+          willRetry,
+          delayMs: willRetry ? delayMs : 0,
+          error: error.message || String(error),
+        }),
+      );
+      if (willRetry) {
+        sleepSync(delayMs);
+      }
+    }
+  }
+
+  throw lastError;
 }
 
 function readRows(options) {
@@ -324,6 +409,8 @@ module.exports = {
   isActiveRow,
   isTerminalRow,
   parseArgs,
+  parseRetryDelays,
   parseRowsJson,
+  runConvex,
   usage,
 };
