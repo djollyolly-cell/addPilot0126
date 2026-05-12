@@ -244,7 +244,8 @@ Strategy A is not recommended unless someone wants to take on the cherry-pick co
 Items must all be true before the merge readiness audit:
 
 - [ ] Phase 8 closed clean.
-- [ ] `getAccountAllAdIds` Tier 1 fix landed and observed for ≥1 week.
+- [x] `getAccountAllAdIds` Tier 1 fix landed (`9768449`) and closure recorded (`memory/b1-closure-2026-05-06.md`).
+- [ ] `getAccountAllAdIds` organic E2E / ≥1 week observation confirmed by read-only query. The observation window has elapsed, but no canonical verification query is recorded yet.
 - [ ] All 26 disabled crons have an explicit decision in `docs/2026-05-06-restore-matrix-uz-runbook.md`: either restored in branch or marked as retired with rationale.
 - [ ] `adminAlerts.notify` redesign (D1) landed; `DISABLE_ERROR_ALERT_FANOUT` env reliance removed.
 - [ ] `recordRateLimit` redesign (D2) landed; `vkApi.ts` producer guards removed.

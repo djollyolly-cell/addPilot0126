@@ -26,12 +26,12 @@ These are scoped tasks that should each get their own session, not bundled toget
 ### B1. Tier 1 fix for `getAccountAllAdIds` (Option A)
 
 - Design doc: `docs/2026-05-06-getAccountAllAdIds-fix-design.md`
-- Tracking memory: `memory/todo-getAccountAllAdIds-pagination.md`
-- Pre-Tier-1 safety gate: PASSED on `2026-05-06` for two known affected accounts. Numbers recorded in design doc.
-- Scope: change body of one function in `convex/ruleEngine.ts:647-660`. No schema change. No call-site changes.
-- Effort: ~1.5h including unit test, diagnostic verification, deploy.
-- Why now: this is a real production correctness bug (rule evaluation silently fails on 2+ active accounts). It pre-dates the incident; recovery exposed it but did not cause it. User-visible symptom: `cpl_limit since_launch` rules do not stop ads on heavy accounts.
-- Why a separate session: this is a code change, deploy, and verification — different rhythm from operational bumps. Bundling with anything else risks scope creep.
+- Closure memory: `memory/b1-closure-2026-05-06.md`
+- Historical tracking memory: `memory/todo-getAccountAllAdIds-pagination.md`
+- Status: **DONE at function level.** Commit `9768449` changed `convex/ruleEngine.ts` to read currently-known ads from `ads.by_accountId_vkAdId` instead of collecting historical `metricsDaily`; commit `d08d3de` recorded the closure.
+- Verification recorded in closure: TypeScript clean; full test run with only unrelated pre-existing `recordRateLimit` failures; focused `getAccountAllAdIds` tests pass; direct production calls returned the two known affected accounts in ~1.1s instead of timing out.
+- Follow-up throughput blockers were later addressed separately: sync batch `10 -> 20` and worker `1 -> 2` both closed clean.
+- Remaining acceptance gap: organic E2E / one-week observation for the two known affected accounts was not verified in this doc-only reconciliation. Confirm with a separate read-only Convex admin query before marking the pre-merge observation gate closed.
 
 ### B2. Pre-existing zero-spend alerts re-enable
 
