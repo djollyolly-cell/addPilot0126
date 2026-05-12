@@ -1,16 +1,30 @@
 # Merge cleanup scope: `emergency/drain-scheduled-jobs` → `main`
 
 Date: 2026-05-06
+Updated: 2026-05-12 — D2a closure reflected, B1 1-week window date added, Phase 8 confirmed closed clean per source links. See "Update notes 2026-05-12" section below for change log. Inline `[Updated 2026-05-12: ...]` annotations mark stale claims throughout the doc.
 Branch: `emergency/drain-scheduled-jobs`
 Status: **scope analysis only — no merge action authorized**
 
 This document is a read-only audit of what currently lives on the emergency branch versus `main`, classifies the differences, and surfaces the constraints that any merge strategy must honor. It does not propose a merge timing.
 
+## Update notes 2026-05-12
+
+This document was originally written 2026-05-06. Since then:
+
+- **D2a deployed clean** (commit `a5ff381`, 2026-05-07). Closure: `memory/d2a-closure-2026-05-07.md`. The four `vkApi.ts` producer guards are no longer `if (false && hasData)` — they call `ctx.runMutation(internal.vkApiLimits.recordRateLimit, ...)` directly via async `onResponse` (one row per logical 429 enforced in `callMtApi` via `saw429` state). Four affected functions: `getMtStatistics`, `getCampaignsSpentTodayBatch`, `getMtLeadCounts`, `getMtBanners`. Evidence snapshot 2026-05-12: `convex/vkApi.ts` lines 556, 683, 875, 1086 — function names are stable, line numbers are brittle and may shift after refactors.
+- **`vkApiLimits.recordRateLimit` is no longer a V1 no-op stub** — it is the live D2a mutation with `statusCode === 429` insert predicate. Historical `_scheduled_jobs` V1 rows for this function may still need drain proof, but the function body is restored.
+- **D2b (sampled headers on 200), D2c (aggregated state), Option D (`vk-throttling-probe` cron)** — all explicitly deferred per `docs/2026-05-06-recordRateLimit-redesign-design.md`. **Not blocking merge.**
+- **D1 still blocking.** Commit `9aa3a68` (env gate `DISABLE_ERROR_ALERT_FANOUT=1`) is the emergency suppression, **not** the Tier 1 fix. D1a/D1b/D1c per `docs/2026-05-06-adminAlerts-notify-redesign-design.md` all pending. `convex/adminAlerts.ts:144` handler still `// EMERGENCY DRAIN MODE: no-op. return;`. Production alert delivery to Telegram is currently zero.
+- **B1 1-week observation window**: B1 deployed 2026-05-06 (`9768449`); window closes 2026-05-13.
+- **Phase 8 closed clean** at `2026-05-06T17:47Z = 20:47 MSK` per `docs/2026-05-06-concurrency-bump-8-to-16-runbook.md` "Phase 8 strict closure" section (line 358). Final state: `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=16`. Key canary token refresh `17:09Z` passed (dispatcher completed, `+25 success`, 0 rollback signals). The pre-merge Phase 8 checkbox below is now marked `[x]` with source link.
+
+The rest of this document still describes the 2026-05-06 baseline with inline `[Updated 2026-05-12: ...]` annotations where stale. Original prose is preserved for history; do not retro-edit beyond annotations.
+
 ## Executive finding
 
-**A direct merge of `emergency/drain-scheduled-jobs` → `main` would break production.** The emergency branch deliberately disables most of the cron schedule and gates several producer paths behind `if (false && ...)` guards. Merging as-is would propagate those disablements onto `main`, silently turning off ~25 production features.
+**A direct merge of `emergency/drain-scheduled-jobs` → `main` would break production.** The emergency branch deliberately disables most of the cron schedule and gates several producer paths behind `if (false && ...)` guards. Merging as-is would propagate those disablements onto `main`, silently turning off ~25 production features. **[Updated 2026-05-12: the producer-guards portion of this finding is resolved by D2a `a5ff381`. Cron-schedule disablements remain.]**
 
-The merge is therefore not a "cleanup of leftover drain artifacts" task. It is a **gate-by-gate restoration decision** for ~26 disabled crons + several producer guards, plus a small set of cleanly-mergeable improvements.
+The merge is therefore not a "cleanup of leftover drain artifacts" task. It is a **gate-by-gate restoration decision** for ~26 disabled crons + several producer guards, plus a small set of cleanly-mergeable improvements. **[Updated 2026-05-12: producer guards resolved via D2a; the remaining gate-by-gate decision is for ~26 disabled crons only.]**
 
 ## State summary
 
@@ -38,6 +52,8 @@ f452348 emergency: drain-mode no-op handlers for scheduled jobs queue
 ```
 
 ### Cron registration counts
+
+**[Updated 2026-05-12: this table is a historical snapshot from 2026-05-06. Numbers are not re-verified after later restores, V2 cron name swaps, or cadence changes (e.g., sync 45m→15m per `memory/sync-cadence-45-to-15-closure-2026-05-07.md`). Do not treat as the current cron inventory; re-count `convex/crons.ts` if a current number is needed.]**
 
 | Source | Active crons |
 |---|---:|
@@ -78,25 +94,22 @@ The exact list and recommended restore order is governed by `docs/2026-05-06-res
 
 ### V1 no-op stubs still present in branch
 
-Six files contain V1 handlers that have been gutted to no-op while keeping the original signature so existing `_scheduled_jobs` entries with V1 `udfPath` still resolve:
+Originally six files contained V1 handlers that have been gutted to no-op while keeping the original signature so existing `_scheduled_jobs` entries with V1 `udfPath` still resolve:
 
 - `convex/auth.ts` (`tokenRefreshOne`)
 - `convex/syncMetrics.ts` (`syncBatchWorker`)
 - `convex/ruleEngine.ts` (`uzBudgetBatchWorker`)
 - `convex/metrics.ts` (`manualMassCleanup`)
-- `convex/vkApiLimits.ts` (`recordRateLimit`)
+- ~~`convex/vkApiLimits.ts` (`recordRateLimit`)~~ **[Updated 2026-05-12: restored as live D2a mutation `a5ff381`. No longer a no-op. Body is `statusCode === 429 ? insert : null`. Historical `_scheduled_jobs` V1 rows for this udfPath may still exist as residue, but the function is live — see V1 backlog drain note in pre-merge checklist below.]**
 - `convex/adminAlerts.ts` (`notify`)
+
+So as of 2026-05-12 the live no-op-stub list is **five files** (excluding `vkApiLimits.ts` which was restored).
 
 ### Producer guards in `convex/vkApi.ts`
 
-Four sites guarded by `if (false && hasData)` to suppress `recordRateLimit` scheduling during drain:
+**[Updated 2026-05-12: this section is historical. As of D2a (`a5ff381`, 2026-05-07), the four sites no longer use `if (false && hasData)` guards. They were converted to direct `ctx.runMutation(internal.vkApiLimits.recordRateLimit, ...)` via async `onResponse` callback, with one-row-per-logical-call enforcement in `callMtApi` (`saw429` state). Four affected functions: `getMtStatistics`, `getCampaignsSpentTodayBatch`, `getMtLeadCounts`, `getMtBanners`. Evidence snapshot 2026-05-12: lines 556, 683, 875, 1086 in this same order (shifted slightly from original 546/676/871/1085). Function names are the stable identifier; line numbers are evidence, not proof. No further merge action required for these guards.]**
 
-- Line 546
-- Line 676
-- Line 871
-- Line 1085
-
-These guards are dead code in any non-drain mode and should be either removed or replaced with the bounded telemetry redesign before merge.
+Original 2026-05-06 description preserved for history: four sites guarded by `if (false && hasData)` to suppress `recordRateLimit` scheduling during drain at lines 546, 676, 871, 1085. These guards were dead code in any non-drain mode and were to be either removed or replaced with the bounded telemetry redesign before merge.
 
 ### TEMP diagnostic in branch
 
@@ -134,7 +147,7 @@ These cannot ride into `main` as-is. Each needs an explicit decision before merg
 |---|---|---|
 | `f452348` mass cron commenting | 25+ production crons commented out | Decide cron-by-cron whether to restore (per restore matrix). Effectively this means many separate decisions, not one. |
 | `f452348` V1 no-op stubs (6 files) | Drains old `_scheduled_jobs` entries quietly | Decision: keep stubs in `main` indefinitely (safe but confusing), or remove only after V1 backlog in `_scheduled_jobs` is verified fully drained. |
-| `f452348` `vkApi.ts` producer guards | 4 sites of `if (false && hasData)` for `recordRateLimit` | Replace with bounded redesign (Trigger D2 in post-Phase-8 checklist). Until that lands, leaving producers disabled in `main` is acceptable but the `if (false && ...)` shape is misleading. |
+| ~~`f452348` `vkApi.ts` producer guards~~ **[Updated 2026-05-12: RESOLVED via D2a `a5ff381` 2026-05-07.]** | ~~4 sites of `if (false && hasData)` for `recordRateLimit`~~ Producers now call `ctx.runMutation(internal.vkApiLimits.recordRateLimit, ...)` directly via async `onResponse`. | **No merge action required.** Row retained for history. |
 
 ### TEMP diagnostic — decide
 
@@ -204,9 +217,9 @@ Merge the whole branch into `main` as-is, then immediately open a series of clea
 In a dedicated session on the emergency branch:
 
 1. Restore each cron one by one (over multiple sessions, gated by restore matrix triggers).
-2. Implement `recordRateLimit` redesign (D2) and remove producer guards.
-3. Implement `adminAlerts.notify` redesign (D1) and remove `DISABLE_ERROR_ALERT_FANOUT` reliance.
-4. Verify V1 backlog is fully drained, remove V1 no-op stubs.
+2. ~~Implement `recordRateLimit` redesign (D2) and remove producer guards.~~ **[Updated 2026-05-12: DONE via D2a `a5ff381` 2026-05-07. D2b/D2c/Option D explicitly deferred — not part of merge prerequisite.]**
+3. Implement `adminAlerts.notify` redesign (D1) and complete D1c (handler restore). **[Updated 2026-05-12: still pending. D1a/D1b/D1c sequential sub-steps per design doc. Original 2026-05-06 wording said "remove `DISABLE_ERROR_ALERT_FANOUT` reliance" — corrected per D1 design doc Open Questions section: env flag is intentionally **retained** as a kill-switch after D1c, normally `0` once D1c canary clean, set to `1` only as fast revert path for any future amplification surprise.]**
+4. Verify V1 backlog is fully drained, remove V1 no-op stubs. **[Updated 2026-05-12: now five stubs to delete (vkApiLimits.recordRateLimit excluded — restored as live D2a mutation).]**
 5. Remove `auth.diagFanoutConfig`.
 6. At that point the branch contains only V2 architecture and operational improvements.
 7. Then merge.
@@ -231,7 +244,7 @@ Adopt **Strategy C** as the planned path, with explicit milestones tied to the p
 
 1. Continue current production posture: deploy from `emergency/drain-scheduled-jobs`. Do not rush to merge.
 2. Treat each cron restoration in the restore matrix as a step toward merge readiness, not just a runtime decision.
-3. Adopt Trigger D1 (`adminAlerts.notify` redesign) and Trigger D2 (`recordRateLimit` redesign) as hard prerequisites for merge.
+3. ~~Adopt Trigger D1 (`adminAlerts.notify` redesign) and Trigger D2 (`recordRateLimit` redesign) as hard prerequisites for merge.~~ **[Updated 2026-05-12: D2 prerequisite met via D2a `a5ff381` 2026-05-07. D1 still required as hard prerequisite — see D1 design doc and pre-merge checklist below.]**
 4. Once all disabled crons have an explicit decision (restored or formally retired) and D1+D2 land, schedule a "merge readiness audit" session.
 5. Only after that audit, merge.
 
@@ -243,14 +256,14 @@ Strategy A is not recommended unless someone wants to take on the cherry-pick co
 
 Items must all be true before the merge readiness audit:
 
-- [ ] Phase 8 closed clean.
+- [x] Phase 8 closed clean. **[Updated 2026-05-12: confirmed closed clean at `2026-05-06T17:47Z = 20:47 MSK` per `docs/2026-05-06-concurrency-bump-8-to-16-runbook.md` "Phase 8 strict closure" section (line 358). Final state: `APPLICATION_MAX_CONCURRENT_V8_ACTIONS=16`. Key canary token refresh `17:09Z` passed.]**
 - [x] `getAccountAllAdIds` Tier 1 fix landed (`9768449`) and closure recorded (`memory/b1-closure-2026-05-06.md`).
-- [ ] `getAccountAllAdIds` organic E2E / ≥1 week observation confirmed by read-only query. The observation window has elapsed, but no canonical verification query is recorded yet.
+- [ ] `getAccountAllAdIds` organic E2E / ≥1 week observation confirmed by read-only query. **[Updated 2026-05-12: 1-week window closes 2026-05-13 (B1 deployed `9768449` 2026-05-06; today is 2026-05-12 = 6 days elapsed). Verification query still owed after window close. Original line text said "observation window has elapsed" — that was a math error at the time it was written; corrected here.]**
 - [ ] All 26 disabled crons have an explicit decision in `docs/2026-05-06-restore-matrix-uz-runbook.md`: either restored in branch or marked as retired with rationale.
-- [ ] `adminAlerts.notify` redesign (D1) landed; `DISABLE_ERROR_ALERT_FANOUT` env reliance removed.
-- [ ] `recordRateLimit` redesign (D2) landed; `vkApi.ts` producer guards removed.
-- [ ] V1 backlog in `_scheduled_jobs` verified fully drained via latest-state query for: `auth.js:tokenRefreshOne`, `syncMetrics.js:syncBatchWorker`, `ruleEngine.js:uzBudgetBatchWorker`, `metrics.js:manualMassCleanup`, `vkApiLimits.js:recordRateLimit`, `adminAlerts.js:notify`. Each must show `0` pending and `0` inProgress in latest state.
-- [ ] V1 no-op stubs deleted from all six files.
+- [ ] `adminAlerts.notify` redesign (D1) landed and canary-clean (D1c handler restore deployed and observed). `DISABLE_ERROR_ALERT_FANOUT` env flag retained as kill-switch per D1 design recommendation, normally `0` after D1c canary clean. **[Updated 2026-05-12: still blocking. D1 design ready (`docs/2026-05-06-adminAlerts-notify-redesign-design.md`); D1a/D1b/D1c implementation sessions all pending. Commit `9aa3a68` env gate is emergency suppression, not Tier 1 fix. `convex/adminAlerts.ts:144` handler still no-op. Original 2026-05-06 wording said "env reliance removed" — corrected: env flag is intentionally retained per D1 design Open Questions section.]**
+- [x] **`recordRateLimit` redesign (D2a) landed `a5ff381` 2026-05-07; `vkApi.ts` producer guards removed (4 sites converted to direct `ctx.runMutation` via async `onResponse`).** [Updated 2026-05-12: D2b sampled-headers, D2c aggregated state, and Option D `vk-throttling-probe` cron explicitly deferred per design doc — not blocking merge. Closure: `memory/d2a-closure-2026-05-07.md`.]
+- [ ] V1 backlog in `_scheduled_jobs` verified fully drained via latest-state query for: `auth.js:tokenRefreshOne`, `syncMetrics.js:syncBatchWorker`, `ruleEngine.js:uzBudgetBatchWorker`, `metrics.js:manualMassCleanup`, `vkApiLimits.js:recordRateLimit`, `adminAlerts.js:notify`. Each must show `0` pending and `0` inProgress in latest state. **[Updated 2026-05-12: `vkApiLimits.js:recordRateLimit` is now the live D2a mutation, not a V1 no-op stub. The check for this udfPath is therefore **not** a V1-stub-removal gate — the function body is already restored. The check serves a different purpose: prove that (a) the old `runAfter(0)` scheduled-transport path has not silently returned (e.g., via accidental re-introduction of producer scheduling), and (b) historical pre-D2a `_scheduled_jobs` residue is not growing post-D2a. Per D2a design doc: "blocking condition is growth after D2a deploy, not historical residue before deploy." Baseline reference: `memory/d2a-closure-2026-05-07.md`. The other five udfPaths in this list remain V1-stub-removal gates as originally intended.]**
+- [ ] V1 no-op stubs deleted from all ~~six~~ **five** files. **[Updated 2026-05-12: `vkApiLimits.ts` `recordRateLimit` restored to live mutation via D2a; only `auth.tokenRefreshOne`, `syncMetrics.syncBatchWorker`, `ruleEngine.uzBudgetBatchWorker`, `metrics.manualMassCleanup`, `adminAlerts.notify` remain as no-op stubs to delete after V1 backlog drain proof.]**
 - [ ] `auth.diagFanoutConfig` deleted.
 - [ ] Concurrency `APPLICATION_MAX_CONCURRENT_V8_ACTIONS` confirmed stable at the production target (currently 16).
 - [ ] CI/CD deploy source reviewed; switch from `emergency/drain-scheduled-jobs` to `main` planned and tested.
