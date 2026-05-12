@@ -104,7 +104,7 @@ CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY" \
 node scripts/storage-cleanup-restorer.cjs \
   --target-run-id "$RUN_ID" \
   --expected-terminal-at-ms "$EXPECTED_TERMINAL_MS" \
-  --failsafe-buffer-ms 600000 \
+  --failsafe-buffer-ms 900000 \
   --command-timeout-ms 30000 \
   --retry-delays-ms 1000,3000,10000
 ```
@@ -112,8 +112,72 @@ node scripts/storage-cleanup-restorer.cjs \
 Do not use the restorer as a generic "no active row" env-zero tool. It is
 target-runId-bound by design.
 
+## Wave 5 Readiness Rehearsal (Required)
+
+Before wave 5, run a production-equivalent dry-run rehearsal against live
+Convex admin reads. This is read-only with respect to runtime state because
+`--dry-run` must be used; it must still be explicitly approved as a live admin
+read.
+
+Primary positive rehearsal:
+
+```bash
+CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
+CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY" \
+node scripts/storage-cleanup-restorer.cjs \
+  --target-run-id 1778525039989-605b8ed53962 \
+  --read-limit 50 \
+  --dry-run \
+  --once
+```
+
+Expected positive result:
+
+```json
+{
+  "observedRunId": "1778525039989-605b8ed53962",
+  "state": "completed",
+  "isActive": false,
+  "action": "restore_env",
+  "reason": "target_terminal"
+}
+```
+
+The command must also print:
+
+```text
+dry_run_restore env=METRICS_REALTIME_CLEANUP_V2_ENABLED value=0
+env_verify=dry-run
+```
+
+If the target runId is not found with `--read-limit 50`, this is not a
+successful rehearsal. First read recent `cleanupRunState` rows, choose a
+completed target runId that is visible in the read window, and repeat the
+positive rehearsal against that exact runId.
+
+Optional negative rehearsal:
+
+```bash
+CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
+CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY" \
+node scripts/storage-cleanup-restorer.cjs \
+  --target-run-id definitely-not-existing \
+  --read-limit 50 \
+  --dry-run \
+  --once
+```
+
+Expected negative result: heartbeat action `wait`, no `dry_run_restore`
+line, and no env mutation.
+
+Use `--failsafe-buffer-ms 900000` for wave 5 unless there is a specific reason
+to choose a larger buffer. The default retry worst case is about 134s per
+Convex CLI operation (`4 * 30s` command timeout plus `1s + 3s + 10s` backoff),
+so the buffer should include both expected duration jitter and retry overhead.
+
 ## Status
 
-Restorer tooling fix is implemented and locally dry-run verified. Before wave
-5, the operator should still review the script invocation and use it in a
-target-runId-bound mode only.
+Restorer tooling fix is implemented and locally dry-run verified. Wave 5
+remains blocked until the production-equivalent positive dry-run rehearsal
+above is completed successfully. After that, use the script only in
+target-runId-bound mode.
