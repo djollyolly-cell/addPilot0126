@@ -103,6 +103,7 @@ CONVEX_SELF_HOSTED_URL=http://178.172.235.49:3220 \
 CONVEX_SELF_HOSTED_ADMIN_KEY="$ADMIN_KEY" \
 node scripts/storage-cleanup-restorer.cjs \
   --target-run-id "$RUN_ID" \
+  --read-limit 50 \
   --expected-terminal-at-ms "$EXPECTED_TERMINAL_MS" \
   --failsafe-buffer-ms 900000 \
   --command-timeout-ms 30000 \
@@ -111,6 +112,11 @@ node scripts/storage-cleanup-restorer.cjs \
 
 Do not use the restorer as a generic "no active row" env-zero tool. It is
 target-runId-bound by design.
+
+When using `--once`, do not treat exit code `0` alone as a success signal.
+The operator must inspect the heartbeat payload. A successful positive
+rehearsal requires the expected `observedRunId`, terminal state, and
+`action="restore_env"` / `reason="target_terminal"`.
 
 ## Wave 5 Readiness Rehearsal (Required)
 
@@ -169,6 +175,21 @@ node scripts/storage-cleanup-restorer.cjs \
 
 Expected negative result: heartbeat action `wait`, no `dry_run_restore`
 line, and no env mutation.
+
+Negative rehearsal result on 2026-05-12:
+
+```json
+{
+  "targetRunId": "definitely-not-existing",
+  "observedRunId": null,
+  "state": null,
+  "isActive": null,
+  "action": "wait",
+  "reason": "target_not_visible"
+}
+```
+
+Post-rehearsal env verification: `METRICS_REALTIME_CLEANUP_V2_ENABLED=0`.
 
 Use `--failsafe-buffer-ms 900000` for wave 5 unless there is a specific reason
 to choose a larger buffer. The default retry worst case is about 134s per
