@@ -6,6 +6,7 @@ import {
   mutation,
   query,
 } from "./_generated/server";
+import { internal } from "./_generated/api";
 
 const ADMIN_EMAILS = ["13632013@vk.com", "786709647@vk.com"];
 const DEDUP_WINDOW_MS = 30 * 60 * 1000; // 30 минут
@@ -141,9 +142,38 @@ export const notify = internalAction({
     dedupKey: v.optional(v.string()),
     text: v.string(),
   },
-  handler: async (_ctx, _args) => {
-    // EMERGENCY DRAIN MODE: no-op. Restore body after pending queue drains.
-    return;
+  handler: async (ctx, args) => {
+    // Дедупликация (опциональная): explicit callers передают dedupKey и пройдут
+    // через checkDedup. systemLogger path (D1a) намеренно НЕ передаёт dedupKey,
+    // поскольку inline dedup-before-schedule уже сработал в systemLogger.log;
+    // повторный checkDedup здесь привёл бы к silent suppression.
+    if (args.dedupKey) {
+      const canSend = await ctx.runMutation(internal.adminAlerts.checkDedup, {
+        key: args.dedupKey,
+      });
+      if (!canSend) return;
+    }
+
+    // Получить админов с включённой категорией
+    const settings = await ctx.runQuery(internal.adminAlerts.getEnabledAdmins, {
+      category: args.category,
+    });
+
+    for (const s of settings) {
+      const user = await ctx.runQuery(internal.adminAlerts.getAdminUser, {
+        userId: s.userId,
+      });
+      if (user?.telegramChatId) {
+        try {
+          await ctx.runAction(internal.telegram.sendMessage, {
+            chatId: user.telegramChatId,
+            text: args.text,
+          });
+        } catch {
+          // Не падаем если Telegram недоступен
+        }
+      }
+    }
   },
 });
 
