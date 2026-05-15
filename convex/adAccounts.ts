@@ -5,6 +5,7 @@ import { api, internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { checkOrgWritable, checkFeaturesDisabled } from "./loadUnits";
 import { TIERS, type SubscriptionTier } from "./billing";
+import { shouldAutofillUserCredentials } from "./_helpers/agencyTokenIsolation";
 
 const VK_ADS_API_BASE = "https://target.my.com";
 
@@ -216,6 +217,7 @@ export const connect = mutation({
     tokenExpiresAt: v.optional(v.number()),
     clientId: v.optional(v.string()),
     clientSecret: v.optional(v.string()),
+    skipUserCredentialAutofill: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     // Org grace check: read_only/frozen blocks add_accounts
@@ -285,8 +287,9 @@ export const connect = mutation({
       if (args.clientSecret !== undefined) {
         patch.clientSecret = args.clientSecret;
       }
-      // Ensure credentials are never left empty — fill from user-level if missing
-      if (!patch.clientId && !existing.clientId) {
+      // Ordinary own-OAuth connects may reuse user-level credentials. Agency/provider
+      // connects opt out so provider tokens never inherit own-cabinet OAuth creds.
+      if (shouldAutofillUserCredentials(args.skipUserCredentialAutofill) && !patch.clientId && !existing.clientId) {
         const owner = await ctx.db.get(args.userId);
         if (owner?.vkAdsClientId) patch.clientId = owner.vkAdsClientId;
         if (owner?.vkAdsClientSecret) patch.clientSecret = owner.vkAdsClientSecret;
@@ -340,10 +343,11 @@ export const connect = mutation({
       }
     }
 
-    // If clientId/clientSecret not passed, try user-level credentials
+    // If clientId/clientSecret not passed, ordinary own-OAuth connects may use
+    // user-level credentials. Agency/provider connects explicitly opt out.
     let finalClientId = args.clientId;
     let finalClientSecret = args.clientSecret;
-    if (!finalClientId || !finalClientSecret) {
+    if (shouldAutofillUserCredentials(args.skipUserCredentialAutofill) && (!finalClientId || !finalClientSecret)) {
       if (user.vkAdsClientId && user.vkAdsClientSecret) {
         finalClientId = finalClientId || user.vkAdsClientId;
         finalClientSecret = finalClientSecret || user.vkAdsClientSecret;
@@ -931,6 +935,7 @@ export const connectAgencyAccount = action({
       vkAccountId,
       name,
       accessToken: token,
+      skipUserCredentialAutofill: true,
     });
 
     // Set agency provider link if provided
@@ -1036,6 +1041,7 @@ export const connectAgencyAccountInternal = internalAction({
       vkAccountId,
       name,
       accessToken: token,
+      skipUserCredentialAutofill: true,
     });
 
     // Set agency provider link if provided

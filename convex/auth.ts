@@ -3,6 +3,10 @@ import { action, internalAction, internalMutation, internalQuery, mutation, quer
 import { internal } from "./_generated/api";
 import { quickTokenCheck } from "./tokenRecovery";
 import { Id } from "./_generated/dataModel";
+import {
+  isOwnOAuthBroadcastAccount,
+  resolveTokenIsolationStrategy,
+} from "./_helpers/agencyTokenIsolation";
 
 // VK ID OAuth 2.1 (login — id.vk.com)
 const VK_API_VERSION = "5.131";
@@ -906,8 +910,9 @@ async function tryZaleycashRefresh(
   }
 }
 
-// Get a valid token for a specific adAccount (per-account credentials)
-// Falls back to user-level credentials if per-account ones are missing
+// Get a valid token for a specific adAccount.
+// Own-OAuth accounts may fall back to user-level credentials. Provider/manual
+// accounts are routed first and must not use user-level OAuth fallback.
 //
 // MUST NOT call tokenRecovery.tryRecoverToken or tokenRecovery.handleTokenExpired —
 // that creates a recursive backedge (tryRecoverToken → getValidTokenForAccount)
@@ -930,6 +935,76 @@ export const getValidTokenForAccount = internalAction({
 
     const now = Date.now();
     const BUFFER_MS = 5 * 60 * 1000;
+    const tokenStrategy = resolveTokenIsolationStrategy(account);
+
+    const setExternalTokenExpiry = async (tokenExpiresAt: number) => {
+      await ctx.runMutation(internal.adAccounts.setTokenExpiry, {
+        accountId: args.accountId,
+        tokenExpiresAt,
+      });
+    };
+
+    const returnIfCurrentTokenAlive = async (tokenExpiresAt: number) => {
+      const alive = await quickTokenCheck(account.accessToken);
+      if (alive) {
+        await setExternalTokenExpiry(tokenExpiresAt);
+        return account.accessToken;
+      }
+      throw new Error("TOKEN_EXPIRED: токен недействителен");
+    };
+
+    const tryProviderRefreshOnly = async (): Promise<string | null> => {
+      // Vitamin accounts may only have vitaminCabinetId; try them before other
+      // provider handlers. If the id is missing, keep Vitamin as a final fallback
+      // for legacy provider records whose metadata may be incomplete.
+      if (account.vitaminCabinetId) {
+        const vitaminToken = await tryVitaminRefresh(ctx, args.accountId, account);
+        if (vitaminToken) return vitaminToken;
+      }
+
+      const getuniqToken = await tryGetuniqRefresh(ctx, args.accountId, account);
+      if (getuniqToken) return getuniqToken;
+
+      const clickruToken = await tryClickruRefresh(ctx, args.accountId, account);
+      if (clickruToken) return clickruToken;
+
+      const zaleycashToken = await tryZaleycashRefresh(ctx, args.accountId, account);
+      if (zaleycashToken) return zaleycashToken;
+
+      if (!account.vitaminCabinetId) {
+        const vitaminToken = await tryVitaminRefresh(ctx, args.accountId, account);
+        if (vitaminToken) return vitaminToken;
+      }
+
+      return null;
+    };
+
+    // Provider/manual tokens must not fall through to user-level OAuth refresh.
+    // That fallback is what contaminated Vitamin accounts with own-cabinet tokens.
+    if (
+      tokenStrategy === "provider_api" ||
+      tokenStrategy === "provider_static" ||
+      tokenStrategy === "manual_api_key"
+    ) {
+      if (account.tokenExpiresAt && account.tokenExpiresAt > now + BUFFER_MS) {
+        return account.accessToken;
+      }
+
+      if (account.tokenExpiresAt === undefined || account.tokenExpiresAt === null) {
+        const newExpiry = tokenStrategy === "provider_api"
+          ? Date.now() + 24 * 60 * 60 * 1000
+          : new Date("2099-01-01").getTime();
+        return await returnIfCurrentTokenAlive(newExpiry);
+      }
+
+      if (tokenStrategy === "provider_api") {
+        const providerToken = await tryProviderRefreshOnly();
+        if (providerToken) return providerToken;
+        throw new Error("TOKEN_EXPIRED: не удалось обновить токен через API провайдера. Переподключите кабинет.");
+      }
+
+      return await returnIfCurrentTokenAlive(new Date("2099-01-01").getTime());
+    }
 
     // Resolve credentials: per-account first, then user-level fallback
     let clientId = account.clientId;
@@ -1524,10 +1599,12 @@ export const updateAccountTokens = internalMutation({
     const now = Date.now();
     const tokenExpiresAt = args.expiresIn > 0 ? now + args.expiresIn * 1000 : undefined;
 
-    // Find all accounts with the same clientId (they share one myTarget token)
+    // Broadcast refreshed OAuth tokens only across ordinary own VK Ads accounts.
+    // Provider/manual/agency-client accounts may share copied clientId values but
+    // must never receive an own-account OAuth token via this path.
     const allAccounts = await ctx.db.query("adAccounts").collect();
     const sameClientAccounts = allAccounts.filter(
-      (a) => a.clientId === args.clientId
+      (a) => a.clientId === args.clientId && isOwnOAuthBroadcastAccount(a)
     );
 
     for (const account of sameClientAccounts) {
@@ -1563,10 +1640,12 @@ export const updateAccountTokens = internalMutation({
       await ctx.db.patch(account._id, loopPatch);
     }
 
-    // If no accounts matched by clientId, update just this one
+    // If no own-OAuth accounts matched by clientId, update just this one only
+    // when this account is itself an ordinary own VK Ads account. This avoids
+    // silently contaminating provider/manual accounts that reached this writer.
     if (sameClientAccounts.length === 0) {
       const thisAccount = await ctx.db.get(args.accountId);
-      if (thisAccount) {
+      if (thisAccount && isOwnOAuthBroadcastAccount(thisAccount)) {
         for (const field of ["accessToken", "refreshToken"] as const) {
           const oldVal = thisAccount[field] as string | undefined;
           const newVal = field === "accessToken" ? args.accessToken : args.refreshToken;
@@ -1596,7 +1675,9 @@ export const updateAccountTokens = internalMutation({
         fallbackPatch.tokenErrorSince = undefined;
         fallbackPatch.tokenRecoveryAttempts = undefined;
       }
-      await ctx.db.patch(args.accountId, fallbackPatch);
+      if (thisAccount && isOwnOAuthBroadcastAccount(thisAccount)) {
+        await ctx.db.patch(args.accountId, fallbackPatch);
+      }
     }
   },
 });
