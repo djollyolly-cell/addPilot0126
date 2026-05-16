@@ -1,0 +1,4 @@
+WebSocket error message: connect EPERM 178.172.235.49:3220 - Local (0.0.0.0:0)
+WebSocket closed with code 1006
+Attempting reconnect in 769ms
+[{"runId":"1778525039989-605b8ed53962","state":"running","isActive":true,"batchesRun":11,"deletedCount":11000}]

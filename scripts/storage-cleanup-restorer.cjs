@@ -161,8 +161,47 @@ function usage() {
   ].join("\n");
 }
 
+function extractJsonArrayPayload(raw) {
+  const value = String(raw || "");
+  const trimmed = value.trim();
+
+  for (let start = value.indexOf("["); start !== -1; start = value.indexOf("[", start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+
+    for (let i = start; i < value.length; i += 1) {
+      const char = value[i];
+
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (char === "\\") {
+          escaped = true;
+        } else if (char === "\"") {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (char === "\"") {
+        inString = true;
+      } else if (char === "[") {
+        depth += 1;
+      } else if (char === "]") {
+        depth -= 1;
+        if (depth === 0) {
+          return value.slice(start, i + 1);
+        }
+      }
+    }
+  }
+
+  return trimmed;
+}
+
 function parseRowsJson(raw) {
-  const parsed = JSON.parse(raw);
+  const parsed = JSON.parse(extractJsonArrayPayload(raw));
   if (!Array.isArray(parsed)) {
     throw new Error("cleanupRunState payload must be a JSON array");
   }
@@ -410,6 +449,7 @@ module.exports = {
   isTerminalRow,
   parseArgs,
   parseRetryDelays,
+  extractJsonArrayPayload,
   parseRowsJson,
   runConvex,
   usage,

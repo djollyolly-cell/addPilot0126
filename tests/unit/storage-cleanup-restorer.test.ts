@@ -118,6 +118,38 @@ describe('storage cleanup restorer safety decisions', () => {
     });
   });
 
+  it('parses cleanupRunState JSON array after noisy WebSocket-like output', () => {
+    const rows = restorer.parseRowsJson(
+      [
+        'WebSocket error message: connect EPERM 178.172.235.49:3220 - Local (0.0.0.0:0)',
+        'WebSocket closed with code 1006',
+        'Attempting reconnect in 769ms',
+        JSON.stringify([
+          { runId: targetRunId, state: 'running', isActive: true, batchesRun: 11 },
+        ]),
+      ].join('\n'),
+    );
+
+    expect(rows).toEqual([
+      { runId: targetRunId, state: 'running', isActive: true, batchesRun: 11 },
+    ]);
+  });
+
+  it('ignores trailing noisy output after cleanupRunState JSON array', () => {
+    const rows = restorer.parseRowsJson(
+      [
+        JSON.stringify([
+          { runId: targetRunId, state: 'completed', isActive: false, batchesRun: 24 },
+        ]),
+        'WebSocket closed with code 1006',
+      ].join('\n'),
+    );
+
+    expect(rows).toEqual([
+      { runId: targetRunId, state: 'completed', isActive: false, batchesRun: 24 },
+    ]);
+  });
+
   it('parses command timeout and retry backoff options', () => {
     const options = restorer.parseArgs([
       '--target-run-id',
