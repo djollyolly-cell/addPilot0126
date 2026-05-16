@@ -9,3 +9,4 @@ before continuing sensitive tracks.
 - `memory/storage-cleanup-v2-wave7-caveats-handoff-2026-05-16.md` — Wave 7 handoff caveats from Wave 6 review: T+3 post-terminal PG/Convex burst, restorer noisy-JSON SPOF, repeated trigger `fetch failed`, ToD hypothesis downgrade.
 - `memory/storage-cleanup-restorer-hardening-2026-05-16.md` — Restorer noisy-JSON parser hardening committed as Wave 7 SOT `7cfa08cd218d2523188048853e1bcd5d0d48168e`, with verification results.
 - `memory/wave7-clean-sot-restorer-prep-2026-05-16.md` — Clean Wave 7 SOT worktree and hardened restorer prep receipt.
+- `docs/2026-05-17-storage-cleanup-v2-wave-7-runbook.md` — Self-contained Wave 7 runbook pinned to SOT `1dc5c72431543f5e00759d20fa5d36b447bd4336`.
